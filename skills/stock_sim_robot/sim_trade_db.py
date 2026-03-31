@@ -375,8 +375,10 @@ def refresh_summary(week_tag: str | None = None):
             win_rate     = float(round(win_trades / total_trades * 100, 1)) if total_trades > 0 else 0.0
             total_profit = float(round(grp["profit"].sum(), 2))
             avg_pct      = float(round(profit_vals.mean(), 2)) if len(profit_vals) > 0 else 0.0
-            max_profit   = float(round(grp["profit"].max(), 2))
-            max_loss     = float(round(grp["profit"].min(), 2))
+            # max_profit / max_loss 存的是「单笔最大盈亏百分比」（%），不是元
+            # 历史 Bug：曾错误存入 grp["profit"]（元），现已修正为 profit_pct（%）
+            max_profit   = float(round(profit_vals.max(), 2)) if len(profit_vals) > 0 else 0.0
+            max_loss     = float(round(profit_vals.min(), 2)) if len(profit_vals) > 0 else 0.0
 
             upsert = text("""
                 INSERT INTO sim_summary

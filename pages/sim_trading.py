@@ -224,6 +224,44 @@ def render():
                 lambda x: _source_label(x) if x else "—"
             )
 
+        # ── 价格趋势标识（买入价 → 成交价涨跌方向）────────────────────────
+        # 注意：此时 买入价/成交价 还是原始数值（尚未被 _fmt_price_col 格式化），
+        # 所以直接用 float() 解析即可，不需要 strip "¥"
+        def _trend_badge(row):
+            """根据买入价→成交价计算趋势标识（在数值格式化之前调用）"""
+            import math
+            try:
+                bp_raw = row.get("买入价", None)
+                sp_raw = row.get("成交价", None)
+                # 成交价为空 = 持仓中
+                if sp_raw is None or (isinstance(sp_raw, float) and math.isnan(sp_raw)):
+                    return "⏳"  # 持仓中，未成交
+                if str(sp_raw).strip() in ("", "nan", "None"):
+                    return "⏳"
+                bp = float(bp_raw) if bp_raw is not None else 0
+                sp = float(sp_raw)
+                if bp <= 0 or sp <= 0:
+                    return "—"
+                pct = (sp / bp - 1) * 100
+                if pct > 0.5:
+                    return f"▲ +{pct:.1f}%"
+                elif pct < -0.5:
+                    return f"▼ {pct:.1f}%"
+                else:
+                    return f"→ {pct:+.1f}%"
+            except Exception:
+                return "—"
+
+        if "买入价" in disp_show.columns:
+            disp_show["趋势"] = disp_show.apply(_trend_badge, axis=1)
+            # 把趋势列插到成交价前面
+            cols_order = list(disp_show.columns)
+            if "成交价" in cols_order:
+                idx = cols_order.index("成交价")
+                cols_order.remove("趋势")
+                cols_order.insert(idx, "趋势")
+                disp_show = disp_show[cols_order]
+
         # 颜色渲染与格式化
         def _color_profit(val):
             try:
@@ -296,16 +334,36 @@ def render():
             height=450,
             hide_index=True,
             column_config={
-                "T日": st.column_config.TextColumn("🗓️ T日", width="small"),
-                "代码": st.column_config.TextColumn("🔢 代码", width="small"),
-                "名称": st.column_config.TextColumn("🏷️ 名称", width="small"),
-                "状态": st.column_config.TextColumn("🚦 状态", width="small"),
-                "综合评分": st.column_config.NumberColumn("🎯 评分", width="small"),
-                "买入价": st.column_config.TextColumn("💰 买入价", width="small"),
-                "成交价": st.column_config.TextColumn("成交价", width="small"),
-                "平仓类型": st.column_config.TextColumn("平仓类型", width="small"),
-                "盈亏(元)": st.column_config.TextColumn("💰 盈亏(元)", width="small"),
-                "盈亏%": st.column_config.TextColumn("📈 盈亏%", width="small"),
+                "T日": st.column_config.TextColumn("🗓️ T日",
+                    help="信号日（龙虎榜上榜日期 YYYYMMDD）", width="small"),
+                "代码": st.column_config.TextColumn("🔢 代码",
+                    help="A股股票代码（6位）", width="small"),
+                "名称": st.column_config.TextColumn("🏷️ 名称",
+                    help="股票名称", width="small"),
+                "状态": st.column_config.TextColumn("🚦 状态",
+                    help="持仓中=尚未卖出；已平仓=卖出完成", width="small"),
+                "综合评分": st.column_config.NumberColumn("🎯 评分",
+                    help="龙虎榜综合评分（席位强度 + 资金净买入 + T+2历史胜率加权，满分100）", width="small"),
+                "T+2胜率%": st.column_config.TextColumn("📊 T+2胜率%",
+                    help="该股过去龙虎榜上榜后 T+2 日收益为正的历史概率", width="small"),
+                "买入价": st.column_config.TextColumn("💰 买入价",
+                    help="T+1 日（信号日次日）开盘集合竞价成交价，由系统 09:35 自动回填", width="small"),
+                "挂牌价": st.column_config.TextColumn("🎯 挂牌价",
+                    help="目标卖出价（基于买入价的目标涨幅，T+2日最高价达到时触发止盈）", width="small"),
+                "行情来源": st.column_config.TextColumn("📡 行情来源",
+                    help="买入价的数据来源：新浪实时/东财实时/分钟K线/历史日K", width="small"),
+                "趋势": st.column_config.TextColumn("📈 趋势",
+                    help="买入价 → 成交价的涨跌方向和幅度（▲涨/▼跌/→平/⏳持仓中）", width="small"),
+                "成交价": st.column_config.TextColumn("💵 成交价",
+                    help="实际卖出成交价（止盈=挂牌价，止损/持有到期=T+2收盘价）", width="small"),
+                "平仓类型": st.column_config.TextColumn("📋 平仓类型",
+                    help="止盈：达到目标价；止损：跌破-5%；持有到期：超过3交易日；超时强制：超过5交易日", width="small"),
+                "盈亏(元)": st.column_config.TextColumn("💰 盈亏(元)",
+                    help="本笔交易绝对盈亏金额（元），以10万本金计算", width="small"),
+                "盈亏%": st.column_config.TextColumn("📈 盈亏%",
+                    help="本笔交易盈亏百分比 = (成交价 - 买入价) / 买入价 × 100%", width="small"),
+                "周": st.column_config.TextColumn("📅 周",
+                    help="交易所在的周（ISO年-周次，如 2026-W13 表示2026年第13周）", width="small"),
             }
         )
 
@@ -386,6 +444,34 @@ def render():
     # ═══════════════════════════════════════════════════════════════════
     with tab3:
         st.subheader("📅 按周绩效汇总")
+        st.caption("每周为一个统计周期（ISO周次，周一到周五）。盈亏% = 相对买入价的百分比涨跌幅，不含手续费。")
+
+        # 列说明 tooltip 配置（用于 column_config）
+        _week_col_config = {
+            "周":       st.column_config.TextColumn("📅 周",
+                help="ISO周次（如 2026-W13 = 2026年第13周，周一到周五）"),
+            "总交易":   st.column_config.NumberColumn("📊 总交易",
+                help="本周內已平仓的交易笔数"),
+            "盈利笔":   st.column_config.NumberColumn("✅ 盈利笔",
+                help="盈亏% > 0 的交易笔数"),
+            "亏损笔":   st.column_config.NumberColumn("❌ 亏损笔",
+                help="盈亏% < 0 的交易笔数"),
+            "胜率%":    st.column_config.NumberColumn("🎯 胜率%",
+                format="%.1f%%",
+                help="盈利笔 / 总交易 × 100%，越高越好"),
+            "总盈亏(元)": st.column_config.NumberColumn("💰 总盈亏(元)",
+                format="%.2f",
+                help="本周所有已平仓交易的盈亏元额之和（元，以10万/笔为基准）"),
+            "平均盈亏%": st.column_config.NumberColumn("📈 平均盈亏%",
+                format="%.2f%%",
+                help="本周所有交易盈亏%的算术平均値，反映本周整体收益水平"),
+            "最大盈利%": st.column_config.NumberColumn("🔥 最大盈利%",
+                format="%.2f%%",
+                help="本周单笔盈亏%最大的交易（不是元！），反映营业能力上限"),
+            "最大亏损%": st.column_config.NumberColumn("💧 最大亏损%",
+                format="%.2f%%",
+                help="本周单笔盈亏%最小的交易（不是元！），反映最差情况的局面"),
+        }
 
         if df_summary.empty:
             # 自行从 trades 计算
@@ -393,14 +479,20 @@ def render():
                 g = closed.groupby("week_tag").agg(
                     总交易=("id", "count"),
                     盈利笔=("profit_pct", lambda x: (x > 0).sum()),
-                    总盈亏=("profit", "sum"),
-                    平均盈亏pct=("profit_pct", "mean"),
+                    总盈亏元=("profit", "sum"),
+                    平均盈亏=("profit_pct", "mean"),
                     最大盈利=("profit_pct", "max"),
                     最大亏损=("profit_pct", "min"),
-                ).reset_index().rename(columns={"week_tag": "周"})
+                ).reset_index().rename(columns={"week_tag": "周", "总盈亏元": "总盈亏(元)", "平均盈亏": "平均盈亏%", "最大盈利": "最大盈利%", "最大亏损": "最大亏损%"})
                 g["胜率%"] = (g["盈利笔"] / g["总交易"] * 100).round(1)
                 g = g.sort_values("周", ascending=False)
-                st.dataframe(g, use_container_width=True)
+                _disp_cols = ["周","总交易","盈利笔","胜率%","总盈亏(元)","平均盈亏%","最大盈利%","最大亏损%"]
+                st.dataframe(
+                    g[[c for c in _disp_cols if c in g.columns]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={k: v for k, v in _week_col_config.items() if k in g.columns},
+                )
             else:
                 st.info("暂无已平仓记录")
         else:
@@ -412,11 +504,16 @@ def render():
                 "win_rate":       "胜率%",
                 "total_profit":   "总盈亏(元)",
                 "avg_profit_pct": "平均盈亏%",
-                "max_profit":     "最大盈利%",
-                "max_loss":       "最大亏损%",
+                "max_profit":     "最大盈利%",   # 已修正：存的是 profit_pct（%）而非元
+                "max_loss":       "最大亏损%",   # 已修正：存的是 profit_pct（%）而非元
             })
             disp_cols = [c for c in ["周","总交易","盈利笔","亏损笔","胜率%","总盈亏(元)","平均盈亏%","最大盈利%","最大亏损%"] if c in disp_s.columns]
-            st.dataframe(disp_s[disp_cols], use_container_width=True)
+            st.dataframe(
+                disp_s[disp_cols].sort_values("周", ascending=False) if "周" in disp_s.columns else disp_s[disp_cols],
+                use_container_width=True,
+                hide_index=True,
+                column_config={k: v for k, v in _week_col_config.items() if k in disp_s.columns},
+            )
 
     # ═══════════════════════════════════════════════════════════════════
     # TAB 4：选股理由详情（4维度展开）
