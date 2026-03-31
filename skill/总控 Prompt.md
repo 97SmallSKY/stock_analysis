@@ -464,3 +464,63 @@ echo "$NEW_PID" > "$PID_FILE"
 - **日志目录**：`~/stock_analysis/logs/`（streamlit.log / daily_update.log / monitor_intraday.log / sim_robot.log）
 
 请确认你已进入这个项目的维护/开发模式。后续我会给你具体任务。
+
+---
+
+# 【Git 版本管理规则｜重要】
+
+## 仓库结构说明
+
+本项目有**两个独立的 git 仓库**，必须严格区分，不可混用：
+
+| 仓库 | 路径 | Remote | 用途 |
+|------|------|--------|------|
+| openclaw（开源大仓） | `/Users/xiaotian/Develop/github/openclaw/` | `https://github.com/openclaw/openclaw.git` | 公司开源项目，**禁止**将 stock_analysis 推送到此仓库 |
+| stock_analysis（个人私仓） | `/Users/xiaotian/Develop/personal/stock_analysis/` | `https://github.com/97SmallSKY/stock_analysis.git` | 个人量化项目，**正确的推送目标** |
+
+## ⚠️ 绝对禁止的操作
+
+- **禁止**在 `/Users/xiaotian/Develop/github/openclaw/` 目录下执行 `git add / commit / push`（这是公司开源仓库，与 stock_analysis 无关）
+- **禁止**将 stock_analysis 的代码提交到 openclaw 仓库
+
+## 正确的代码同步工作流
+
+```
+服务器改动（远程 VPS ~/stock_analysis）
+        ↓  scp 拉回本地
+/Users/xiaotian/Develop/personal/stock_analysis/
+        ↓  git commit & push
+https://github.com/97SmallSKY/stock_analysis.git（个人私有仓库）
+```
+
+### 具体命令（标准流程）
+
+```bash
+# 第一步：将服务器最新文件同步回本地
+scp jd:~/stock_analysis/utils/retry.py /Users/xiaotian/Develop/personal/stock_analysis/utils/retry.py
+scp jd:~/stock_analysis/pages/sim_trading.py /Users/xiaotian/Develop/personal/stock_analysis/pages/sim_trading.py
+# ... 根据实际改动的文件增减
+
+# 第二步：进入个人私仓目录提交
+cd /Users/xiaotian/Develop/personal/stock_analysis
+git add .
+git commit -m "简要说明改动内容"
+git push origin main
+```
+
+### push 认证信息
+
+- **用户名**：`97SmallSKY`
+- **邮箱**：`smallxtsky@gmail.com`
+- **Token**：Personal Access Token（有 `repo` 权限），在 [https://github.com/settings/tokens](https://github.com/settings/tokens) 管理
+- **cron 任务（已更新）**：
+  | 时间 | 任务 |
+  |------|------|
+  | `50 18 工作日` | 盘后 Phase A 选股建仓（`sim_robot_run.py phase_a`）← 2026-03-31 新增 |
+
+## 远程服务器说明
+
+服务器（`jd`，即 `~/stock_analysis`）本身**没有 git 仓库**，仅作为运行环境。不要在服务器上执行任何 git 操作。
+
+---
+
