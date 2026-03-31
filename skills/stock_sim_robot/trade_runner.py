@@ -51,8 +51,9 @@ from skills.stock_sim_robot.sim_trade_db import (
 from skills.stock_sim_robot.fetch_signal import get_mainboard_signals
 from skills.stock_sim_robot.llm_select import select_stock, STOP_LOSS_PCT
 
-MAX_HOLD_DAYS = 3      # 超过 3 个交易日强制平仓
-BUY_AMOUNT    = 100000  # 每笔买入金额（元）
+MAX_HOLD_DAYS       = 3  # 超过 3 个交易日强制平仓
+MAX_OPEN_POSITIONS  = 2  # 同时最多持仓数量（含 buy_price=None 的待回填仓）
+BUY_AMOUNT          = 100000  # 每笔买入金额（元）
 
 
 # ── 飞书报警（Phase B 失败时使用）────────────────────────────────────────
@@ -591,6 +592,21 @@ def run_phase_a(trade_date: str | None = None) -> dict:
         logger.info(f"今日（{today_str}）已有交易记录，跳过开仓")
         result["skipped"]     = True
         result["skip_reason"] = "今日已有交易记录"
+    elif len(get_open_positions()) >= MAX_OPEN_POSITIONS:
+        # 当前持仓数已达上限，跳过开仓（避免过度分散资金）
+        cur_cnt = len(get_open_positions())
+        logger.info(f"当前 open 持仓 {cur_cnt} 只 >= MAX_OPEN_POSITIONS({MAX_OPEN_POSITIONS})，跳过开仓")
+        result["skipped"]     = True
+        result["skip_reason"] = f"持仓已满（{cur_cnt}/{MAX_OPEN_POSITIONS}），等待现有仓位结算"
+        try:
+            write_audit_log(
+                event_type=AUDIT_PHASE_A_SKIP,
+                summary=f"Phase A 跳过（{today_str}）：持仓已满 {cur_cnt}/{MAX_OPEN_POSITIONS}",
+                detail={"trade_date": today_str, "reason": "max_positions", "cur_cnt": cur_cnt},
+                result="skipped",
+            )
+        except Exception:
+            pass
     else:
         logger.info(f"开始选股（{today_str}）...")
         signals = get_mainboard_signals(today_str)
