@@ -167,7 +167,7 @@ class PostgreSQLStorage:
                     logger.info("PostgreSQL 连接成功 ✅")
             except Exception as e:
                 logger.error(f"PostgreSQL 连接失败: {e}")
-                logger.info("提示：确认 Docker 容器已启动 → docker start videofetcher-db")
+                logger.info("提示：确认 PostgreSQL 容器已启动 → docker start lobe-postgres")
                 raise
         return self._engine
 
