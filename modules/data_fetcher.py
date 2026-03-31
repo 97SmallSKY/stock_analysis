@@ -752,24 +752,136 @@ def fetch_market_sentiment(trade_date: str = None, save: bool = True) -> dict:
         sentiment["index_close"]  = 0
         sentiment["index_change"] = 0
 
-    # ── 4. 交易信号判断 ──────────────────────────────────────
-    cfg        = STRATEGY_CONFIG
-    limit_up   = sentiment.get("limit_up", 0)
-    limit_down = sentiment.get("limit_down", 0)
-    trend      = sentiment.get("index_trend", "neutral")
+    # ── 4. 市场赚钱效应（上涨家数比例） ──────────────────────
+    # AKShare stock_advance_decline_em 获取涨跌家数
+    advance_ratio = None
+    try:
+        df_ad = safe_akshare_call(
+            ak.stock_advance_decline_em,
+            max_retries=2, base_delay=1.0, fallback=None,
+        )
+        if df_ad is not None and not df_ad.empty:
+            # 列名可能是"涨家数"/"跌家数"或"上涨"/"下跌"
+            up_col   = next((c for c in df_ad.columns if "涨" in c and "家" in c), None)
+            down_col = next((c for c in df_ad.columns if "跌" in c and "家" in c), None)
+            if up_col and down_col:
+                up_n   = float(df_ad[up_col].iloc[-1])
+                down_n = float(df_ad[down_col].iloc[-1])
+                total  = up_n + down_n
+                advance_ratio = up_n / total if total > 0 else 0.5
+    except Exception:
+        pass
+    if advance_ratio is None and _cached:
+        advance_ratio = _cached.get("advance_ratio", None)
+    sentiment["advance_ratio"] = round(advance_ratio, 4) if advance_ratio is not None else None
 
-    if limit_up < cfg["min_limit_up"] and limit_down > cfg["max_limit_down"]:
-        sentiment["trade_signal"]  = "no_trade"
-        sentiment["signal_reason"] = f"市场情绪差：涨停{limit_up}家，跌停{limit_down}家"
-    elif trend == "bearish":
-        sentiment["trade_signal"]  = "half_position"
-        sentiment["signal_reason"] = "大盘趋势向下，建议半仓操作"
-    elif limit_up > 50:
-        sentiment["trade_signal"]  = "full_position"
-        sentiment["signal_reason"] = f"赚钱效应强：涨停{limit_up}家"
+    # ── 5. 成交量变化（两市合计成交额 vs 20日均值） ───────────
+    vol_ratio = None
+    try:
+        # 利用已拉到的 index_df（沪市）作为代理
+        if index_df is not None and len(index_df) >= 20 and "volume" in index_df.columns:
+            vol_20avg = float(index_df["volume"].tail(20).mean())
+            vol_today = float(index_df["volume"].iloc[-1])
+            vol_ratio = vol_today / vol_20avg if vol_20avg > 0 else 1.0
+    except Exception:
+        pass
+    if vol_ratio is None and _cached:
+        vol_ratio = _cached.get("vol_ratio", None)
+    sentiment["vol_ratio"] = round(vol_ratio, 3) if vol_ratio is not None else None
+
+    # ── 6. 北向资金净买入 ──────────────────────────────────────
+    northbound_net = None
+    try:
+        df_hsgt = safe_akshare_call(
+            ak.stock_hsgt_fund_flow_summary_em,
+            max_retries=2, base_delay=1.0, fallback=None,
+        )
+        if df_hsgt is not None and not df_hsgt.empty:
+            # 取最近一行（当日）净买入（单位：亿元）
+            net_col = next((c for c in df_hsgt.columns if "净" in c or "net" in c.lower()), None)
+            if net_col:
+                northbound_net = float(df_hsgt[net_col].iloc[-1])
+    except Exception:
+        pass
+    if northbound_net is None and _cached:
+        northbound_net = _cached.get("northbound_net", None)
+    sentiment["northbound_net"] = round(northbound_net, 2) if northbound_net is not None else None
+
+    # ── P2-3: 市场温度计（6维 0~100分） ─────────────────────────
+    # 参考改进方案 4.3
+    limit_up   = sentiment.get("limit_up",   0)
+    limit_down = sentiment.get("limit_down", 0)
+    cont_limit = sentiment.get("continuous_limit", 0)
+    idx_trend  = sentiment.get("index_trend", "neutral")
+    adv_ratio  = sentiment.get("advance_ratio") or 0.5
+    vol_r      = sentiment.get("vol_ratio") or 1.0
+    nb_net     = sentiment.get("northbound_net") or 0.0
+
+    # 各维度得分（0~100，满分=牛市，0=熊市）
+    # 1. 涨跌停比（>3→100, <0.5→0, 线性插值）
+    ud_ratio   = limit_up / max(limit_down, 1)
+    score_ud   = min(max((ud_ratio - 0.5) / (3.0 - 0.5) * 100, 0), 100)
+
+    # 2. 连板股数量（>15→100, <3→0）
+    score_cont = min(max((cont_limit - 3) / (15 - 3) * 100, 0), 100)
+
+    # 3. 赚钱效应（上涨家数比）（>60%→100, <30%→0）
+    score_adv  = min(max((adv_ratio - 0.30) / (0.60 - 0.30) * 100, 0), 100)
+
+    # 4. 大盘趋势（5MA vs 20MA）
+    score_idx  = 100 if idx_trend == "bullish" else (50 if idx_trend == "neutral" else 0)
+
+    # 5. 成交量变化（>1.2→100, <0.7→0）
+    score_vol  = min(max((vol_r - 0.70) / (1.20 - 0.70) * 100, 0), 100)
+
+    # 6. 北向资金（>50亿→100, <-80亿→0）
+    score_nb   = min(max((nb_net - (-80)) / (50 - (-80)) * 100, 0), 100)
+
+    # 加权汇总（权重可根据历史IC调整）
+    temp_score = (
+        score_ud   * 0.25
+        + score_cont * 0.15
+        + score_adv  * 0.20
+        + score_idx  * 0.20
+        + score_vol  * 0.10
+        + score_nb   * 0.10
+    )
+    temp_score = round(temp_score, 1)
+    sentiment["temperature"]    = temp_score
+    sentiment["score_details"]  = {
+        "ud_ratio": round(score_ud, 1),
+        "cont":     round(score_cont, 1),
+        "advance":  round(score_adv, 1),
+        "index":    round(score_idx, 1),
+        "volume":   round(score_vol, 1),
+        "northbound": round(score_nb, 1),
+    }
+
+    # ── P2-3: 仓位系数 ───────────────────────────────────────────
+    if temp_score >= 70:
+        pos_coef = 1.0
+    elif temp_score >= 50:
+        pos_coef = 0.6 + (temp_score - 50) / (70 - 50) * 0.4  # 0.6~1.0 线性
+    elif temp_score >= 30:
+        pos_coef = 0.3 + (temp_score - 30) / (50 - 30) * 0.3  # 0.3~0.6 线性
     else:
+        pos_coef = 0.0
+    sentiment["position_coef"] = round(pos_coef, 2)
+
+    # ── 7. 交易信号判断（兼容旧逻辑 + P2-3 温度计） ─────────────
+    cfg = STRATEGY_CONFIG
+    if temp_score < 30 or (limit_up < cfg.get("min_limit_up", 10) and limit_down > cfg.get("max_limit_down", 20)):
+        sentiment["trade_signal"]  = "no_trade"
+        sentiment["signal_reason"] = f"市场温度偏低({temp_score:.0f})：涨停{limit_up}家，跌停{limit_down}家"
+    elif temp_score >= 70:
+        sentiment["trade_signal"]  = "full_position"
+        sentiment["signal_reason"] = f"市场温度强势({temp_score:.0f})，仓位系数{pos_coef}"
+    elif temp_score >= 50:
         sentiment["trade_signal"]  = "normal"
-        sentiment["signal_reason"] = "市场正常，正常操作"
+        sentiment["signal_reason"] = f"市场温度正常({temp_score:.0f})，仓位系数{pos_coef}"
+    else:
+        sentiment["trade_signal"]  = "half_position"
+        sentiment["signal_reason"] = f"市场温度偏弱({temp_score:.0f})，建议轻仓，仓位系数{pos_coef}"
 
     # 若来自缓存，在 signal_reason 中加标注
     if sentiment.get("_from_cache"):
