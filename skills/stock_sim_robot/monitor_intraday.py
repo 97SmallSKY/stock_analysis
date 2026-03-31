@@ -147,13 +147,26 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
     trade_id   = int(pos_row["id"])
     code       = str(pos_row["code"])
     name       = str(pos_row["name"])
-    buy_price  = float(pos_row["buy_price"])
-    buy_shares = int(pos_row["buy_shares"])
     today_str  = date.today().strftime("%Y%m%d")
     trade_date = str(pos_row.get("trade_date", ""))
 
     # events 必须在所有 return 路径之前初始化，防止 UnboundLocalError
     events = []
+
+    # ── buy_price / buy_shares 空值防御：Phase B 未回填时跳过监控 ────────
+    # Phase B（09:35）回填前 buy_price=None/0，此时无法计算涨跌幅，直接跳过
+    _raw_bp = pos_row.get("buy_price")
+    _raw_bs = pos_row.get("buy_shares")
+    if _raw_bp is None or _raw_bp == 0 or (isinstance(_raw_bp, float) and _raw_bp != _raw_bp):
+        logger.info(
+            f"  ⏳ {name}({code}) buy_price 尚未回填（等待 Phase B），跳过本次监控"
+        )
+        return events
+    buy_price  = float(_raw_bp)
+    buy_shares = int(_raw_bs) if (_raw_bs is not None and _raw_bs != 0) else 0
+    if buy_price <= 0:
+        logger.info(f"  ⏳ {name}({code}) buy_price={buy_price} 无效，跳过本次监控")
+        return events
 
     # ── A 股 T+1 合规保护：买入当天（T+1 日）不允许卖出 ─────────────────
     # 本系统语义：trade_date 是信号日（T日），T+1 日才是真正买入日
