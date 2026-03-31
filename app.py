@@ -17,10 +17,11 @@ st.set_page_config(
 _PAGE_SLUG_MAP = {
     "dashboard":         "🏠 总览 Dashboard",
     "mainboard":         "🏆 主板精选策略",
+    "realtime":          "📡 实时监控",
     "signal":            "🎯 决策辅助信号",
     "returns":           "📈 龙虎榜盈亏分析",
     "sim_trading":       "🤖 模拟炒股",
-    "daily_select":      "📡 每日选股",
+    "daily_select":      "🔍 每日选股",
     "market_sentiment":  "📊 市场情绪",
     "backtest":          "🔬 策略回测",
     "backtest_analysis": "📉 回测分析",
@@ -30,10 +31,11 @@ _PAGE_SLUG_MAP = {
 _PAGE_LIST = [
     "🏠 总览 Dashboard",
     "🏆 主板精选策略",
+    "📡 实时监控",
     "🎯 决策辅助信号",
     "📈 龙虎榜盈亏分析",
     "🤖 模拟炒股",
-    "📡 每日选股",
+    "🔍 每日选股",
     "📊 市场情绪",
     "🔬 策略回测",
     "📉 回测分析",
@@ -91,7 +93,10 @@ elif page == "🏆 主板精选策略":
 elif page == "🏠 总览 Dashboard":
     from pages.dashboard import render
     render()
-elif page == "📡 每日选股":
+elif page == "📡 实时监控":
+    from pages.realtime_monitor import render
+    render()
+elif page == "🔍 每日选股":
     from pages.daily_select import render
     render()
 elif page == "📊 市场情绪":
