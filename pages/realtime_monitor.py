@@ -323,11 +323,16 @@ def render():
         st.subheader("⚙️ 监控设置")
 
         auto_refresh = st.toggle("自动刷新", value=True)
+        _INTERVAL_OPTIONS = [10, 15, 30, 60, 120, 300]
+        _default_interval = _refresh_interval()
+        # 确保默认值在选项列表中（防止 select_slider 报 ValueError）
+        if _default_interval not in _INTERVAL_OPTIONS:
+            _default_interval = min(_INTERVAL_OPTIONS, key=lambda x: abs(x - _default_interval))
         interval = st.select_slider(
             "刷新间隔(秒)",
-            options=[10, 15, 30, 60, 120],
-            value=_refresh_interval(),
-            help="交易时段建议30~60秒，非交易时段自动减慢"
+            options=_INTERVAL_OPTIONS,
+            value=_default_interval,
+            help="交易时段建议30~60秒，非交易时段自动降至300s"
         )
 
         atr_k = st.slider(
