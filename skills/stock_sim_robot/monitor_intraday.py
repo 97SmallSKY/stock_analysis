@@ -152,6 +152,9 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
     today_str  = date.today().strftime("%Y%m%d")
     trade_date = str(pos_row.get("trade_date", ""))
 
+    # events 必须在所有 return 路径之前初始化，防止 UnboundLocalError
+    events = []
+
     # ── A 股 T+1 合规保护：买入当天（T+1 日）不允许卖出 ─────────────────
     # 本系统语义：trade_date 是信号日（T日），T+1 日才是真正买入日
     # 最早可卖出日 = T+2 = trade_date 后的第 2 个交易日
@@ -166,7 +169,7 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
                 f"  ⏳ [T+1合规] {name}({code}) 买入日={_get_nth_trading_day(trade_date, 1)}，"
                 f"最早可卖={t2_date}，今天={today_str}，跳过（A股T+1制度）"
             )
-            return events  # 买入当天或买入前不允许卖出
+            return events  # 买入当天或买入前不允许卖出（events=[]，已初始化）
     except Exception as _compliance_err:
         logger.warning(f"  T+1合规检查异常（非致命，继续执行）: {_compliance_err}")
 

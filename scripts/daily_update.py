@@ -112,15 +112,26 @@ def step3_fill_null_prices():
             return days_passed >= min_days
 
         def fetch_kline(code, trade_date_str):
-            """获取K线数据，优先新浪，失败则用东方财富备用源"""
-            prefix = "sh" if code[0] in ("6", "9") else "sz"
+            """获取K线数据，优先新浪，失败则用东方财富备用源
+            支持主板/创业板/科创板/北交所/可转债等各类代码"""
+            c = str(code).zfill(6)
+            # 新浪前缀规则：
+            #   sh - 沪市 (6开头) + 上交所国债/基金 (11/51开头)
+            #   sz - 深市 (0/1/2/3开头) + 深交所可转债 (127/128开头)
+            #   bj - 北交所 (4/8开头，82/83/87/88/43)
+            if c.startswith("6") or c[:2] in ("11", "51"):
+                prefix = "sh"
+            elif c[0] in ("4", "8") or c[:2] in ("82", "83", "87", "88", "43"):
+                prefix = "bj"  # 北交所
+            else:
+                prefix = "sz"
             end_dt = (pd.Timestamp(trade_date_str) + pd.Timedelta(days=40)).strftime("%Y%m%d")
 
-            # 主源：新浪 stock_zh_a_daily
+            # 主源：新浪 stock_zh_a_daily（北交所也可用此接口）
             for attempt in range(2):
                 try:
                     raw = ak.stock_zh_a_daily(
-                        symbol=f"{prefix}{code}", adjust="qfq",
+                        symbol=f"{prefix}{c}", adjust="qfq",
                         start_date=trade_date_str, end_date=end_dt,
                     )
                     if raw is not None and len(raw) >= 2:
@@ -128,32 +139,32 @@ def step3_fill_null_prices():
                             "date": "日期", "open": "开盘",
                             "high": "最高", "low": "最低", "close": "收盘",
                         })
-                        if all(c in raw.columns for c in ["日期", "开盘", "最高", "最低", "收盘"]):
+                        if all(col in raw.columns for col in ["日期", "开盘", "最高", "最低", "收盘"]):
                             return raw[["日期", "开盘", "最高", "最低", "收盘"]].sort_values("日期").reset_index(drop=True)
                 except Exception as e:
-                    logger.warning(f"  [主源/{attempt+1}/2] {code} 拉取失败: {type(e).__name__}")
+                    logger.warning(f"  [主源/{attempt+1}/2] {c} 拉取失败: {type(e).__name__}")
                     time.sleep(2)
 
-            # 备用源：东方财富 stock_zh_a_hist
-            logger.info(f"  {code} 切换东方财富备用源...")
+            # 备用源：东方财富 stock_zh_a_hist（支持北交所代码直接传6位）
+            logger.info(f"  {c} 切换东方财富备用源...")
             for attempt in range(2):
                 try:
                     raw2 = ak.stock_zh_a_hist(
-                        symbol=code, period="daily", adjust="qfq",
+                        symbol=c, period="daily", adjust="qfq",
                         start_date=trade_date_str, end_date=end_dt,
                     )
                     if raw2 is not None and len(raw2) >= 2:
-                        raw2 = raw2.rename(columns={
-                            "日期": "日期", "开盘": "开盘",
-                            "最高": "最高", "最低": "最低", "收盘": "收盘",
-                        })
-                        if all(c in raw2.columns for c in ["日期", "开盘", "最高", "最低", "收盘"]):
+                        if all(col in raw2.columns for col in ["日期", "开盘", "最高", "最低", "收盘"]):
                             return raw2[["日期", "开盘", "最高", "最低", "收盘"]].sort_values("日期").reset_index(drop=True)
                 except Exception as e:
-                    logger.warning(f"  [备用源/{attempt+1}/2] {code} 拉取失败: {type(e).__name__}")
+                    logger.warning(f"  [备用源/{attempt+1}/2] {c} 拉取失败: {type(e).__name__}")
                     time.sleep(2)
 
-            logger.warning(f"  {code} @ {trade_date_str}: 两路数据源均失败，跳过")
+            # 第三路：北交所可转债直接跳过（没有K线）
+            if prefix == "bj" or c[:3] in ("127", "128", "110", "113"):
+                logger.info(f"  {c} 北交所/可转债代码，无K线数据，安全跳过")
+            else:
+                logger.warning(f"  {c} @ {trade_date_str}: 两路数据源均失败，跳过")
             return None
 
         # 向后兼容：保留 fetch_sina 别名
