@@ -495,6 +495,17 @@ def run_phase_a(trade_date: str | None = None) -> dict:
 
         logger.info(f"  结算 {name}（{code}）已持 {days_held} 交易日（{days_natural} 自然日），买入价={buy_price}, 挂牌价={list_price}")
 
+        # ── A 股 T+1 合规保护：T+2 日未到则不允许结算 ──────────────────────
+        # 本系统语义：trade_date 是 T 日（信号日），T+1 日买入，T+2 日才能卖出
+        # 即最早结算日 = _get_nth_trading_day(td, 2)
+        t2_date_earliest = _get_nth_trading_day(td, 2)
+        if today_str < t2_date_earliest:
+            logger.info(
+                f"  ⏳ [T+1合规] {name}（{code}）最早可结算日={t2_date_earliest}，"
+                f"今日={today_str}，跳过（A股T+1制度）"
+            )
+            continue
+
         # ── 超过 FORCE_CLOSE_DAYS 交易日且仍未结算 → 强制平仓（不等 T+2 价格）──
         if days_held >= FORCE_CLOSE_DAYS:
             logger.warning(

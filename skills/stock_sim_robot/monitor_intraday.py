@@ -150,6 +150,25 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
     buy_price  = float(pos_row["buy_price"])
     buy_shares = int(pos_row["buy_shares"])
     today_str  = date.today().strftime("%Y%m%d")
+    trade_date = str(pos_row.get("trade_date", ""))
+
+    # ── A 股 T+1 合规保护：买入当天（T+1 日）不允许卖出 ─────────────────
+    # 本系统语义：trade_date 是信号日（T日），T+1 日才是真正买入日
+    # 最早可卖出日 = T+2 = trade_date 后的第 2 个交易日
+    # 判断：今天必须 >= T+2 日，即 trade_date 必须 < 昨日（至少已过 2 个交易日）
+    # 简单判断：_trading_days_since(trade_date) >= 2
+    try:
+        from skills.stock_sim_robot.trade_runner import _trading_days_since, _get_nth_trading_day
+        days_since_t = _trading_days_since(trade_date)
+        t2_date      = _get_nth_trading_day(trade_date, 2)
+        if today_str < t2_date:
+            logger.info(
+                f"  ⏳ [T+1合规] {name}({code}) 买入日={_get_nth_trading_day(trade_date, 1)}，"
+                f"最早可卖={t2_date}，今天={today_str}，跳过（A股T+1制度）"
+            )
+            return events  # 买入当天或买入前不允许卖出
+    except Exception as _compliance_err:
+        logger.warning(f"  T+1合规检查异常（非致命，继续执行）: {_compliance_err}")
 
     # 目标价快照（用于 price_log）
     sell1_price = float(pos_row.get("sell1_price") or 0)
