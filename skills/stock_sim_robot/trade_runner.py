@@ -84,38 +84,67 @@ def _send_feishu_alert(message: str):
 
 # ── 交易日历工具 ──────────────────────────────────────────────────────
 
+_TRADE_DATES_CACHE: list[str] = []   # 模块级缓存，避免反复拉取
+_TRADE_DATES_CACHE_DATE: str = ""     # 缓存日期，当天有效
+
+
+def _get_trade_dates() -> list[str]:
+    """
+    获取交易日历列表（YYYYMMDD 格式，升序）。
+    当天内缓存，失败时返回空列表（调用方自行降级）。
+    """
+    global _TRADE_DATES_CACHE, _TRADE_DATES_CACHE_DATE
+    today_str = date.today().strftime("%Y%m%d")
+    if _TRADE_DATES_CACHE and _TRADE_DATES_CACHE_DATE == today_str:
+        return _TRADE_DATES_CACHE
+    try:
+        df = safe_akshare_call(
+            ak.tool_trade_date_hist_sina,
+            max_retries=2, base_delay=1.0, fallback=None,
+        )
+        if df is not None and not df.empty:
+            col = df.columns[0]
+            dates = sorted(df[col].astype(str).str.replace("-", "").tolist())
+            _TRADE_DATES_CACHE = dates
+            _TRADE_DATES_CACHE_DATE = today_str
+            return dates
+    except Exception as e:
+        logger.warning(f"获取交易日历失败: {e}")
+    return []
+
+
 def _is_trading_day(d: str | date | None = None) -> bool:
     """
-    检查指定日期是否为交易日（尝试从 akshare 拉取当日数据判断）
-    简化版：周末直接排除，工作日尝试查 AK 接口
+    检查指定日期是否为交易日（优先使用完整交易日历含节假日，失败降级为跳过周末）
     """
     if d is None:
         d = date.today()
     if isinstance(d, str):
         d = date.fromisoformat(f"{d[:4]}-{d[4:6]}-{d[6:]}")
-    if d.weekday() >= 5:
+    if d.weekday() >= 5:  # 周末直接排除
         return False
-    # 节假日判断：尝试从akshare取交易日历
-    try:
-        today_str = d.strftime("%Y%m%d")
-        df = safe_akshare_call(
-            ak.tool_trade_date_hist_sina,
-            max_retries=1, base_delay=1.0, fallback=None,
-        )
-        if df is not None and not df.empty:
-            col = df.columns[0]
-            trade_dates = df[col].astype(str).str.replace("-", "").tolist()
-            return today_str in trade_dates
-    except Exception:
-        pass
+    trade_dates = _get_trade_dates()
+    if trade_dates:
+        return d.strftime("%Y%m%d") in trade_dates
     # fallback：仅过滤周末
     return True
 
 
 def _get_nth_trading_day(start_date: str, n: int) -> str:
     """
-    从 start_date 起，取第 n 个交易日（简化版：跳过周末）
+    从 start_date 起，取第 n 个交易日。
+    严格遵循总控 Prompt：优先使用完整交易日历（含节假日），
+    禁止使用自然日 +1 或 kline.iloc[1] 替代。
     """
+    trade_dates = _get_trade_dates()
+    if trade_dates:
+        # 精确：从 start_date 之后取第 n 个交易日
+        future = [d for d in trade_dates if d > start_date]
+        if len(future) >= n:
+            return future[n - 1]
+        logger.warning(f"交易日历数据不足（start={start_date}, n={n}），降级处理")
+
+    # fallback：跳过周末（不含节假日）
     d = date.fromisoformat(f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}")
     count = 0
     while count < n:
@@ -125,8 +154,28 @@ def _get_nth_trading_day(start_date: str, n: int) -> str:
     return d.strftime("%Y%m%d")
 
 
+def _trading_days_since(trade_date_str: str) -> int:
+    """
+    从 trade_date_str 到今天经过多少交易日（含节假日日历，严格 T+N 语义）。
+    失败时降级为自然日 * 5/7（保守估算，不会误触发强制平仓）。
+    """
+    try:
+        today_str = date.today().strftime("%Y%m%d")
+        trade_dates = _get_trade_dates()
+        if trade_dates:
+            # 区间内的交易日数量（不含 trade_date_str，含 today）
+            between = [d for d in trade_dates if trade_date_str < d <= today_str]
+            return len(between)
+        # fallback：自然日粗略转换
+        td = date.fromisoformat(f"{trade_date_str[:4]}-{trade_date_str[4:6]}-{trade_date_str[6:]}")
+        natural = (date.today() - td).days
+        return max(0, int(natural * 5 / 7))
+    except Exception:
+        return 0
+
+
 def _days_since(trade_date_str: str) -> int:
-    """从 trade_date_str 到今天经过多少自然日"""
+    """从 trade_date_str 到今天经过多少自然日（仅用于日志/报告，不用于 T+N 判断）"""
     try:
         td = date.fromisoformat(f"{trade_date_str[:4]}-{trade_date_str[4:6]}-{trade_date_str[6:]}")
         return (date.today() - td).days
@@ -305,18 +354,33 @@ def _get_open_price_t1(code: str, trade_date: str) -> tuple[float | None, str]:
 
 def _get_t2_prices(code: str, trade_date: str) -> dict | None:
     """
-    获取 T+2 日价格（用于结算）
-    Returns: {open, high, low, close} 或 None
+    获取 T+2 日价格（用于结算）。
+    T+2 = trade_date 之后的第 2 个交易日，通过交易日历精确定位，
+    禁止使用 kline.iloc[1]（违反总控 Prompt 规则）。
+    Returns: {date, open, high, low, close} 或 None
     """
-    t1_date = _get_nth_trading_day(trade_date, 1)
-    kline   = _fetch_kline(code, t1_date, days=4)
+    t2_date = _get_nth_trading_day(trade_date, 2)  # T 之后第 2 个交易日
+    kline   = _fetch_kline(code, t2_date, days=3)
     if kline is None or kline.empty:
         return None
-    # T+2 = t1 后的第一个交易日
-    if len(kline) >= 2:
-        row = kline.iloc[1]
+    # 精确日期匹配，不依赖 iloc 偏移
+    t2_rows = kline[kline["日期"].astype(str).str.replace("-", "") == t2_date]
+    if not t2_rows.empty:
+        row = t2_rows.iloc[0]
         return {
-            "date":  str(row["日期"]),
+            "date":  t2_date,
+            "open":  round(float(row["开盘"]), 3),
+            "high":  round(float(row["最高"]), 3),
+            "low":   round(float(row["最低"]), 3),
+            "close": round(float(row["收盘"]), 3),
+        }
+    # 日期匹配失败 fallback：取 kline 第一行（极少数情况）
+    if not kline.empty:
+        row = kline.iloc[0]
+        actual_date = str(row["日期"]).replace("-", "")
+        logger.warning(f"  {code} T+2={t2_date} 日期精确匹配失败，fallback 取 kline[0]={actual_date}")
+        return {
+            "date":  actual_date,
             "open":  round(float(row["开盘"]), 3),
             "high":  round(float(row["最高"]), 3),
             "low":   round(float(row["最低"]), 3),
@@ -356,7 +420,7 @@ def _get_t2_prices_with_retry(code: str, trade_date: str, max_retries: int = 3) 
     return None
 
 
-FORCE_CLOSE_DAYS = 5   # 超过 5 自然日仍未结算，强制平仓
+FORCE_CLOSE_DAYS = 5   # 超过 5 个交易日仍未结算，强制平仓（交易日计数）
 
 
 def _get_latest_close(code: str) -> float | None:
@@ -426,14 +490,15 @@ def run_phase_a(trade_date: str | None = None) -> dict:
             continue
 
         buy_price = float(buy_price)
-        days_held = _days_since(td)
+        days_held = _trading_days_since(td)  # 交易日计数（含节假日日历）
+        days_natural = _days_since(td)          # 自然日（仅用于日志）
 
-        logger.info(f"  结算 {name}（{code}）已持 {days_held} 自然日，买入价={buy_price}, 挂牌价={list_price}")
+        logger.info(f"  结算 {name}（{code}）已持 {days_held} 交易日（{days_natural} 自然日），买入价={buy_price}, 挂牌价={list_price}")
 
-        # ── 超过 FORCE_CLOSE_DAYS 自然日且仍未结算 → 强制平仓（不等 T+2 价格）──
+        # ── 超过 FORCE_CLOSE_DAYS 交易日且仍未结算 → 强制平仓（不等 T+2 价格）──
         if days_held >= FORCE_CLOSE_DAYS:
             logger.warning(
-                f"  {name}（{code}）持仓超过 {FORCE_CLOSE_DAYS} 自然日，强制以最新收盘价平仓"
+                f"  {name}（{code}）持仓超过 {FORCE_CLOSE_DAYS} 交易日，强制以最新收盘价平仓"
             )
             latest_close = _get_latest_close(code)
             if latest_close and latest_close > 0:
@@ -467,7 +532,7 @@ def run_phase_a(trade_date: str | None = None) -> dict:
         if t2_prices is None:
             logger.warning(
                 f"  {code} T+2 价格 3 次重试均失败，跳过本次结算"
-                f"（已持 {days_held} 自然日，超过 {FORCE_CLOSE_DAYS} 日后将强制平仓）"
+                f"（已持 {days_held} 交易日，超过 {FORCE_CLOSE_DAYS} 交易日后将强制平仓）"
             )
             continue
 
@@ -485,8 +550,8 @@ def run_phase_a(trade_date: str | None = None) -> dict:
             # 止损
             sell_price = t2_close
             sell_type  = "止损"
-        elif days_held >= MAX_HOLD_DAYS * 2:
-            # 超时 → 持有到期平仓
+        elif days_held >= MAX_HOLD_DAYS:
+            # 超过 MAX_HOLD_DAYS 交易日 → 持有到期平仓（交易日计数）
             sell_price = t2_close
             sell_type  = "持有到期"
         else:

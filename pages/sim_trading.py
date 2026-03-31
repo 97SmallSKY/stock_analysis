@@ -245,22 +245,31 @@ def render():
         # 在渲染前，将数值列预格式化为字符串，避免 TextColumn 与 Styler.format() 冲突
         # （Streamlit TextColumn 不支持 Styler 数值格式化，会导致数值显示为 "—"）
         def _fmt_price_col(v):
+            import math
             try:
                 f = float(v)
+                if math.isnan(f):
+                    return "—"
                 return f"¥{f:.3f}" if f > 0 else "—"
             except (TypeError, ValueError):
                 return "—" if (v is None or str(v).strip() in ("", "nan", "None")) else str(v)
 
         def _fmt_pct_col(v, prefix="+"):
+            import math
             try:
                 f = float(v)
+                if math.isnan(f):  # float('nan') 不抛异常，需显式检查
+                    return "—"
                 return f"{f:+.2f}%"
             except (TypeError, ValueError):
                 return "—" if (v is None or str(v).strip() in ("", "nan", "None")) else str(v)
 
         def _fmt_money_col(v):
+            import math
             try:
                 f = float(v)
+                if math.isnan(f):
+                    return "—"
                 return f"¥{f:.2f}"
             except (TypeError, ValueError):
                 return "—" if (v is None or str(v).strip() in ("", "nan", "None")) else str(v)
