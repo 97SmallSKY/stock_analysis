@@ -114,7 +114,70 @@ def _build_pool(top10: pd.DataFrame, top_n: int) -> pd.DataFrame:
     pool["流通市值亿"] = (pool["流通市值"] / 1e8).round(1)
     pool["净买入亿"]   = (pool["龙虎榜净买额"] / 1e8).round(2)
 
-    return pool[pool["is_main"]].copy()
+    pool = pool[pool["is_main"]].copy()
+
+    # ── 综合评分（纯本地字段，无远程请求，缓存安全）──────────────────────────
+    # 综合评分 = 净买额占比×30 + 换手率活跃×25 + 涨跌幅强度×20 + 市值适中×15 + 振幅适当×10
+    def _calc_composite_score(row: pd.Series) -> float:
+        """基于 lhb_top10 本地字段计算综合评分（0~100），无任何远程请求"""
+        s1 = s2 = s3 = s4 = s5 = 0.0
+        # 1. 净买额占比分（净买额 / 流通市值）
+        net = float(row.get("龙虎榜净买额", 0) or 0)
+        mcap = float(row.get("流通市值", 0) or 1e12)  # 避免除零，默认给超大市值
+        if mcap > 0:
+            pct_ratio = net / mcap * 100  # %
+            if pct_ratio >= 3:
+                s1 = 100.0
+            elif pct_ratio >= 1:
+                s1 = 50 + (pct_ratio - 1) / 2 * 50   # 1%~3% → 50~100
+            elif pct_ratio >= 0.5:
+                s1 = pct_ratio / 0.5 * 50             # 0.5%~1% → 0~50
+        # 2. 换手率活跃分
+        tr = float(row.get("换手率", 0) or 0)
+        if 3 <= tr <= 7:
+            s2 = 100.0
+        elif 1 <= tr < 3 or 7 < tr <= 10:
+            s2 = 70.0
+        elif tr > 0:
+            s2 = 30.0
+        # 3. 涨跌幅强度分
+        chg = float(row.get("涨跌幅", 0) or 0)
+        if 3 <= chg <= 7:
+            s3 = 100.0
+        elif 1 <= chg < 3:
+            s3 = 70.0
+        elif 0 <= chg < 1:
+            s3 = 40.0
+        elif chg < 0:
+            s3 = 0.0
+        # 4. 市值适中分
+        mcap_yi = mcap / 1e8
+        if 50 <= mcap_yi < 300:
+            s4 = 100.0
+        elif 300 <= mcap_yi < 1000:
+            s4 = 70.0
+        elif mcap_yi < 50:
+            s4 = 50.0
+        else:
+            s4 = 40.0
+        # 5. 振幅合理分（若无振幅列则默认 0）
+        amp = float(row.get("振幅", 0) or 0)
+        if amp > 0:
+            if 3 <= amp <= 8:
+                s5 = 100.0
+            elif 1 <= amp < 3:
+                s5 = 60.0
+            elif amp > 10:
+                s5 = 30.0
+            else:
+                s5 = 50.0
+        composite = s1 * 0.30 + s2 * 0.25 + s3 * 0.20 + s4 * 0.15 + s5 * 0.10
+        return round(composite, 1)
+
+    pool["综合评分"]   = pool.apply(_calc_composite_score, axis=1)
+    pool["净买额占比%"] = (pool["龙虎榜净买额"] / pool["流通市值"].clip(lower=1) * 100).round(2)
+
+    return pool
 
 
 def _apply_filters(
@@ -153,6 +216,12 @@ def _apply_filters(
     elif sort_by == "涨跌幅（强势度↓）":
         sort_col = "涨跌幅"
         asc = False
+    elif sort_by == "综合评分（推荐）★":
+        sort_col = "综合评分"
+        asc = False
+    elif sort_by == "净买额占比%（主力密度↓）":
+        sort_col = "净买额占比%"
+        asc = False
     else:
         sort_col = "龙虎榜净买额"
 
@@ -184,6 +253,17 @@ def _build_result(daily_top1: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFram
     merged["买入价"]    = bp
     merged["冲高收益%"] = ((merged["T+2最高价"] / bp) - 1) * 100
     merged["收盘收益%"] = ((merged["T+2收盘价"] / bp) - 1) * 100
+
+    # 透传综合评分字段
+    for col in ["综合评分", "净买额占比%"]:
+        if col in daily_top1.columns and col not in merged.columns:
+            try:
+                idx_map = daily_top1.set_index(["代码", "trade_date"])[col]
+                merged[col] = merged.apply(
+                    lambda r: idx_map.get((r["代码"], r["trade_date"]), None), axis=1
+                )
+            except Exception:
+                pass
 
     # T+2 最高价 vs 买入价的分档 flag（用于概率统计）
     for thresh in [2, 3, 4, 5]:
@@ -575,6 +655,8 @@ def render():
             "排序",
             options=[
                 "净买入额（主力意志）",
+                "综合评分（推荐）★",
+                "净买额占比%（主力密度↓）",
                 "换手率（活跃度↓）",
                 "流通市值（从小到大）",
                 "流通市值（从大到小）",
@@ -582,6 +664,7 @@ def render():
             ],
             index=0,
             label_visibility="collapsed",
+            help="综合评分 = 净买额占比×30% + 换手率×25% + 涨跌幅×20% + 市值适中×15% + 振幅×10%，全为本地字段计算，无远程请求",
         )
 
         st.caption(
@@ -637,14 +720,32 @@ def render():
             main_today = main_today[main_today["换手率档位"] == turnover_filter]
 
         if not main_today.empty:
+            # 为今日候选池也计算综合评分（复用 _build_pool 里的 _calc_composite_score 逻辑）
+            today_pool_full = _build_pool(top10_raw_c[top10_raw_c["trade_date"] == latest_date], top_n)
+            score_map = {}
+            if not today_pool_full.empty and "综合评分" in today_pool_full.columns:
+                score_map = dict(zip(today_pool_full["代码"], today_pool_full["综合评分"]))
+                pct_map   = dict(zip(today_pool_full["代码"], today_pool_full.get("净买额占比%", pd.Series())))
+
             sort_map = {
-                "净买入额（主力意志）": ("龙虎榜净买额", False),
-                "换手率（活跃度↓）": ("换手率", False),
-                "流通市值（从小到大）": ("流通市值", True),
-                "流通市值（从大到小）": ("流通市值", False),
-                "涨跌幅（强势度↓）": ("涨跌幅", False),
+                "净买入额（主力意志）":          ("龙虎榜净买额", False),
+                "综合评分（推荐）★":             ("综合评分",   False),
+                "净买额占比%（主力密度↓）":       ("净买额占比%", False),
+                "换手率（活跃度↓）":             ("换手率",     False),
+                "流通市值（从小到大）":           ("流通市值",   True),
+                "流通市值（从大到小）":           ("流通市值",   False),
+                "涨跌幅（强势度↓）":             ("涨跌幅",     False),
             }
-            sc, sa = sort_map.get(sort_by, ("龙虎榜净买额", False))
+            # 附上评分（如有）
+            if score_map:
+                main_today["综合评分"]   = main_today["代码"].map(score_map)
+                main_today["净买额占比%"] = main_today["代码"].map(pct_map)
+
+            sc_key = sort_by
+            sc, sa = sort_map.get(sc_key, ("龙虎榜净买额", False))
+            # 如果排序列不存在，降级到净买入额
+            if sc not in main_today.columns:
+                sc, sa = "龙虎榜净买额", False
             main_today = main_today.sort_values(sc, ascending=sa).head(5)
             main_today["建议操作"] = [
                 f"🎯 {_day_hint(latest_date, 1)} 开盘集合竞价" if i == 0 else "👀 备选"
@@ -652,9 +753,16 @@ def render():
             ]
 
             top1 = main_today.iloc[0]
+            # 综合评分行（如有）
+            score_line = ""
+            if "综合评分" in top1.index and pd.notna(top1.get("综合评分")):
+                pct_v = top1.get("净买额占比%", None)
+                pct_str = f" | 净买额占比 <b>{pct_v:.2f}%</b>" if pct_v and pd.notna(pct_v) else ""
+                score_line = f"<div style='color:#FFD700;font-size:1em;margin-bottom:6px;'>⭐ 综合评分 <b>{top1['综合评分']:.1f}</b>{pct_str}</div>"
             st.markdown(
                 f"<div style='padding:20px;background:#1a1a2e;border-left:8px solid #E84040;border-radius:8px;margin-bottom:20px;'>"
                 f"<h2 style='margin-top:0;color:#E84040;'>🏆 {latest_date} 首选主板标的：{top1.get('名称','')}（{top1['代码']}）</h2>"
+                f"{score_line}"
                 f"<div style='font-size:1.15em;margin-bottom:10px;'>"
                 f"<b>{top1.get('板块','')}</b> | 净买入 <b>{top1['净买入亿']:.2f} 亿</b> | 流通市值 <b>{top1['流通市值亿']:.0f} 亿</b> | 换手率 <b>{top1['换手率']:.2f}%</b>"
                 f"</div>"
@@ -662,17 +770,17 @@ def render():
                 f"<b>📌 操作计划：</b>{_day_hint(latest_date, 1)} 开盘集合竞价买入，{_day_hint(latest_date, 2)} 盘中涨达 3~5% 分批止盈卖出。"
                 f"</div></div>", unsafe_allow_html=True
             )
-            
+
             with st.expander("👀 查看今日其他备选标的", expanded=False):
-                show_cols = ["代码", "名称", "板块", "流通市值亿", "换手率",
-                             "市值档位", "换手率档位", "净买入亿", "涨跌幅", "建议操作"]
+                show_cols = ["代码", "名称", "板块", "综合评分", "净买额占比%",
+                             "流通市值亿", "换手率", "市值档位", "换手率档位", "净买入亿", "涨跌幅", "建议操作"]
                 avcols = [c for c in show_cols if c in main_today.columns]
                 _filterable_table(
                     main_today[avcols].reset_index(drop=True),
                     key="today_recommend_table",
                     height=200,
                     filter_cols=["板块", "市值档位", "换手率档位", "建议操作"],
-                    num_cols=["流通市值亿", "净买入亿", "涨跌幅", "换手率"],
+                    num_cols=["流通市值亿", "净买入亿", "涨跌幅", "换手率", "综合评分", "净买额占比%"],
                 )
         else:
             st.info(f"📅 最新龙虎榜（{latest_date}）：当前筛选条件在今日无主板标的匹配。")
@@ -785,8 +893,8 @@ def render():
         ["📋 回测逐笔明细", "📊 分档概率", "📅 月度统计", "📈 累计净值", "🏗 市值分组", "🔄 换手率分组"]
     )
     with tab1:
-        show_cols2 = ["trade_date", "代码", "名称", "板块", "流通市值亿", "换手率",
-                      "市值档位", "换手率档位", "净买入亿",
+        show_cols2 = ["trade_date", "代码", "名称", "板块", "综合评分", "净买额占比%",
+                      "流通市值亿", "换手率", "市值档位", "换手率档位", "净买入亿",
                       "T+1买入价", "T+2最高价", "T+2收盘价", "冲高收益%", "收盘收益%"]
         avcols2 = [c for c in show_cols2 if c in valid.columns]
         display = valid[avcols2].sort_values("trade_date", ascending=False).copy()
@@ -802,12 +910,13 @@ def render():
             "T+2最高价":  "T+2最高",
             "T+2收盘价":  "T+2收盘",
         })
+        st.caption("综合评分 = 净买额占比×30% + 换手率×25% + 涨跌幅×20% + 市值×15% + 振幅×10%（全基于T日本地字段）")
         _filterable_table(
             display,
             key="backtest_detail_table",
             height=450,
             filter_cols=["板块", "市值档位", "换手率档位"],
-            num_cols=["市值(亿)", "换手率", "净买入(亿)", "买入价", "T+2最高", "T+2收盘"],
+            num_cols=["市值(亿)", "换手率", "净买入(亿)", "买入价", "T+2最高", "T+2收盘", "综合评分", "净买额占比%"],
             pct_cols=["冲高收益%", "收盘收益%"],
             default_sort_col="上榜日",
             default_sort_asc=False,
