@@ -1,0 +1,1327 @@
+"""
+模拟炒股 — 交易记录与绩效分析页面
+====================================
+展示：
+  1. 统计卡片（总交易/胜率/累计盈亏/平均盈亏%）
+  2. 交易记录明细表（含4维度选股理由展开）
+  3. 累计净值曲线（资金变化折线图）
+  4. 每笔盈亏柱状图
+  5. 按周汇总表
+"""
+
+import json
+from datetime import datetime, date, timedelta
+
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+import streamlit as st
+
+# ─── 路径修复 ────────────────────────────────────────────────────────────
+import sys
+import os
+from pathlib import Path
+
+_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(_ROOT))
+os.chdir(_ROOT)
+
+from utils.storage import storage
+
+
+# ─── 策略加载 / 保存（复用 sim_trade_db 函数）──────────────────────────────
+
+def _load_strategy() -> dict:
+    """从 DB 加载策略配置，失败时返回默认值"""
+    try:
+        from skills.stock_sim_robot.sim_trade_db import load_strategy
+        return load_strategy("default")
+    except Exception as e:
+        st.warning(f"加载策略失败，使用默认值: {e}")
+        return {
+            "strategy_key":  "default",
+            "stop_loss_pct": -5.0,
+            "sell1_pct":     3.0,  "sell1_ratio": 1/3,
+            "sell2_pct":     5.0,  "sell2_ratio": 1/3,
+            "sell3_pct":     8.0,
+            "description":   "三档分批卖出策略（默认值）",
+            "updated_at":    "",
+            "updated_by":    "",
+        }
+
+
+def _save_strategy(strategy: dict) -> bool:
+    """将策略保存到 DB"""
+    try:
+        from skills.stock_sim_robot.sim_trade_db import save_strategy
+        return save_strategy(strategy, updated_by="frontend")
+    except Exception as e:
+        st.error(f"保存策略失败: {e}")
+        return False
+
+
+# ─── 数据加载 ────────────────────────────────────────────────────────────
+
+def _load_trades() -> pd.DataFrame:
+    """从 PostgreSQL 加载 sim_trades"""
+    try:
+        engine = storage._get_engine()
+        from sqlalchemy import text
+        sql = text("SELECT * FROM sim_trades ORDER BY created_at DESC")
+        df = pd.read_sql(sql, engine)
+        return df
+    except Exception as e:
+        st.error(f"加载交易记录失败: {e}")
+        return pd.DataFrame()
+
+
+def _load_summary() -> pd.DataFrame:
+    """从 PostgreSQL 加载 sim_summary"""
+    try:
+        engine = storage._get_engine()
+        from sqlalchemy import text
+        sql = text("SELECT * FROM sim_summary ORDER BY week_tag DESC")
+        df = pd.read_sql(sql, engine)
+        return df
+    except Exception as e:
+        return pd.DataFrame()
+
+
+def _fmt_pct(v) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    return f"{v:+.2f}%"
+
+
+def _fmt_price(v) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    return f"¥{v:.3f}"
+
+
+def _source_label(src: str) -> str:
+    mapping = {
+        "akshare_spot":       "东财实时",
+        "akshare_min":        "分钟K线",
+        "akshare_daily_hist": "历史日K",
+        "akshare_daily":      "历史日K",
+        "failed":             "获取失败",
+    }
+    return mapping.get(str(src) if src else "", src or "—")
+
+
+# ─── 主渲染函数 ──────────────────────────────────────────────────────────
+
+def render():
+    st.title("🤖 模拟炒股 — 交易记录与绩效")
+    st.caption("基于龙虎榜主板策略 | **T日**=上榜日 · **T+1**=次日集合竞价买入 · **T+2**=第2交易日分批卖出 | 固定10万/笔")
+
+    # ── 加载数据 ─────────────────────────────────────────────────────────
+    with st.spinner("加载交易数据..."):
+        df = _load_trades()
+        df_summary = _load_summary()
+
+    if df.empty:
+        st.info("暂无模拟交易记录。等待每日18:45盘后 Phase A 自动运行后出现数据。")
+        return
+
+    # ── 数据预处理 ────────────────────────────────────────────────────────
+    df["trade_date"] = df["trade_date"].astype(str)
+    df["created_at"] = pd.to_datetime(df["created_at"])
+    df["buy_price"]  = pd.to_numeric(df["buy_price"],  errors="coerce")
+    df["sell_price"] = pd.to_numeric(df["sell_price"], errors="coerce")
+    df["profit"]     = pd.to_numeric(df["profit"],     errors="coerce")
+    df["profit_pct"] = pd.to_numeric(df["profit_pct"], errors="coerce")
+    df["signal_score"] = pd.to_numeric(df["signal_score"], errors="coerce")
+    df["t2_win_rate"]  = pd.to_numeric(df["t2_win_rate"],  errors="coerce")
+
+    closed = df[df["status"] == "closed"].copy()
+    open_  = df[df["status"] == "open"].copy()
+
+    # ── 顶部统计卡片 ─────────────────────────────────────────────────────
+    total  = len(closed)
+    wins   = len(closed[closed["profit_pct"] > 0]) if total > 0 else 0
+    win_rate = wins / total * 100 if total > 0 else 0
+    total_profit = closed["profit"].sum() if total > 0 else 0
+    avg_pct = closed["profit_pct"].mean() if total > 0 else 0
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("📊 已平仓笔数", total)
+    col2.metric("🎯 胜率", f"{win_rate:.1f}%" if total > 0 else "—")
+    col3.metric("💰 累计盈亏", f"¥{total_profit:,.0f}",
+                delta=f"{total_profit:+,.0f}" if total_profit != 0 else None)
+    col4.metric("📈 平均盈亏%", _fmt_pct(avg_pct))
+    col5.metric("📌 当前持仓", f"{len(open_)} 笔")
+
+    st.divider()
+
+    # ── Tabs 布局 ─────────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+        [
+            "📋 交易记录",
+            "📈 净值曲线 & 盈亏图",
+            "📅 按周汇总",
+            "🔍 选股理由详情",
+            "🪵 机器人日志",     # 移至 Tab5（原 Tab6）
+            "📈 价格轨迹",       # 移至 Tab6（原 Tab7）
+            "⚙️ 策略管理",       # 合并 Tab5 策略配置 + 原 Tab8 策略工坊
+            "📋 操作审计",       # 移至 Tab8（原 Tab9）
+        ]
+    )
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 1：交易记录表
+    # ═══════════════════════════════════════════════════════════════════
+    with tab1:
+        st.subheader("📋 全部交易记录")
+
+        # 筛选控件
+        c1, c2, c3 = st.columns([2, 2, 2])
+        status_filter = c1.selectbox("状态", ["全部", "持仓中(open)", "已平仓(closed)"])
+        week_list = ["全部"] + sorted(df["week_tag"].dropna().unique().tolist(), reverse=True)
+        week_filter = c2.selectbox("按周筛选", week_list)
+
+        disp = df.copy()
+        if status_filter == "持仓中(open)":
+            disp = disp[disp["status"] == "open"]
+        elif status_filter == "已平仓(closed)":
+            disp = disp[disp["status"] == "closed"]
+        if week_filter != "全部":
+            disp = disp[disp["week_tag"] == week_filter]
+
+        # 展示列
+        cols_show = [
+            "trade_date", "code", "name", "signal_score", "t2_win_rate",
+            "buy_price", "buy_source", "list_price",
+            "sell_price", "sell_type", "profit", "profit_pct",
+            "status", "week_tag",
+        ]
+        cols_show = [c for c in cols_show if c in disp.columns]
+        disp_show = disp[cols_show].copy()
+
+        # 重命名
+        col_rename = {
+            "trade_date":   "T日",
+            "code":         "代码",
+            "name":         "名称",
+            "signal_score": "综合评分",
+            "t2_win_rate":  "T+2胜率%",
+            "buy_price":    "买入价",
+            "buy_source":   "行情来源",
+            "list_price":   "挂牌价",
+            "sell_price":   "成交价",
+            "sell_type":    "平仓类型",
+            "profit":       "盈亏(元)",
+            "profit_pct":   "盈亏%",
+            "status":       "状态",
+            "week_tag":     "周",
+        }
+        disp_show = disp_show.rename(columns=col_rename)
+
+        # buy_source 翻译
+        if "行情来源" in disp_show.columns:
+            disp_show["行情来源"] = disp_show["行情来源"].apply(
+                lambda x: _source_label(x) if x else "—"
+            )
+
+        # 颜色渲染与格式化
+        def _color_profit(val):
+            try:
+                v = float(val)
+                if v > 0:   return "color: #E84040; font-weight: bold"
+                elif v < 0: return "color: #33CC66; font-weight: bold"
+            except:
+                pass
+            return ""
+
+        def _format_status(val):
+            if val == "open": return "🟢 持仓中"
+            if val == "closed": return "⚪ 已平仓"
+            return val
+
+        if "状态" in disp_show.columns:
+            disp_show["状态"] = disp_show["状态"].apply(_format_status)
+
+        # 在渲染前，将数值列预格式化为字符串，避免 TextColumn 与 Styler.format() 冲突
+        # （Streamlit TextColumn 不支持 Styler 数值格式化，会导致数值显示为 "—"）
+        def _fmt_price_col(v):
+            try:
+                f = float(v)
+                return f"¥{f:.3f}" if f > 0 else "—"
+            except (TypeError, ValueError):
+                return "—" if (v is None or str(v).strip() in ("", "nan", "None")) else str(v)
+
+        def _fmt_pct_col(v, prefix="+"):
+            try:
+                f = float(v)
+                return f"{f:+.2f}%"
+            except (TypeError, ValueError):
+                return "—" if (v is None or str(v).strip() in ("", "nan", "None")) else str(v)
+
+        def _fmt_money_col(v):
+            try:
+                f = float(v)
+                return f"¥{f:.2f}"
+            except (TypeError, ValueError):
+                return "—" if (v is None or str(v).strip() in ("", "nan", "None")) else str(v)
+
+        for _pc in ["买入价", "挂牌价", "成交价"]:
+            if _pc in disp_show.columns:
+                disp_show[_pc] = disp_show[_pc].apply(_fmt_price_col)
+        for _mc in ["盈亏(元)"]:
+            if _mc in disp_show.columns:
+                disp_show[_mc] = disp_show[_mc].apply(_fmt_money_col)
+        for _rc in ["盈亏%"]:
+            if _rc in disp_show.columns:
+                disp_show[_rc] = disp_show[_rc].apply(_fmt_pct_col)
+        if "T+2胜率%" in disp_show.columns:
+            disp_show["T+2胜率%"] = disp_show["T+2胜率%"].apply(
+                lambda v: f"{float(v):.1f}%" if str(v) not in ("", "nan", "None") else "—"
+            )
+
+        # 使用 column_config 进行高级列宽与格式配置
+        st.dataframe(
+            disp_show.style.map(_color_profit, subset=["盈亏%"] if "盈亏%" in disp_show.columns else [])
+                           .map(_color_profit, subset=["盈亏(元)"] if "盈亏(元)" in disp_show.columns else []),
+            use_container_width=True, 
+            height=450,
+            hide_index=True,
+            column_config={
+                "T日": st.column_config.TextColumn("🗓️ T日", width="small"),
+                "代码": st.column_config.TextColumn("🔢 代码", width="small"),
+                "名称": st.column_config.TextColumn("🏷️ 名称", width="small"),
+                "状态": st.column_config.TextColumn("🚦 状态", width="small"),
+                "综合评分": st.column_config.NumberColumn("🎯 评分", width="small"),
+                "买入价": st.column_config.TextColumn("💰 买入价", width="small"),
+                "成交价": st.column_config.TextColumn("成交价", width="small"),
+                "平仓类型": st.column_config.TextColumn("平仓类型", width="small"),
+                "盈亏(元)": st.column_config.TextColumn("💰 盈亏(元)", width="small"),
+                "盈亏%": st.column_config.TextColumn("📈 盈亏%", width="small"),
+            }
+        )
+
+        # 持仓中的提示
+        if not open_.empty:
+            st.info(f"📌 当前持仓中 {len(open_)} 笔，买入价等待 T+1 开盘后 09:35 自动回填。")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 2：净值曲线 + 每笔盈亏柱状图
+    # ═══════════════════════════════════════════════════════════════════
+    with tab2:
+        if closed.empty:
+            st.info("暂无已平仓交易，完成第一笔交易后将显示图表。")
+        else:
+            closed_sorted = closed.sort_values("created_at").copy()
+            closed_sorted["cumulative_profit"] = closed_sorted["profit"].fillna(0).cumsum()
+            closed_sorted["nav"] = 1.0 + closed_sorted["cumulative_profit"] / 100000  # 初始10万为基准
+
+            # ── 累计净值曲线 ─────────────────────────────────────────
+            st.subheader("📈 累计净值曲线（资金变化）")
+            fig_nav = go.Figure()
+            fig_nav.add_trace(go.Scatter(
+                x=closed_sorted["created_at"],
+                y=closed_sorted["nav"],
+                mode="lines+markers",
+                name="累计净值",
+                line=dict(color="#e8553e", width=2),
+                marker=dict(size=6),
+                hovertemplate="<b>%{x|%Y-%m-%d}</b><br>净值: %{y:.4f}<extra></extra>",
+            ))
+            fig_nav.add_hline(y=1.0, line_dash="dash", line_color="gray", annotation_text="初始净值=1.00")
+            fig_nav.update_layout(
+                title="模拟账户累计净值（初始 10 万元）",
+                xaxis_title="日期",
+                yaxis_title="净值",
+                height=360,
+                template="plotly_white",
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_nav, use_container_width=True)
+
+            # ── 每笔盈亏柱状图 ───────────────────────────────────────
+            st.subheader("📊 每笔交易盈亏（%）")
+            colors = ["#d73027" if v >= 0 else "#1a9641" for v in closed_sorted["profit_pct"].fillna(0)]
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(
+                x=[f"{r['name']}({r['trade_date']})" for _, r in closed_sorted.iterrows()],
+                y=closed_sorted["profit_pct"].fillna(0),
+                marker_color=colors,
+                hovertemplate="<b>%{x}</b><br>盈亏: %{y:+.2f}%<extra></extra>",
+                name="盈亏%",
+            ))
+            fig_bar.add_hline(y=0, line_dash="dash", line_color="gray")
+            fig_bar.update_layout(
+                title="每笔交易盈亏%（红=盈利，绿=亏损）",
+                xaxis_title="交易",
+                yaxis_title="盈亏%",
+                height=320,
+                template="plotly_white",
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # ── 盈亏分布直方图 ───────────────────────────────────────
+            st.subheader("📉 盈亏% 分布直方图")
+            fig_hist = px.histogram(
+                closed_sorted, x="profit_pct", nbins=20,
+                title="盈亏% 频率分布",
+                color_discrete_sequence=["#e8553e"],
+                labels={"profit_pct": "盈亏%"},
+                template="plotly_white",
+            )
+            fig_hist.add_vline(x=0, line_dash="dash", line_color="gray")
+            fig_hist.update_layout(height=280)
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 3：按周汇总
+    # ═══════════════════════════════════════════════════════════════════
+    with tab3:
+        st.subheader("📅 按周绩效汇总")
+
+        if df_summary.empty:
+            # 自行从 trades 计算
+            if not closed.empty:
+                g = closed.groupby("week_tag").agg(
+                    总交易=("id", "count"),
+                    盈利笔=("profit_pct", lambda x: (x > 0).sum()),
+                    总盈亏=("profit", "sum"),
+                    平均盈亏pct=("profit_pct", "mean"),
+                    最大盈利=("profit_pct", "max"),
+                    最大亏损=("profit_pct", "min"),
+                ).reset_index().rename(columns={"week_tag": "周"})
+                g["胜率%"] = (g["盈利笔"] / g["总交易"] * 100).round(1)
+                g = g.sort_values("周", ascending=False)
+                st.dataframe(g, use_container_width=True)
+            else:
+                st.info("暂无已平仓记录")
+        else:
+            disp_s = df_summary.rename(columns={
+                "week_tag":       "周",
+                "total_trades":   "总交易",
+                "win_trades":     "盈利笔",
+                "lose_trades":    "亏损笔",
+                "win_rate":       "胜率%",
+                "total_profit":   "总盈亏(元)",
+                "avg_profit_pct": "平均盈亏%",
+                "max_profit":     "最大盈利%",
+                "max_loss":       "最大亏损%",
+            })
+            disp_cols = [c for c in ["周","总交易","盈利笔","亏损笔","胜率%","总盈亏(元)","平均盈亏%","最大盈利%","最大亏损%"] if c in disp_s.columns]
+            st.dataframe(disp_s[disp_cols], use_container_width=True)
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 4：选股理由详情（4维度展开）
+    # ═══════════════════════════════════════════════════════════════════
+    with tab4:
+        st.subheader("🔍 选股理由与交易复盘详情")
+        st.caption("点击展开查看每笔交易的 AI 逻辑（技术面/资金面/历史胜率/席位分析）及亏损复盘")
+
+        for _, row in df.sort_values("created_at", ascending=False).iterrows():
+            is_open = row["status"] == "open"
+            status_badge = "🟢 持仓中" if is_open else "⚪ 已平仓"
+            
+            # 盈亏高亮标识
+            pct_val = row.get("profit_pct")
+            if is_open or pd.isna(pct_val):
+                pct_str = "待结算"
+                header_color = "normal"
+            else:
+                pct_val = float(pct_val)
+                pct_str = f"{pct_val:+.2f}%"
+                header_color = "red" if pct_val > 0 else ("green" if pct_val < 0 else "gray")
+
+            # 构建带颜色的 Header (Streamlit expander label 不支持 HTML，只能用 Emoji 区分)
+            profit_emoji = "🔥" if header_color == "red" else ("💧" if header_color == "green" else "⏳")
+            header = (
+                f"{status_badge} | {row['name']}（{row['code']}） "
+                f"| T日: {row['trade_date']} "
+                f"| {profit_emoji} 盈亏: {pct_str} "
+                f"| 评分: {int(row['signal_score']) if pd.notna(row.get('signal_score')) else '—'}"
+            )
+            
+            with st.expander(header, expanded=False):
+                # 顶部核心数据条
+                col_a, col_b, col_c, col_d = st.columns(4)
+                col_a.metric("买入价", _fmt_price(row.get("buy_price")))
+                col_b.metric("挂牌价", _fmt_price(row.get("list_price")))
+                col_c.metric("成交价", _fmt_price(row.get("sell_price")))
+                col_d.metric("最终盈亏", pct_str)
+                st.divider()
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown("##### 📌 AI 综合摘要")
+                    st.info(row.get("llm_reason") or row.get("list_reason") or "无记录")
+
+                    st.markdown("##### ⚡ 技术面分析")
+                    st.write(row.get("reason_tech") or "—")
+
+                    st.markdown("##### 💰 资金面分析")
+                    st.write(row.get("reason_fund") or "—")
+
+                with c2:
+                    st.markdown("##### 📊 历史胜率分析")
+                    st.write(row.get("reason_history") or "—")
+
+                    st.markdown("##### 🏛 席位深度分析")
+                    st.write(row.get("reason_seat") or "—")
+
+                    # 席位标签
+                    seat_raw = row.get("seat_tags")
+                    if seat_raw:
+                        try:
+                            tags = json.loads(seat_raw) if isinstance(seat_raw, str) else seat_raw
+                            if tags:
+                                st.markdown("##### 🏷 关键席位打标")
+                                st.markdown("`" + "` · `".join(tags) + "`")
+                        except Exception:
+                            pass
+
+                if row.get("buy_source"):
+                    st.caption(f"行情来源: {_source_label(row['buy_source'])}")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 5：机器人日志查看（含日志级别筛选 + 关键词过滤）
+    # ═══════════════════════════════════════════════════════════════════
+    with tab5:
+        st.subheader("🪵 机器人运行日志")
+        st.caption("查看模拟炒股机器人的监控日志（盘中每3分钟检查一次），以及每日定时任务日志。")
+
+        _LOG_DIR = _ROOT / "logs"
+
+        log_options = {
+            "📡 盘中实时监控 (monitor_intraday)": str(_LOG_DIR / "monitor_intraday.log"),
+            "🤖 机器人主日志 (sim_robot)": str(_LOG_DIR / "sim_robot.log"),
+            "📅 每日定时任务 (daily_update)": str(_LOG_DIR / "daily_update.log"),
+        }
+
+        ctrl_c1, ctrl_c2, ctrl_c3 = st.columns([3, 2, 1])
+        selected_log = ctrl_c1.selectbox("选择日志文件", list(log_options.keys()))
+        log_path = log_options[selected_log]
+        lines_count = ctrl_c2.number_input("显示最后 N 行", min_value=20, max_value=2000, value=200, step=50)
+        auto_refresh = ctrl_c3.checkbox("自动刷新", value=False)
+        if auto_refresh:
+            import time as _time; _time.sleep(0); st.rerun()
+
+        filter_col1, filter_col2 = st.columns([2, 3])
+        selected_levels = filter_col1.multiselect(
+            "📊 日志级别（多选）", ["DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"],
+            default=[], placeholder="留空=全部级别", key="log_level_filter",
+        )
+        filter_keyword = filter_col2.text_input(
+            "🔍 关键词过滤（留空显示全部）",
+            placeholder="例如：止损、买入、002361、卖出...", key="log_filter_kw",
+        )
+
+        import os as _os
+        if _os.path.exists(log_path):
+            file_size = _os.path.getsize(log_path)
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                all_lines = f.readlines()
+
+            total_lines = len(all_lines)
+            tail_lines = all_lines[-int(lines_count):]
+
+            if selected_levels:
+                def _match_level(line: str) -> bool:
+                    return any(f"| {lvl}" in line or f"|{lvl}" in line for lvl in selected_levels)
+                tail_lines = [l for l in tail_lines if _match_level(l)]
+
+            if filter_keyword.strip():
+                tail_lines = [l for l in tail_lines if filter_keyword.lower() in l.lower()]
+
+            st.caption(
+                f"文件大小: {file_size / 1024:.1f} KB | 总行数: {total_lines} 行 | 显示: {len(tail_lines)} 行"
+                + (f"（级别: {', '.join(selected_levels)}）" if selected_levels else "")
+                + (f"（关键词: {filter_keyword}）" if filter_keyword.strip() else "")
+            )
+
+            def _colorize_log(lines: list) -> str:
+                colored = []
+                for line in lines:
+                    line = line.rstrip()
+                    if not line:
+                        colored.append("")
+                        continue
+                    if "| ERROR" in line or "| CRITICAL" in line:
+                        colored.append(f'<span style="color:#ff4444">{line}</span>')
+                    elif "| WARNING" in line:
+                        colored.append(f'<span style="color:#ffaa00">{line}</span>')
+                    elif "| SUCCESS" in line or "止损" in line or "卖出" in line or "平仓" in line:
+                        colored.append(f'<span style="color:#44bb44">{line}</span>')
+                    elif "| INFO" in line and ("买入" in line or "选中" in line or "触发" in line):
+                        colored.append(f'<span style="color:#66aaff">{line}</span>')
+                    else:
+                        colored.append(f'<span style="color:#cccccc">{line}</span>')
+                return "\n".join(colored)
+
+            log_html = _colorize_log(tail_lines)
+            st.markdown(
+                f'<div style="background-color:#1e1e1e;color:#cccccc;font-family:monospace;'
+                f'font-size:12px;padding:12px;border-radius:6px;height:500px;'
+                f'overflow-y:auto;white-space:pre;border:1px solid #333;">'
+                f'{log_html}</div>',
+                unsafe_allow_html=True,
+            )
+
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                full_log_content = f.read()
+            st.download_button(
+                label="⬇️ 下载完整日志", data=full_log_content,
+                file_name=_os.path.basename(log_path), mime="text/plain",
+            )
+        else:
+            st.warning(f"日志文件不存在: `{log_path}`")
+            st.info("日志文件将在机器人首次运行后自动创建。")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # （旧 Tab5 策略配置 逻辑保留，移到 Tab7 策略管理中）
+    # 以下是从原 Tab5 保留下来的策略配置逻辑，供 Tab7 引用
+    # ───────────────────────────────────────────────────────────────────
+    # 注：旧 Tab5 代码需要被跳过（直接跳到 Tab6 价格轨迹）
+    if False:  # 占位符，旧 Tab5 策略配置内容已合并到 Tab7，此处不执行
+        st.subheader("⚙️ 分批卖出策略配置")
+        st.caption(
+            "修改后下次盘中监控（每3分钟）执行时自动生效，无需重启任何服务。"
+            "**新买入的股票**会按照最新策略初始化卖出价格；**已持仓的股票**需手动重置才能应用新策略。"
+        )
+
+        # 加载当前策略
+        current = _load_strategy()
+
+        # ── 说明卡片 ────────────────────────────────────────────────────
+        with st.expander("📖 策略逻辑说明", expanded=False):
+            st.markdown("""
+**止损逻辑**
+- 每次盘中监控时，获取持仓股票的实时价格
+- 若 `(当前价 / 买入价 - 1) × 100 ≤ 止损阈值%`，立即触发止损
+- 止损后**全仓清仓**，记录亏损并关闭持仓
+- 止损优先级高于分批卖出（先检查止损，再检查分批）
+
+**分批卖出逻辑**
+- 三档依次触发（价格超过目标价即触发）：
+  - 第1档：涨幅 ≥ `sell1_pct%` 时，卖出 `sell1_ratio` 比例
+  - 第2档：涨幅 ≥ `sell2_pct%` 时，再卖 `sell2_ratio` 比例
+  - 第3档：涨幅 ≥ `sell3_pct%` 时，清仓剩余全部
+- 买入时根据策略初始化目标价：`目标价 = 买入价 × (1 + 涨幅%)`
+- **修改策略不影响已初始化的目标价**，如需应用新策略请点击「重新应用策略到持仓」
+            """)
+
+        st.divider()
+
+        # ── 策略表单 ─────────────────────────────────────────────────────
+        with st.form("strategy_form"):
+            st.markdown("##### 🔴 止损线")
+            stop_loss_pct = st.number_input(
+                "止损触发阈值（%，负数）",
+                min_value=-20.0, max_value=-0.5, step=0.5,
+                value=float(current["stop_loss_pct"]),
+                help="亏损超过此比例时触发止损，如 -5 表示亏损 5% 止损"
+            )
+
+            st.markdown("##### 🟡 分批卖出三档")
+            col1, col2 = st.columns(2)
+
+            with col1:
+                sell1_pct = st.number_input(
+                    "第1档 触发涨幅（%）",
+                    min_value=0.5, max_value=50.0, step=0.5,
+                    value=float(current["sell1_pct"]),
+                    help="涨幅达到此值时卖出第1档"
+                )
+                sell2_pct = st.number_input(
+                    "第2档 触发涨幅（%）",
+                    min_value=0.5, max_value=50.0, step=0.5,
+                    value=float(current["sell2_pct"]),
+                    help="涨幅达到此值时卖出第2档"
+                )
+                sell3_pct = st.number_input(
+                    "第3档 触发涨幅（%，清仓）",
+                    min_value=0.5, max_value=50.0, step=0.5,
+                    value=float(current["sell3_pct"]),
+                    help="涨幅达到此值时清仓剩余全部"
+                )
+
+            with col2:
+                sell1_ratio_pct = st.number_input(
+                    "第1档 卖出比例（%）",
+                    min_value=1.0, max_value=99.0, step=1.0,
+                    value=round(float(current["sell1_ratio"]) * 100, 1),
+                    help="第1档卖出占总持仓的比例，如 33 = 卖出 1/3"
+                )
+                sell2_ratio_pct = st.number_input(
+                    "第2档 卖出比例（%）",
+                    min_value=1.0, max_value=99.0, step=1.0,
+                    value=round(float(current["sell2_ratio"]) * 100, 1),
+                    help="第2档再卖占总持仓的比例"
+                )
+                st.info(f"**第3档比例**：自动 = 100% - {sell1_ratio_pct:.0f}% - {sell2_ratio_pct:.0f}% = **{max(0, 100 - sell1_ratio_pct - sell2_ratio_pct):.0f}%**（剩余全清）")
+
+            description = st.text_area(
+                "策略说明（可选）",
+                value=current.get("description", ""),
+                height=80,
+            )
+
+            # ── 实时预览 ─────────────────────────────────────────────────
+            st.markdown("##### 📊 策略预览（以买入价 ¥12.90 为例）")
+            example_price = 12.90
+            ex_c1, ex_c2, ex_c3, ex_c4 = st.columns(4)
+            ex_c1.metric("🔴 止损价", f"¥{example_price * (1 + stop_loss_pct/100):.3f}",
+                         delta=f"{stop_loss_pct:+.1f}%", delta_color="inverse")
+            ex_c2.metric(f"🟡 档1目标", f"¥{example_price * (1 + sell1_pct/100):.3f}",
+                         delta=f"+{sell1_pct:.1f}%")
+            ex_c3.metric(f"🟡 档2目标", f"¥{example_price * (1 + sell2_pct/100):.3f}",
+                         delta=f"+{sell2_pct:.1f}%")
+            ex_c4.metric(f"🟢 档3清仓", f"¥{example_price * (1 + sell3_pct/100):.3f}",
+                         delta=f"+{sell3_pct:.1f}%")
+
+            submitted = st.form_submit_button("💾 保存策略", type="primary")
+
+        if submitted:
+            # 参数校验
+            errors = []
+            if sell1_pct >= sell2_pct:
+                errors.append("第1档涨幅必须 < 第2档涨幅")
+            if sell2_pct >= sell3_pct:
+                errors.append("第2档涨幅必须 < 第3档涨幅")
+            if sell1_ratio_pct + sell2_ratio_pct >= 100:
+                errors.append("第1档 + 第2档卖出比例之和必须 < 100%（需要留第3档）")
+            if stop_loss_pct >= 0:
+                errors.append("止损阈值必须为负数")
+
+            if errors:
+                for err in errors:
+                    st.error(f"❌ {err}")
+            else:
+                new_strategy = {
+                    "strategy_key":  "default",
+                    "stop_loss_pct": stop_loss_pct,
+                    "sell1_pct":     sell1_pct,
+                    "sell1_ratio":   sell1_ratio_pct / 100,
+                    "sell2_pct":     sell2_pct,
+                    "sell2_ratio":   sell2_ratio_pct / 100,
+                    "sell3_pct":     sell3_pct,
+                    "description":   description,
+                }
+                if _save_strategy(new_strategy):
+                    st.success("✅ 策略已保存！下次盘中监控（3分钟内）自动生效。")
+                    st.rerun()
+
+        # ── 当前策略信息 ─────────────────────────────────────────────────
+        st.divider()
+        if current.get("updated_at"):
+            st.caption(
+                f"最后修改：{current.get('updated_at', '—')} "
+                f"by `{current.get('updated_by', '—')}`"
+            )
+
+        # ── 重新应用策略到持仓 ─────────────────────────────────────────────
+        with st.expander("🔄 重新应用策略到当前持仓（慎用）", expanded=False):
+            st.warning(
+                "⚠️ 此操作将**覆盖**当前持仓中尚未完成的卖出目标价，"
+                "按最新策略重新计算每档触发价和止损线。已触发的档位不受影响。"
+            )
+            if not open_.empty:
+                st.markdown("**当前持仓：**")
+                for _, row in open_.iterrows():
+                    batch_mode = row.get("batch_mode", False)
+                    bp = float(row.get("buy_price") or 0)
+                    tag = "✅ 已初始化" if batch_mode and bp > 0 else "❌ 未初始化"
+                    st.write(f"- {row['name']}（{row['code']}）买入价 ¥{bp:.3f} | 分批状态: {tag}")
+
+                if st.button("🔄 重新初始化所有持仓的分批计划", type="secondary"):
+                    try:
+                        from skills.stock_sim_robot.sim_trade_db import init_batch_sell
+                        count = 0
+                        for _, row in open_.iterrows():
+                            bp = float(row.get("buy_price") or 0)
+                            bs = int(row.get("buy_shares") or 0)
+                            tid = int(row["id"])
+                            if bp > 0 and bs > 0:
+                                init_batch_sell(tid, bp, bs)
+                                count += 1
+                        st.success(f"✅ 已重新初始化 {count} 笔持仓的分批计划。")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"重新初始化失败: {e}")
+            else:
+                st.info("当前无持仓。")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 6：价格轨迹
+    # ═══════════════════════════════════════════════════════════════════
+    with tab6:
+        st.subheader("📈 盘中价格轨迹")
+        st.caption("每3分钟一个价格快照，显示 effective_price（涨停/跌停已修正），叠加 MA5/MA10 均线。")
+
+        # ── 选择股票 ──────────────────────────────────────────────────
+        all_trades = df.copy()
+        all_trades["display"] = all_trades.apply(
+            lambda r: f"{r['name']}({r['code']}) {r['trade_date']} [{r['status']}]", axis=1
+        )
+        trade_options = all_trades["display"].tolist()
+        if not trade_options:
+            st.info("暂无交易记录")
+        else:
+            selected_trade_label = st.selectbox("选择持仓/交易", trade_options, key="price_log_trade")
+            selected_idx = trade_options.index(selected_trade_label)
+            selected_trade_row = all_trades.iloc[selected_idx]
+            sel_trade_id = int(selected_trade_row["id"])
+            sel_code     = selected_trade_row["code"]
+            sel_name     = selected_trade_row["name"]
+            sel_buy_price = float(selected_trade_row.get("buy_price") or 0)
+
+            # ── 加载价格数据 ───────────────────────────────────────────
+            try:
+                from skills.stock_sim_robot.sim_trade_db import get_price_log
+                price_df = get_price_log(sel_trade_id)
+            except Exception as e:
+                st.error(f"加载价格数据失败: {e}")
+                price_df = pd.DataFrame()
+
+            if price_df.empty:
+                st.info("该持仓暂无价格轨迹数据。数据将在下一个盘中监控周期（每3分钟）写入。")
+            else:
+                price_df["checked_at"] = pd.to_datetime(price_df["checked_at"])
+                price_df = price_df.sort_values("checked_at").reset_index(drop=True)
+
+                # ── 从 price_log 数据中提取有效 high/low（过滤掉 high<low 的异常行）──
+                # 正常情况下 high >= low，若不满足说明是旧数据（字段修复前写入的）
+                has_hldata = (
+                    "high" in price_df.columns and "low" in price_df.columns
+                    and (price_df["high"] >= price_df["low"]).any()
+                )
+
+                # ── 计算 MA5/MA10 ──────────────────────────────────────
+                price_df["MA5"]  = price_df["price"].rolling(window=5,  min_periods=1).mean()
+                price_df["MA10"] = price_df["price"].rolling(window=10, min_periods=1).mean()
+
+                # ── 绘制 Plotly 图表 ──────────────────────────────────
+                # go 已在文件顶部 import，此处无需重复 import（局部 import 会导致 UnboundLocalError）
+                fig = go.Figure()
+
+                # high/low 区间填充（只在数据有效时显示）
+                if has_hldata:
+                    valid_hl = price_df[price_df["high"] >= price_df["low"]]
+                    # 高点线（透明，仅用于 fill）
+                    fig.add_trace(go.Scatter(
+                        x=valid_hl["checked_at"], y=valid_hl["high"],
+                        mode="lines", name="今日最高",
+                        line=dict(color="rgba(255,80,80,0.25)", width=0.5),
+                        fill=None,
+                        hovertemplate="最高: %{y:.3f}<extra></extra>",
+                    ))
+                    # 低点线（填充到高点，形成区间带）
+                    fig.add_trace(go.Scatter(
+                        x=valid_hl["checked_at"], y=valid_hl["low"],
+                        mode="lines", name="今日最低",
+                        line=dict(color="rgba(80,180,255,0.25)", width=0.5),
+                        fill="tonexty",
+                        fillcolor="rgba(150,200,255,0.10)",
+                        hovertemplate="最低: %{y:.3f}<extra></extra>",
+                    ))
+
+                # 主线：effective_price（当前价）
+                fig.add_trace(go.Scatter(
+                    x=price_df["checked_at"], y=price_df["price"],
+                    mode="lines+markers", name="实时价格",
+                    line=dict(color="#4488FF", width=2),
+                    marker=dict(size=4),
+                    hovertemplate="价格: %{y:.3f}<extra></extra>",
+                ))
+
+                # bid1/ask1 对（显示当时盘口）
+                if "bid1" in price_df.columns and price_df["bid1"].gt(0).any():
+                    fig.add_trace(go.Scatter(
+                        x=price_df["checked_at"], y=price_df["bid1"],
+                        mode="lines", name="买1价",
+                        line=dict(color="#44BB44", width=1, dash="dot"),
+                        hovertemplate="买1: %{y:.3f}<extra></extra>",
+                    ))
+
+                # MA5 均线
+                fig.add_trace(go.Scatter(
+                    x=price_df["checked_at"], y=price_df["MA5"],
+                    mode="lines", name="MA5",
+                    line=dict(color="#FFA500", width=1.5, dash="dot"),
+                ))
+
+                # MA10 均线
+                fig.add_trace(go.Scatter(
+                    x=price_df["checked_at"], y=price_df["MA10"],
+                    mode="lines", name="MA10",
+                    line=dict(color="#AA44FF", width=1.5, dash="dot"),
+                ))
+
+                # 买入价基准线
+                if sel_buy_price > 0:
+                    fig.add_hline(
+                        y=sel_buy_price, line_dash="dash",
+                        line_color="#888888", line_width=1.5,
+                        annotation_text=f"买入价 {sel_buy_price}",
+                        annotation_position="right",
+                    )
+
+                # 各档目标价（从第一条数据取快照）
+                if not price_df.empty:
+                    row0 = price_df.iloc[0]
+                    if row0.get("sell1_price") and row0["sell1_price"] > 0:
+                        fig.add_hline(
+                            y=float(row0["sell1_price"]), line_dash="dashdot",
+                            line_color="#FFD700", line_width=1,
+                            annotation_text=f"档1 {row0['sell1_price']:.2f}",
+                            annotation_position="right",
+                        )
+                    if row0.get("sell3_price") and row0["sell3_price"] > 0:
+                        fig.add_hline(
+                            y=float(row0["sell3_price"]), line_dash="dashdot",
+                            line_color="#FF8C00", line_width=1,
+                            annotation_text=f"档3 {row0['sell3_price']:.2f}",
+                            annotation_position="right",
+                        )
+                    if row0.get("stop_price") and row0["stop_price"] > 0:
+                        fig.add_hline(
+                            y=float(row0["stop_price"]), line_dash="dash",
+                            line_color="#E84040", line_width=1.5,
+                            annotation_text=f"止损 {row0['stop_price']:.2f}",
+                            annotation_position="right",
+                        )
+
+                # 事件标注（触发点）
+                events_df = price_df[price_df["event"].notna()]
+                if not events_df.empty:
+                    fig.add_trace(go.Scatter(
+                        x=events_df["checked_at"], y=events_df["price"],
+                        mode="markers+text",
+                        name="触发事件",
+                        marker=dict(symbol="diamond", size=10, color="#E84040"),
+                        text=events_df["event"],
+                        textposition="top center",
+                    ))
+
+                # ── Y 轴范围自动调整（避免 price 全部相同时变成一条直线）──
+                _all_prices = []
+                for _col in ["price", "bid1", "high", "low"]:
+                    if _col in price_df.columns:
+                        _vals = price_df[_col].dropna()
+                        _vals = _vals[_vals > 0]
+                        if not _vals.empty:
+                            _all_prices.extend(_vals.tolist())
+                if sel_buy_price > 0:
+                    _all_prices.append(sel_buy_price)
+                    _all_prices.append(sel_buy_price)
+                # 从各档目标价也加入
+                _first = price_df.iloc[0] if not price_df.empty else None
+                for _pk in ["sell1_price", "sell3_price", "stop_price"]:
+                    if _first is not None and _first.get(_pk) and float(_first[_pk]) > 0:
+                        _all_prices.append(float(_first[_pk]))
+                if _all_prices:
+                    _y_min = min(_all_prices) * 0.99
+                    _y_max = max(_all_prices) * 1.01
+                    _pad = max((_y_max - _y_min) * 0.05, 0.5)  # 至少 0.5 元间距
+                    _y_range = [_y_min - _pad, _y_max + _pad]
+                else:
+                    _y_range = None
+
+                fig.update_layout(
+                    title=f"{sel_name}（{sel_code}）盘中价格轨迹",
+                    xaxis_title="时间",
+                    yaxis_title="价格（元）",
+                    yaxis=dict(range=_y_range, tickformat=".3f") if _y_range else {},
+                    height=520,
+                    hovermode="x unified",
+                    legend=dict(orientation="h", y=-0.2),
+                    plot_bgcolor="rgba(248,250,252,1)",
+                    paper_bgcolor="white",
+                )
+                # 添加网格线
+                fig.update_xaxes(showgrid=True, gridcolor="rgba(200,200,200,0.4)")
+                fig.update_yaxes(showgrid=True, gridcolor="rgba(200,200,200,0.4)")
+                st.plotly_chart(fig, use_container_width=True)
+
+                # ── 提示旧数据说明 ─────────────────────────────────────
+                if not has_hldata or not (price_df["high"] >= price_df["low"]).all():
+                    st.caption(
+                        "⚠️ 部分历史数据 high/low 字段在修复前写入，显示可能不准确；"
+                        "修复后新写入的数据将正常显示 K 线区间带。"
+                    )
+
+                # ── 数据表格 ────────────────────────────────────────────
+                with st.expander("📊 查看原始数据", expanded=False):
+                    disp_cols = ["checked_at", "price", "price_raw", "high", "low", "bid1", "ask1", "change_pct", "event"]
+                    show_cols = [c for c in disp_cols if c in price_df.columns]
+                    st.dataframe(
+                        price_df[show_cols].rename(columns={
+                            "checked_at": "检查时间", "price": "实时价", "price_raw": "原始last",
+                            "high": "今日最高", "low": "今日最低",
+                            "bid1": "买1价", "ask1": "卖1价", "change_pct": "涨幅%", "event": "事件"
+                        }),
+                        use_container_width=True, hide_index=True,
+                    )
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 7：策略管理（全局三档参数配置 + NL 策略工坊合并）
+    # ═══════════════════════════════════════════════════════════════════
+    with tab7:
+        st.subheader("⚙️ 策略管理")
+        st.caption("全局三档参数配置 + 针对当前持仓的自然语言策略（NL 策略）管理")
+
+        strat_subtab1, strat_subtab2 = st.tabs(["⚙️ 全局三档参数", "🤖 NL 策略（单笔持仓）"])
+
+        # ── 子Tab A：全局三档参数配置（原 Tab5 内容）──────────────────────
+        with strat_subtab1:
+            st.markdown("#### ⚙️ 分批卖出策略配置")
+            st.caption(
+                "修改后下次盘中监控（每3分钟）执行时自动生效，无需重启任何服务。"
+                "**新买入的股票**会按照最新策略初始化卖出价格；**已持仓的股票**需手动重置才能应用新策略。"
+            )
+
+            current = _load_strategy()
+
+            # 当前生效规则摘要（人类可读）
+            sl_pct_cur  = float(current.get("stop_loss_pct", -5.0))
+            s1_pct_cur  = float(current.get("sell1_pct", 3.0))
+            s2_pct_cur  = float(current.get("sell2_pct", 5.0))
+            s3_pct_cur  = float(current.get("sell3_pct", 8.0))
+            s1_r_cur    = float(current.get("sell1_ratio", 1/3))
+            s2_r_cur    = float(current.get("sell2_ratio", 1/3))
+            _summary_html = (
+                "<div style='background:#1a2035;border-left:4px solid #E84040;"
+                "padding:10px 14px;border-radius:6px;margin-bottom:10px;font-size:0.92em;'>"
+                "<b>&#x1F4CC; 当前默认三档策略（无 NL 策略时生效）</b><br><br>"
+                f"&#x1F6D1; <b>硬止损：</b>亏损 {abs(sl_pct_cur):.1f}% 时清仓<br>"
+                f"&#x1F7E1; <b>第1档：</b>涨幅 ≥ +{s1_pct_cur:.1f}% → 卖出 {s1_r_cur*100:.0f}%<br>"
+                f"&#x1F7E1; <b>第2档：</b>涨幅 ≥ +{s2_pct_cur:.1f}% → 再卖 {s2_r_cur*100:.0f}%<br>"
+                f"&#x1F7E2; <b>第3档：</b>涨幅 ≥ +{s3_pct_cur:.1f}% → 清仓剩余<br>"
+                "&#x23F0; <b>最大持仓：</b>5个自然日（超期强制平仓）"
+                "</div>"
+            )
+            st.markdown(_summary_html, unsafe_allow_html=True)
+
+            with st.expander("📖 策略逻辑说明", expanded=False):
+                st.markdown("""
+**止损逻辑**
+- 每次盘中监控时，获取持仓股票的实时价格
+- 若 `(当前价 / 买入价 - 1) × 100 ≤ 止损阈值%`，立即触发止损
+- 止损后**全仓清仓**，记录亏损并关闭持仓
+
+**分批卖出逻辑**
+- 三档依次触发（价格超过目标价即触发）：
+  - 第1档：涨幅 ≥ `sell1_pct%` 时，卖出 `sell1_ratio` 比例
+  - 第2档：涨幅 ≥ `sell2_pct%` 时，再卖 `sell2_ratio` 比例
+  - 第3档：涨幅 ≥ `sell3_pct%` 时，清仓剩余全部
+- **修改策略不影响已初始化的目标价**
+                """)
+
+        # ── 子Tab B：NL 策略工坊（针对单笔持仓）──────────────────────────
+        with strat_subtab2:
+            st.markdown("#### 🤖 自然语言策略（NL 策略）")
+            st.caption(
+                "可以用自然语言描述卖出策略（例如：涨5%卖一半，亏3%止损），AI 将自动解析为规则并执行。"
+                "NL 策略激活后会**替代**默认三档逻辑，系统硬止损 (-5%) 始终兜底。"
+            )
+
+            open_list = open_[["id", "code", "name", "trade_date", "buy_price"]].copy() if not open_.empty else pd.DataFrame()
+            if open_list.empty:
+                st.info("当前无活跃持仓。策略工坊在开仓后自动生成草拟策略。")
+            else:
+                open_list["display"] = open_list.apply(
+                    lambda r: f"{r['name']}({r['code']}) T日:{r['trade_date']}  买入价:¥{float(r['buy_price'] or 0):.3f}", axis=1
+                )
+                strat_trade_label = st.selectbox("选择持仓", open_list["display"].tolist(), key="strat_trade_sel")
+                strat_idx = open_list["display"].tolist().index(strat_trade_label)
+                strat_row = open_list.iloc[strat_idx]
+                strat_trade_id = int(strat_row["id"])
+                strat_buy_price = float(strat_row.get("buy_price") or 0)
+                strat_code = strat_row["code"]
+                strat_name = strat_row["name"]
+
+                st.divider()
+
+                try:
+                    from skills.stock_sim_robot.sim_trade_db import get_nl_strategies_for_trade, confirm_nl_strategy
+                    strat_df = get_nl_strategies_for_trade(strat_trade_id)
+                except Exception as e:
+                    strat_df = pd.DataFrame()
+                    st.error(f"加载策略失败: {e}")
+
+                active_strat = None
+                draft_strats  = []
+                if not strat_df.empty:
+                    for _, sr in strat_df.iterrows():
+                        if sr["status"] == "active":
+                            active_strat = sr
+                        elif sr["status"] == "draft":
+                            draft_strats.append(sr)
+
+                cur_cfg = _load_strategy()
+
+                # ── 当前生效策略（人类可读展示）────────────────────────
+                if active_strat is not None:
+                    import json as _json
+                    rules_data = active_strat.get("parsed_rules")
+                    if isinstance(rules_data, str):
+                        try: rules_data = _json.loads(rules_data)
+                        except Exception: rules_data = None
+
+                    confirm_time = str(active_strat.get("confirmed_at", ""))[:16]
+                    nl_text_disp = str(active_strat.get("nl_text", ""))
+                    hard_stop_val = float(active_strat.get("hard_stop_pct", -5.0))
+
+                    readable_rules = []
+                    if rules_data and isinstance(rules_data, dict):
+                        for rule in rules_data.get("rules", []):
+                            cond = rule.get("condition", {})
+                            act  = rule.get("action",    {})
+                            cond_parts = []
+                            if "change_pct_ge" in cond: cond_parts.append(f"涨幅 ≥ +{cond['change_pct_ge']}%")
+                            if "change_pct_le" in cond: cond_parts.append(f"涨幅 ≤ {cond['change_pct_le']}%")
+                            if "days_held_ge"  in cond: cond_parts.append(f"持仓 ≥ {cond['days_held_ge']} 天")
+                            if "is_limit_up"   in cond: cond_parts.append("涨停时")
+                            cond_str = " 且 ".join(cond_parts) or "无条件"
+                            act_type = act.get("type", "")
+                            if   act_type == "sell_pct":    act_str = f"卖出 {act.get('pct', 0)*100:.0f}%"
+                            elif act_type == "sell_all":    act_str = "清仓全部"
+                            elif act_type == "sell_shares": act_str = f"卖出 {act.get('shares', 0)} 股"
+                            elif act_type == "hold":        act_str = "继续持有"
+                            else:                           act_str = str(act)
+                            readable_rules.append(f"  规则{rule.get('id','?')}：{cond_str} → {act_str}")
+
+                    rules_html = "<br>".join(readable_rules) if readable_rules else "  \uff08\u65e0\u53ef\u89e3\u6790\u89c4\u5219\uff09"
+                    _nl_html = (
+                        "<div style='background:#1a2035;border-left:4px solid #33CC66;"
+                        "padding:12px 16px;border-radius:6px;margin-bottom:12px;font-size:0.92em;'>"
+                        f"&#x2705; <b>\u5f53\u524d\u6fc0\u6d3b\uff1a\u81ea\u7136\u8bed\u8a00\u7b56\u7565</b>\uff08\u786e\u8ba4\u65f6\u95f4 {confirm_time}\uff09<br><br>"
+                        f"&#x1F4DD; <b>\u7b56\u7565\u63cf\u8ff0\uff1a</b>{nl_text_disp}<br><br>"
+                        f"&#x1F6D1; <b>\u786c\u6b62\u635f\uff1a</b>{hard_stop_val:+.1f}%\uff08\u4e8f\u635f\u8fbe\u6b64\u6bd4\u4f8b\u5f3a\u5236\u6e05\u4ed3\uff0c\u4e0d\u88ab\u4efb\u4f55\u89c4\u5219\u8986\u76d6\uff09<br>"
+                        f"&#x1F4CB; <b>\u89e3\u6790\u89c4\u5219\uff1a</b><br>{rules_html}<br>"
+                        "&#x23F0; <b>\u6700\u5927\u6301\u4ed3\uff1a</b>5\u4e2a\u81ea\u7136\u65e5\uff08\u8d85\u671f\u5f3a\u5236\u5e73\u4ed3\uff09"
+                        "</div>"
+                    )
+                    st.markdown(_nl_html, unsafe_allow_html=True)
+                else:
+                    # 无 NL 策略，展示默认三档规则（含实际价格）
+                    bp = strat_buy_price
+                    sl = float(cur_cfg.get("stop_loss_pct", -5.0))
+                    s1 = float(cur_cfg.get("sell1_pct", 3.0))
+                    s2 = float(cur_cfg.get("sell2_pct", 5.0))
+                    s3 = float(cur_cfg.get("sell3_pct", 8.0))
+                    r1 = float(cur_cfg.get("sell1_ratio", 1/3))
+                    r2 = float(cur_cfg.get("sell2_ratio", 1/3))
+                    if bp > 0:
+                        price_row = lambda pct: f"（目标价 ¥{bp*(1+pct/100):.3f}）"
+                        sl_hint = f"（止损价 ¥{bp*(1+sl/100):.3f}）"
+                    else:
+                        price_row = lambda pct: ""
+                        sl_hint = ""
+                    _def_lines = [
+                        "<div style='background:#1a2035;border-left:4px solid #888888;"
+                        "padding:12px 16px;border-radius:6px;margin-bottom:12px;font-size:0.92em;'>",
+                        f"&#x1F4CC; <b>\u5f53\u524d\u7b56\u7565\uff1a\u9ed8\u8ba4\u4e09\u6863\u5206\u6279\u5356\u51fa</b>\uff08\u4e70\u5165\u4ef7 \u00a5{bp:.3f}\uff0c\u672a\u8bbe\u7f6e NL \u7b56\u7565\uff09<br><br>",
+                        f"&#x1F6D1; <b>\u6b62\u635f\uff1a</b>\u4e8f\u635f \u2264 {sl:.1f}% \u2192 \u6e05\u4ed3\u5168\u90e8{sl_hint}<br>",
+                        f"&#x1F7E1; <b>\u7b2c1\u6863\uff1a</b>\u6da8\u5e45 \u2265 +{s1:.1f}% \u2192 \u5356\u51fa {r1*100:.0f}%{price_row(s1)}<br>",
+                        f"&#x1F7E1; <b>\u7b2c2\u6863\uff1a</b>\u6da8\u5e45 \u2265 +{s2:.1f}% \u2192 \u518d\u5356 {r2*100:.0f}%{price_row(s2)}<br>",
+                        f"&#x1F7E2; <b>\u7b2c3\u6863\uff1a</b>\u6da8\u5e45 \u2265 +{s3:.1f}% \u2192 \u6e05\u4ed3\u5269\u4f59{price_row(s3)}<br>",
+                        "&#x23F0; <b>\u6700\u5927\u6301\u4ed3\uff1a</b>5\u4e2a\u81ea\u7136\u65e5\uff08\u8d85\u671f\u5f3a\u5236\u5e73\u4ed3\uff09",
+                        "</div>",
+                    ]
+                    st.markdown("".join(_def_lines), unsafe_allow_html=True)
+
+                # ── 展示 draft 策略（LLM 自动草拟）───────────────────
+                if draft_strats:
+                    st.divider()
+                    st.markdown("#### 📝 待确认的 LLM 草拟策略")
+                    for dr in draft_strats[:3]:  # 最多展示3条
+                        with st.expander(f"策略草稿 ID={dr['id']} （{dr.get('source', 'llm_auto')}，{dr.get('created_at', '')}）", expanded=True):
+                            st.markdown("**自然语言描述：**")
+                            st.markdown(f"> {dr['nl_text']}" if dr.get("nl_text") else "> （无描述）")
+
+                            if dr.get("parsed_rules"):
+                                with st.expander("🔍 查看解析后的 JSON 规则", expanded=False):
+                                    import json as _json
+                                    rules_data = dr["parsed_rules"]
+                                    if isinstance(rules_data, str):
+                                        try: rules_data = _json.loads(rules_data)
+                                        except Exception: pass
+                                    st.json(rules_data)
+
+                            c_confirm, c_skip = st.columns([2, 1])
+                            with c_confirm:
+                                if st.button(f"✅ 确认启用此策略（ID={dr['id']}）", key=f"confirm_strat_{dr['id']}", type="primary"):
+                                    try:
+                                        ok = confirm_nl_strategy(int(dr["id"]))
+                                        if ok:
+                                            st.success("策略已激活！三档逻辑已替换。")
+                                            st.rerun()
+                                        else:
+                                            st.error("激活失败，请检查日志")
+                                    except Exception as e:
+                                        st.error(f"激活失败: {e}")
+
+                st.divider()
+                st.markdown("#### ✏️ 手动输入策略")
+                nl_input = st.text_area(
+                    "输入自然语言策略",
+                    placeholder="例如：涨停后次日+5%止盈，-3%止损；下午2点后涨3%卖一半；RSI>80时全仓卖出",
+                    height=120, key="nl_strategy_input",
+                )
+                hard_stop_input = st.number_input(
+                    "硬兜底止损线（%）", min_value=-20.0, max_value=-1.0, value=-5.0, step=0.5,
+                    help="此止损线始终生效，即使 LLM 策略未覆盖止损情况", key="hard_stop_input",
+                )
+
+                if st.button("🔍 解析策略（LLM）", key="parse_nl_btn", disabled=not nl_input.strip()):
+                    if not nl_input.strip():
+                        st.warning("请输入策略文本")
+                    else:
+                        with st.spinner("LLM 解析中…"):
+                            try:
+                                from skills.stock_sim_robot.llm_select import parse_nl_strategy
+                                parse_result = parse_nl_strategy(
+                                    nl_text=nl_input, buy_price=strat_buy_price,
+                                    code=strat_code, name=strat_name,
+                                )
+                                st.session_state["_parsed_nl_result"] = parse_result
+                                st.session_state["_parsed_nl_text"]   = nl_input
+                            except Exception as e:
+                                st.error(f"解析失败: {e}")
+
+                if st.session_state.get("_parsed_nl_result"):
+                    parse_result = st.session_state["_parsed_nl_result"]
+                    if parse_result.get("parse_error"):
+                        st.error(f"LLM 解析错误: {parse_result['parse_error']}")
+                    else:
+                        st.success("✅ 解析成功！")
+                        st.markdown("**解析出的 JSON 规则：**")
+                        st.json(parse_result.get("parsed_rules", {}))
+
+                        if st.button("✅ 确认启用此策略", key="confirm_manual_strat", type="primary"):
+                            try:
+                                from skills.stock_sim_robot.sim_trade_db import save_nl_strategy, confirm_nl_strategy
+                                new_strat_id = save_nl_strategy(
+                                    trade_id=strat_trade_id,
+                                    nl_text=st.session_state.get("_parsed_nl_text", nl_input),
+                                    parsed_rules=parse_result.get("parsed_rules"),
+                                    hard_stop_pct=float(hard_stop_input),
+                                    source="user_input",
+                                )
+                                if new_strat_id:
+                                    ok = confirm_nl_strategy(new_strat_id)
+                                    if ok:
+                                        st.success("策略已激活！三档逻辑已替换，页面刷新后生效。")
+                                        st.session_state.pop("_parsed_nl_result", None)
+                                        st.rerun()
+                                    else:
+                                        st.error("激活失败")
+                                else:
+                                    st.error("保存失败")
+                            except Exception as e:
+                                st.error(f"操作失败: {e}")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # TAB 8：操作审计
+    # ═══════════════════════════════════════════════════════════════════
+    with tab8:
+        st.subheader("📋 操作审计日志")
+        st.caption("按时间倒序展示所有重要操作记录（选股/买入/监控/卖出/止损/策略确认），全部可追溯。")
+
+        # ── 过滤控件 ───────────────────────────────────────────────────
+        c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+        from datetime import date as _date
+        audit_date_val = c1.date_input("日期", value=_date.today(), key="audit_date")
+        audit_date_str = audit_date_val.strftime("%Y%m%d") if audit_date_val else None
+
+        event_type_opts = [
+            "全部", "phase_a_select", "phase_a_skip", "phase_b_buy", "phase_b_fail",
+            "monitor_check", "monitor_sell", "monitor_stop_loss",
+            "quote_fail", "strategy_confirm", "strategy_draft", "force_close",
+        ]
+        audit_event_filter = c2.selectbox("事件类型", event_type_opts, key="audit_event_type")
+        audit_trade_filter = c3.text_input("按交易ID过滤（可选）", placeholder="如: 42", key="audit_trade_id")
+        audit_limit = c4.number_input("显示条数", min_value=10, max_value=500, value=50, step=10, key="audit_limit")
+
+        if st.button("🔄 刷新日志", key="audit_refresh"):
+            st.rerun()
+
+        # ── 加载审计日志 ────────────────────────────────────────────────
+        try:
+            from skills.stock_sim_robot.sim_trade_db import get_audit_logs
+            audit_kwargs = {
+                "event_date": audit_date_str if audit_date_str else None,
+                "event_type": None if audit_event_filter == "全部" else audit_event_filter,
+                "limit": int(audit_limit),
+            }
+            if audit_trade_filter.strip():
+                try:
+                    audit_kwargs["trade_id"] = int(audit_trade_filter.strip())
+                except ValueError:
+                    pass
+            audit_df = get_audit_logs(**audit_kwargs)
+        except Exception as e:
+            st.error(f"加载审计日志失败: {e}")
+            audit_df = pd.DataFrame()
+
+        if audit_df.empty:
+            st.info("该日期/条件下暂无审计记录。")
+        else:
+            st.success(f"共 {len(audit_df)} 条记录")
+
+            # 事件类型着色
+            _EVENT_COLORS = {
+                "monitor_sell":      "🟢",
+                "monitor_stop_loss": "🔴",
+                "phase_a_select":    "🔵",
+                "phase_b_buy":       "🟣",
+                "phase_b_fail":      "🟠",
+                "quote_fail":        "🟡",
+                "strategy_confirm":  "⚪",
+                "strategy_draft":    "⚫",
+                "force_close":       "🔴",
+                "phase_a_skip":      "⬛",
+                "monitor_check":     "▪️",
+            }
+
+            for _, ar in audit_df.iterrows():
+                icon    = _EVENT_COLORS.get(str(ar.get("event_type", "")), "▪️")
+                etime   = str(ar.get("event_time", ""))[:19]
+                etype   = str(ar.get("event_type", ""))
+                summary = str(ar.get("summary", ""))
+                result  = str(ar.get("result", ""))
+                tid     = ar.get("trade_id")
+                code    = ar.get("code", "")
+
+                # 跳过频繁的 monitor_check 记录（太多会淹没有价值的事件）
+                if etype == "monitor_check" and audit_event_filter == "全部":
+                    continue
+
+                tid_label = f" [T:{tid}]" if tid else ""
+                code_label = f" {code}" if code else ""
+
+                with st.expander(
+                    f"{icon} `{etime}`{code_label}{tid_label} — {summary[:80]}",
+                    expanded=False,
+                ):
+                    cols = st.columns([1, 1, 1])
+                    cols[0].markdown(f"**事件类型：** `{etype}`")
+                    cols[1].markdown(f"**结果：** `{result}`")
+                    cols[2].markdown(f"**操作者：** `{ar.get('operator', '')}`")
+
+                    if ar.get("detail"):
+                        st.markdown("**详细数据：**")
+                        import json as _json
+                        detail_data = ar["detail"]
+                        if isinstance(detail_data, str):
+                            try:
+                                detail_data = _json.loads(detail_data)
+                            except Exception:
+                                pass
+                        st.json(detail_data)
+
+            # ── monitor_check 统计单独展示 ────────────────────────────
+            if audit_event_filter == "全部":
+                check_df = audit_df[audit_df["event_type"] == "monitor_check"]
+                if not check_df.empty:
+                    st.divider()
+                    st.caption(f"▪️ monitor_check 共 {len(check_df)} 条（已折叠，展开按类型过滤查看）")
+

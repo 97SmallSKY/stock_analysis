@@ -1,0 +1,1436 @@
+"""
+模拟交易数据库操作模块
+======================
+负责 sim_trades / sim_summary 表的创建和 CRUD 操作。
+
+表结构：
+  sim_trades  — 每笔模拟交易的完整记录（从开仓到平仓）
+  sim_summary — 按周汇总的盈亏摘要（实体化，方便查询）
+"""
+import sys
+import os
+from pathlib import Path
+from datetime import datetime, date
+
+import pandas as pd
+from loguru import logger
+
+# 确保能导入 stock_analysis 包
+_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(_ROOT))
+os.chdir(_ROOT)
+
+from utils.storage import storage
+from config.settings import PG_URL
+
+# ── DDL ───────────────────────────────────────────────────────────────
+_CREATE_SIM_TRADES = """
+CREATE TABLE IF NOT EXISTS sim_trades (
+    id             SERIAL PRIMARY KEY,
+    trade_date     VARCHAR(8)    NOT NULL,           -- 龙虎榜日期（T 日，YYYYMMDD）
+    code           VARCHAR(6)    NOT NULL,           -- 股票代码
+    name           VARCHAR(20),                      -- 股票名称
+    signal_score   FLOAT,                            -- 综合评分（0-100）
+    t2_win_rate    FLOAT,                            -- 历史 T+2 胜率（%）
+    seat_tags      TEXT,                             -- 席位标签（JSON 数组字符串）
+    buy_price      FLOAT,                            -- T+1 开盘买入价（实时行情）
+    buy_source     VARCHAR(32),                      -- 买入价来源（akshare_spot/akshare_min/akshare_daily_hist）
+    buy_amount     FLOAT DEFAULT 100000,             -- 买入金额（元）
+    buy_shares     INT,                              -- 买入股数（100 股取整）
+    list_price     FLOAT,                            -- 挂牌卖出价（LLM 建议）
+    list_reason    TEXT,                             -- LLM 设置挂牌价理由
+    sell_price     FLOAT,                            -- 实际卖出价（NULL = 未成交）
+    sell_date      VARCHAR(8),                       -- 实际卖出日期
+    sell_type      VARCHAR(16),                      -- 止盈 / 止损 / 持有到期 / 放弃
+    profit         FLOAT,                            -- 盈亏金额（元）
+    profit_pct     FLOAT,                            -- 盈亏百分比
+    status         VARCHAR(10) DEFAULT 'open',       -- open / closed
+    week_tag       VARCHAR(20),                      -- 周标签（如 2026-W13）
+    llm_reason     TEXT,                             -- 选股综合摘要（飞书通知用）
+    reason_tech    TEXT,                             -- 技术面分析理由
+    reason_fund    TEXT,                             -- 资金面分析理由
+    reason_history TEXT,                             -- 历史胜率分析理由
+    reason_seat    TEXT,                             -- 席位深度分析理由
+    created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+_CREATE_SIM_SUMMARY = """
+CREATE TABLE IF NOT EXISTS sim_summary (
+    week_tag        VARCHAR(20) PRIMARY KEY,
+    total_trades    INT DEFAULT 0,
+    win_trades      INT DEFAULT 0,
+    lose_trades     INT DEFAULT 0,
+    win_rate        FLOAT,
+    total_profit    FLOAT DEFAULT 0,
+    avg_profit_pct  FLOAT,
+    max_profit      FLOAT,
+    max_loss        FLOAT,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+_CREATE_SIM_STRATEGY = """
+CREATE TABLE IF NOT EXISTS sim_strategy (
+    strategy_key    VARCHAR(32) PRIMARY KEY,    -- 策略名称，目前只用 'default'
+    stop_loss_pct   FLOAT       NOT NULL DEFAULT -5.0,  -- 止损触发线（如 -5.0 表示亏损 5%）
+    sell1_pct       FLOAT       NOT NULL DEFAULT 3.0,   -- 第1档触发涨幅%（如 3.0）
+    sell1_ratio     FLOAT       NOT NULL DEFAULT 0.333, -- 第1档卖出比例（如 0.333 = 1/3）
+    sell2_pct       FLOAT       NOT NULL DEFAULT 5.0,   -- 第2档触发涨幅%
+    sell2_ratio     FLOAT       NOT NULL DEFAULT 0.333, -- 第2档卖出比例
+    sell3_pct       FLOAT       NOT NULL DEFAULT 8.0,   -- 第3档触发涨幅%（剩余全清）
+    description     TEXT,                               -- 策略说明（前端展示）
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_by      VARCHAR(32) DEFAULT 'system'        -- 最后修改人
+);
+"""
+
+# 默认策略配置（表为空时写入）
+_DEFAULT_STRATEGY = {
+    "strategy_key": "default",
+    "stop_loss_pct": -5.0,
+    "sell1_pct":     3.0,
+    "sell1_ratio":   1/3,
+    "sell2_pct":     5.0,
+    "sell2_ratio":   1/3,
+    "sell3_pct":     8.0,
+    "description":   "三档分批卖出策略：+3%卖1/3仓，+5%再卖1/3仓，+8%清仓剩余；亏损超过5%止损全清。",
+}
+
+
+def _get_engine():
+    """获取 SQLAlchemy engine（复用 storage 层）"""
+    return storage._get_engine()
+
+
+# 新字段迁移 SQL（对已存在的表追加列）
+_ALTER_SIM_TRADES_NEW_COLS = [
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS buy_source VARCHAR(32)",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS reason_tech TEXT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS reason_fund TEXT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS reason_history TEXT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS reason_seat TEXT",
+    # 分批卖出字段：三档（+3%卖1/3，+5%卖1/3，+8%全清）
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS batch_mode    BOOLEAN DEFAULT TRUE",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell1_pct     FLOAT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell1_price   FLOAT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell1_shares  INT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell1_date    VARCHAR(8)",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell1_done    BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell2_pct     FLOAT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell2_price   FLOAT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell2_shares  INT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell2_date    VARCHAR(8)",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell2_done    BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell3_pct     FLOAT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell3_price   FLOAT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell3_shares  INT",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell3_date    VARCHAR(8)",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS sell3_done    BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS stop_loss_pct  FLOAT DEFAULT -5.0",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS stop_loss_done BOOLEAN DEFAULT FALSE",
+    # Phase B 失败计数（跨 cron 持久化）
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS phase_b_fail_count INT DEFAULT 0",
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS phase_b_alerted    BOOLEAN DEFAULT FALSE",
+]
+
+
+def create_tables():
+    """初始化建表（幂等，可重复调用），并迁移新增列"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(text(_CREATE_SIM_TRADES))
+            conn.execute(text(_CREATE_SIM_SUMMARY))
+            conn.execute(text(_CREATE_SIM_STRATEGY))
+            # 写入默认策略（仅在表为空时）
+            existing = conn.execute(
+                text("SELECT count(*) FROM sim_strategy WHERE strategy_key='default'")
+            ).scalar()
+            if not existing:
+                conn.execute(text("""
+                    INSERT INTO sim_strategy
+                        (strategy_key, stop_loss_pct, sell1_pct, sell1_ratio,
+                         sell2_pct, sell2_ratio, sell3_pct, description, updated_by)
+                    VALUES
+                        (:strategy_key, :stop_loss_pct, :sell1_pct, :sell1_ratio,
+                         :sell2_pct, :sell2_ratio, :sell3_pct, :description, 'system')
+                """), _DEFAULT_STRATEGY)
+                logger.info("默认策略已写入 sim_strategy")
+            # 新字段迁移（对已有表追加缺失列）
+            for alter_sql in _ALTER_SIM_TRADES_NEW_COLS:
+                try:
+                    conn.execute(text(alter_sql))
+                except Exception:
+                    pass  # 列已存在时忽略
+        logger.info("sim_trades / sim_summary / sim_strategy 表已就绪 ✅")
+        # 确保 sim_trade_lessons 表也已创建
+        try:
+            from skills.stock_sim_robot.trade_log import ensure_table as _ensure_lessons_table
+            _ensure_lessons_table()
+        except Exception:
+            pass  # trade_log 模块不存在时不影响主流程
+        return True
+    except Exception as e:
+        logger.error(f"创建表失败: {e}")
+        return False
+
+
+def open_trade(record: dict) -> int | None:
+    """
+    新建一条模拟持仓记录（status=open）
+
+    Args:
+        record: 包含以下字段的字典
+            trade_date, code, name, signal_score, t2_win_rate, seat_tags(str),
+            list_price, list_reason, llm_reason, week_tag
+            buy_amount(默认100000)
+
+    Returns:
+        新建记录的 id，失败返回 None
+    """
+    try:
+        import numpy as np
+
+        engine = _get_engine()
+        from sqlalchemy import text
+
+        # 设置默认值
+        record.setdefault("buy_amount", 100000.0)
+        record.setdefault("status", "open")
+        record.setdefault("created_at", datetime.now())
+        record.setdefault("updated_at", datetime.now())
+
+        # 将 numpy 类型转换为 Python 原生类型（psycopg2 不认识 np.float64 等）
+        def _to_native(v):
+            if isinstance(v, (np.integer,)):
+                return int(v)
+            if isinstance(v, (np.floating,)):
+                return None if np.isnan(v) else float(v)
+            if isinstance(v, float) and (v != v):  # NaN check
+                return None
+            return v
+
+        record = {k: _to_native(v) for k, v in record.items()}
+
+        cols = ", ".join(record.keys())
+        vals = ", ".join([f":{k}" for k in record.keys()])
+        sql = text(f"INSERT INTO sim_trades ({cols}) VALUES ({vals}) RETURNING id")
+
+        with engine.begin() as conn:
+            result = conn.execute(sql, record)
+            new_id = result.fetchone()[0]
+        logger.info(f"新建模拟持仓 id={new_id}: {record.get('code')} {record.get('name')}")
+        return new_id
+    except Exception as e:
+        logger.error(f"open_trade 失败: {e}")
+        return None
+
+
+def get_open_positions() -> pd.DataFrame:
+    """获取所有未平仓记录（status=open）"""
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        sql = text("SELECT * FROM sim_trades WHERE status = 'open' ORDER BY created_at")
+        df = pd.read_sql(sql, engine)
+        return df
+    except Exception as e:
+        logger.error(f"get_open_positions 失败: {e}")
+        return pd.DataFrame()
+
+
+def update_buy_price(trade_id: int, buy_price: float, buy_shares: int):
+    """T+1 开盘后回填买入价和股数"""
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        sql = text("""
+            UPDATE sim_trades
+            SET buy_price = :buy_price, buy_shares = :buy_shares, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+        """)
+        with engine.begin() as conn:
+            conn.execute(sql, {"id": trade_id, "buy_price": buy_price, "buy_shares": buy_shares})
+        logger.info(f"trade_id={trade_id} 买入价更新: {buy_price}, 股数: {buy_shares}")
+    except Exception as e:
+        logger.error(f"update_buy_price 失败: {e}")
+
+
+def close_trade(
+    trade_id: int,
+    sell_price: float,
+    sell_date: str,
+    sell_type: str,
+    buy_price: float | None = None,
+    buy_shares: int | None = None,
+    buy_amount: float = 100000.0,
+):
+    """
+    平仓：更新 sell_price / sell_date / sell_type / profit / profit_pct / status
+
+    Args:
+        trade_id: 记录 id
+        sell_price: 卖出价
+        sell_date: 卖出日期（YYYYMMDD）
+        sell_type: '止盈' / '止损' / '持有到期' / '放弃买入'
+        buy_price: 如果传入则用此价格计算，否则从数据库读取
+        buy_shares: 同上
+        buy_amount: 买入金额基数
+    """
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+
+        # 读取买入价（如果未传入）
+        if buy_price is None or buy_shares is None:
+            row = pd.read_sql(
+                text("SELECT buy_price, buy_shares, buy_amount FROM sim_trades WHERE id = :id"),
+                engine, params={"id": trade_id}
+            )
+            if row.empty:
+                logger.error(f"close_trade: id={trade_id} 不存在")
+                return
+            buy_price  = float(row.iloc[0]["buy_price"])  if buy_price  is None else buy_price
+            buy_shares = int(row.iloc[0]["buy_shares"])   if buy_shares is None else buy_shares
+            buy_amount = float(row.iloc[0]["buy_amount"]) if buy_amount == 100000.0 else buy_amount
+
+        # 计算盈亏
+        if buy_price and buy_price > 0 and buy_shares and buy_shares > 0:
+            actual_cost = buy_price * buy_shares
+            revenue     = sell_price * buy_shares
+            profit      = round(revenue - actual_cost, 2)
+            profit_pct  = round((sell_price / buy_price - 1) * 100, 2)
+        else:
+            profit     = 0.0
+            profit_pct = 0.0
+
+        sql = text("""
+            UPDATE sim_trades
+            SET sell_price = :sell_price,
+                sell_date  = :sell_date,
+                sell_type  = :sell_type,
+                profit     = :profit,
+                profit_pct = :profit_pct,
+                status     = 'closed',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+        """)
+        with engine.begin() as conn:
+            conn.execute(sql, {
+                "id":         trade_id,
+                "sell_price": sell_price,
+                "sell_date":  sell_date,
+                "sell_type":  sell_type,
+                "profit":     profit,
+                "profit_pct": profit_pct,
+            })
+        logger.info(
+            f"trade_id={trade_id} 平仓 [{sell_type}]: 卖出价={sell_price}, "
+            f"盈亏={profit:+.2f}元 ({profit_pct:+.2f}%)"
+        )
+
+        # 自动生成亏损总结（仅在亏损时触发，不阻塞主流程）
+        if profit_pct < 0:
+            try:
+                from skills.stock_sim_robot.trade_log import auto_log_if_loss
+                auto_log_if_loss(trade_id)
+            except Exception as _e:
+                logger.debug(f"auto_log_if_loss 非致命: {_e}")
+
+    except Exception as e:
+        logger.error(f"close_trade 失败: {e}")
+
+
+def refresh_summary(week_tag: str | None = None):
+    """
+    重新计算并更新 sim_summary 表
+
+    Args:
+        week_tag: 指定周标签（如 '2026-W13'），None 则更新所有周
+    """
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+
+        # 查询已平仓记录
+        if week_tag:
+            sql = text("SELECT * FROM sim_trades WHERE status='closed' AND week_tag=:wt")
+            df = pd.read_sql(sql, engine, params={"wt": week_tag})
+        else:
+            sql = text("SELECT * FROM sim_trades WHERE status='closed'")
+            df  = pd.read_sql(sql, engine)
+
+        if df.empty:
+            logger.info("refresh_summary: 暂无已平仓记录")
+            return
+
+        for wt, grp in df.groupby("week_tag"):
+            profit_vals = grp["profit_pct"].dropna()
+            total_trades = int(len(grp))
+            win_trades   = int((grp["profit_pct"] > 0).sum())
+            lose_trades  = int((grp["profit_pct"] < 0).sum())
+            win_rate     = float(round(win_trades / total_trades * 100, 1)) if total_trades > 0 else 0.0
+            total_profit = float(round(grp["profit"].sum(), 2))
+            avg_pct      = float(round(profit_vals.mean(), 2)) if len(profit_vals) > 0 else 0.0
+            max_profit   = float(round(grp["profit"].max(), 2))
+            max_loss     = float(round(grp["profit"].min(), 2))
+
+            upsert = text("""
+                INSERT INTO sim_summary
+                    (week_tag, total_trades, win_trades, lose_trades, win_rate,
+                     total_profit, avg_profit_pct, max_profit, max_loss, updated_at)
+                VALUES
+                    (:week_tag, :total_trades, :win_trades, :lose_trades, :win_rate,
+                     :total_profit, :avg_profit_pct, :max_profit, :max_loss, CURRENT_TIMESTAMP)
+                ON CONFLICT (week_tag) DO UPDATE SET
+                    total_trades   = EXCLUDED.total_trades,
+                    win_trades     = EXCLUDED.win_trades,
+                    lose_trades    = EXCLUDED.lose_trades,
+                    win_rate       = EXCLUDED.win_rate,
+                    total_profit   = EXCLUDED.total_profit,
+                    avg_profit_pct = EXCLUDED.avg_profit_pct,
+                    max_profit     = EXCLUDED.max_profit,
+                    max_loss       = EXCLUDED.max_loss,
+                    updated_at     = CURRENT_TIMESTAMP
+            """)
+            with engine.begin() as conn:
+                conn.execute(upsert, {
+                    "week_tag": wt, "total_trades": total_trades,
+                    "win_trades": win_trades, "lose_trades": lose_trades,
+                    "win_rate": win_rate, "total_profit": total_profit,
+                    "avg_profit_pct": avg_pct, "max_profit": max_profit,
+                    "max_loss": max_loss,
+                })
+            logger.info(f"sim_summary 更新 [{wt}]: {total_trades} 笔, 胜率={win_rate}%, 总盈亏={total_profit:+.2f}元")
+    except Exception as e:
+        logger.error(f"refresh_summary 失败: {e}")
+
+
+def get_weekly_report(week_tag: str | None = None) -> dict:
+    """
+    获取指定周（或本周）的汇总数据
+
+    Args:
+        week_tag: 如 '2026-W13'，None 则取本周
+
+    Returns:
+        包含 summary + trades 列表的字典
+    """
+    if week_tag is None:
+        week_tag = _current_week_tag()
+
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+
+        # 汇总
+        sum_df = pd.read_sql(
+            text("SELECT * FROM sim_summary WHERE week_tag=:wt"),
+            engine, params={"wt": week_tag}
+        )
+        # 明细
+        trade_df = pd.read_sql(
+            text("SELECT * FROM sim_trades WHERE week_tag=:wt ORDER BY created_at"),
+            engine, params={"wt": week_tag}
+        )
+        summary = sum_df.iloc[0].to_dict() if not sum_df.empty else {}
+        trades  = trade_df.to_dict("records") if not trade_df.empty else []
+        return {"week_tag": week_tag, "summary": summary, "trades": trades}
+    except Exception as e:
+        logger.error(f"get_weekly_report 失败: {e}")
+        return {"week_tag": week_tag, "summary": {}, "trades": []}
+
+
+def get_recent_trades(n: int = 10) -> pd.DataFrame:
+    """获取最近 N 笔交易（含未平仓）"""
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        df = pd.read_sql(
+            text("SELECT * FROM sim_trades ORDER BY created_at DESC LIMIT :n"),
+            engine, params={"n": n}
+        )
+        return df
+    except Exception as e:
+        logger.error(f"get_recent_trades 失败: {e}")
+        return pd.DataFrame()
+
+
+def is_trade_exists_for_date(trade_date: str) -> bool:
+    """检查指定 T 日是否已有交易记录（避免重复开仓）"""
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        row = pd.read_sql(
+            text("SELECT id FROM sim_trades WHERE trade_date = :td LIMIT 1"),
+            engine, params={"td": trade_date}
+        )
+        return not row.empty
+    except Exception as e:
+        logger.error(f"is_trade_exists_for_date 失败: {e}")
+        return False
+
+
+def _current_week_tag() -> str:
+    """返回当前日期的 ISO 周标签，如 '2026-W13'"""
+    today = date.today()
+    iso   = today.isocalendar()
+    return f"{iso[0]}-W{iso[1]:02d}"
+
+
+# ── 策略配置读写 ──────────────────────────────────────────────────────────
+
+def load_strategy(strategy_key: str = "default") -> dict:
+    """
+    从 sim_strategy 表读取策略配置。
+    如果表不存在或记录缺失，返回内置默认值（不崩溃）。
+
+    Returns:
+        dict，包含以下字段：
+            stop_loss_pct  止损触发百分比（如 -5.0）
+            sell1_pct      第1档触发涨幅%
+            sell1_ratio    第1档卖出比例
+            sell2_pct      第2档触发涨幅%
+            sell2_ratio    第2档卖出比例
+            sell3_pct      第3档触发涨幅%（剩余全清，ratio=1.0）
+            description    策略说明
+    """
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        row = pd.read_sql(
+            text("SELECT * FROM sim_strategy WHERE strategy_key=:k"),
+            engine, params={"k": strategy_key}
+        )
+        if not row.empty:
+            r = row.iloc[0]
+            return {
+                "strategy_key":  strategy_key,
+                "stop_loss_pct": float(r["stop_loss_pct"]),
+                "sell1_pct":     float(r["sell1_pct"]),
+                "sell1_ratio":   float(r["sell1_ratio"]),
+                "sell2_pct":     float(r["sell2_pct"]),
+                "sell2_ratio":   float(r["sell2_ratio"]),
+                "sell3_pct":     float(r["sell3_pct"]),
+                "description":   str(r.get("description") or ""),
+                "updated_at":    str(r.get("updated_at") or ""),
+                "updated_by":    str(r.get("updated_by") or ""),
+            }
+    except Exception as e:
+        logger.warning(f"load_strategy 失败，使用默认值: {e}")
+    # fallback：内置默认
+    return dict(_DEFAULT_STRATEGY)
+
+
+def save_strategy(strategy: dict, updated_by: str = "frontend") -> bool:
+    """
+    更新策略配置到 sim_strategy 表（UPSERT）
+
+    Args:
+        strategy:   包含策略字段的 dict
+        updated_by: 修改来源标识（如 'frontend' / 'system'）
+
+    Returns:
+        True 表示成功
+    """
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        sql = text("""
+            INSERT INTO sim_strategy
+                (strategy_key, stop_loss_pct, sell1_pct, sell1_ratio,
+                 sell2_pct, sell2_ratio, sell3_pct, description,
+                 updated_at, updated_by)
+            VALUES
+                (:strategy_key, :stop_loss_pct, :sell1_pct, :sell1_ratio,
+                 :sell2_pct, :sell2_ratio, :sell3_pct, :description,
+                 CURRENT_TIMESTAMP, :updated_by)
+            ON CONFLICT (strategy_key) DO UPDATE SET
+                stop_loss_pct = EXCLUDED.stop_loss_pct,
+                sell1_pct     = EXCLUDED.sell1_pct,
+                sell1_ratio   = EXCLUDED.sell1_ratio,
+                sell2_pct     = EXCLUDED.sell2_pct,
+                sell2_ratio   = EXCLUDED.sell2_ratio,
+                sell3_pct     = EXCLUDED.sell3_pct,
+                description   = EXCLUDED.description,
+                updated_at    = CURRENT_TIMESTAMP,
+                updated_by    = EXCLUDED.updated_by
+        """)
+        with engine.begin() as conn:
+            conn.execute(sql, {
+                "strategy_key":  strategy.get("strategy_key", "default"),
+                "stop_loss_pct": float(strategy["stop_loss_pct"]),
+                "sell1_pct":     float(strategy["sell1_pct"]),
+                "sell1_ratio":   float(strategy["sell1_ratio"]),
+                "sell2_pct":     float(strategy["sell2_pct"]),
+                "sell2_ratio":   float(strategy["sell2_ratio"]),
+                "sell3_pct":     float(strategy["sell3_pct"]),
+                "description":   str(strategy.get("description", "")),
+                "updated_by":    updated_by,
+            })
+        logger.info(f"策略已保存: {strategy}")
+        return True
+    except Exception as e:
+        logger.error(f"save_strategy 失败: {e}")
+        return False
+
+# 默认三档卖出配置（用于兼容 monitor_intraday 导入 BATCH_SELL_TIERS 常量）
+# 实际触发时 init_batch_sell 会从 DB 的 sim_strategy 表读取最新策略
+BATCH_SELL_TIERS = [
+    {"tier": 1, "pct": 3.0,  "ratio": 1/3},   # +3% 卖出 1/3
+    {"tier": 2, "pct": 5.0,  "ratio": 1/3},   # +5% 再卖 1/3
+    {"tier": 3, "pct": 8.0,  "ratio": 1.0},   # +8% 全清（卖出剩余全部）
+]
+
+
+def get_live_tiers(strategy_key: str = "default") -> list[dict]:
+    """
+    从 DB 读取最新策略，返回三档配置列表（格式同 BATCH_SELL_TIERS）。
+    monitor_intraday 每次执行前调用此函数获取实时策略。
+    """
+    s = load_strategy(strategy_key)
+    return [
+        {"tier": 1, "pct": s["sell1_pct"], "ratio": s["sell1_ratio"]},
+        {"tier": 2, "pct": s["sell2_pct"], "ratio": s["sell2_ratio"]},
+        {"tier": 3, "pct": s["sell3_pct"], "ratio": 1.0},
+    ]
+
+
+def init_batch_sell(trade_id: int, buy_price: float, buy_shares: int,
+                    strategy_key: str = "default"):
+    """
+    买入成交后初始化三档分批卖出计划（从 DB 读取当前策略）
+
+    分配股数规则：
+      第1档 = floor(buy_shares * ratio1 / 100) * 100（100股取整）
+      第2档 = floor(buy_shares * ratio2 / 100) * 100
+      第3档 = buy_shares - sell1_shares - sell2_shares（剩余全部）
+
+    Args:
+        trade_id:     sim_trades 的 id
+        buy_price:    买入价
+        buy_shares:   买入股数
+        strategy_key: 策略键（默认 'default'）
+    """
+    try:
+        # ── 实时读取策略 ──────────────────────────────────────────────
+        strategy = load_strategy(strategy_key)
+        tiers    = get_live_tiers(strategy_key)
+        stop_pct = strategy["stop_loss_pct"]
+
+        engine = _get_engine()
+        from sqlalchemy import text
+
+        # 按策略比例计算每档股数（100股取整）
+        s1 = max(0, int(buy_shares * tiers[0]["ratio"] / 100) * 100)
+        s2 = max(0, int(buy_shares * tiers[1]["ratio"] / 100) * 100)
+        s3 = buy_shares - s1 - s2  # 剩余全部
+
+        # 确保 s3 > 0（极少量时全部放第3档）
+        if s3 <= 0:
+            s1 = 0
+            s2 = 0
+            s3 = buy_shares
+
+        p1 = round(buy_price * (1 + tiers[0]["pct"] / 100), 3)
+        p2 = round(buy_price * (1 + tiers[1]["pct"] / 100), 3)
+        p3 = round(buy_price * (1 + tiers[2]["pct"] / 100), 3)
+
+        sql = text("""
+            UPDATE sim_trades
+            SET batch_mode    = TRUE,
+                sell1_pct     = :p1pct,  sell1_price = :p1,  sell1_shares = :s1,  sell1_done = FALSE,
+                sell2_pct     = :p2pct,  sell2_price = :p2,  sell2_shares = :s2,  sell2_done = FALSE,
+                sell3_pct     = :p3pct,  sell3_price = :p3,  sell3_shares = :s3,  sell3_done = FALSE,
+                stop_loss_pct = :slpct, stop_loss_done = FALSE,
+                updated_at    = CURRENT_TIMESTAMP
+            WHERE id = :id
+        """)
+        with engine.begin() as conn:
+            conn.execute(sql, {
+                "id":    trade_id,
+                "p1pct": tiers[0]["pct"], "p1": p1, "s1": s1,
+                "p2pct": tiers[1]["pct"], "p2": p2, "s2": s2,
+                "p3pct": tiers[2]["pct"], "p3": p3, "s3": s3,
+                "slpct": stop_pct,
+            })
+        logger.info(
+            f"trade_id={trade_id} 分批卖出计划已初始化（策略={strategy_key}）: "
+            f"档1={p1:.3f}(+{tiers[0]['pct']}%,{s1}股) | "
+            f"档2={p2:.3f}(+{tiers[1]['pct']}%,{s2}股) | "
+            f"档3={p3:.3f}(+{tiers[2]['pct']}%,{s3}股) | "
+            f"止损={stop_pct}%"
+        )
+    except Exception as e:
+        logger.error(f"init_batch_sell 失败: {e}")
+
+
+def mark_batch_sold(trade_id: int, tier: int, sell_date: str) -> dict | None:
+    """
+    标记某一档分批卖出已触发，如果3档全部完成则自动平仓
+
+    Args:
+        trade_id: 交易 id
+        tier:     档次（1/2/3）
+        sell_date: 触发日期（YYYYMMDD）
+
+    Returns:
+        dict 包含触发信息（price/shares/profit_pct），失败返回 None
+    """
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+
+        # 读取当前记录
+        row = pd.read_sql(
+            text("SELECT * FROM sim_trades WHERE id = :id"),
+            engine, params={"id": trade_id}
+        )
+        if row.empty:
+            logger.error(f"mark_batch_sold: id={trade_id} 不存在")
+            return None
+
+        r = row.iloc[0]
+        buy_price  = float(r["buy_price"])
+        buy_shares = int(r["buy_shares"])
+
+        tier_price  = float(r[f"sell{tier}_price"])
+        tier_shares = int(r[f"sell{tier}_shares"])
+
+        # 标记本档已完成
+        sql = text(f"""
+            UPDATE sim_trades
+            SET sell{tier}_done = TRUE,
+                sell{tier}_date = :sell_date,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id
+        """)
+        with engine.begin() as conn:
+            conn.execute(sql, {"id": trade_id, "sell_date": sell_date})
+
+        profit_pct = round((tier_price / buy_price - 1) * 100, 2)
+        sold_amount = round(tier_price * tier_shares, 2)
+
+        logger.info(
+            f"trade_id={trade_id} 第{tier}档触发: 价格={tier_price}, "
+            f"股数={tier_shares}, 盈亏={profit_pct:+.2f}%"
+        )
+
+        # 检查是否3档全部完成 → 自动平仓
+        row2 = pd.read_sql(text("SELECT * FROM sim_trades WHERE id = :id"), engine, params={"id": trade_id})
+        r2 = row2.iloc[0]
+        all_done = bool(r2["sell1_done"]) and bool(r2["sell2_done"]) and bool(r2["sell3_done"])
+
+        if all_done:
+            # 计算加权平均卖出价和总盈亏
+            s1 = int(r2["sell1_shares"]); p1 = float(r2["sell1_price"])
+            s2 = int(r2["sell2_shares"]); p2 = float(r2["sell2_price"])
+            s3 = int(r2["sell3_shares"]); p3 = float(r2["sell3_price"])
+            total_shares = s1 + s2 + s3
+            avg_sell = round((p1*s1 + p2*s2 + p3*s3) / total_shares, 3) if total_shares > 0 else buy_price
+            total_revenue = p1*s1 + p2*s2 + p3*s3
+            total_cost    = buy_price * total_shares
+            profit = round(total_revenue - total_cost, 2)
+            profit_pct_total = round((avg_sell / buy_price - 1) * 100, 2)
+
+            sql_close = text("""
+                UPDATE sim_trades
+                SET sell_price = :avg_sell,
+                    sell_date  = :sell_date,
+                    sell_type  = '分批卖出完成',
+                    profit     = :profit,
+                    profit_pct = :profit_pct,
+                    status     = 'closed',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+            """)
+            with engine.begin() as conn:
+                conn.execute(sql_close, {
+                    "id": trade_id,
+                    "avg_sell": avg_sell,
+                    "sell_date": sell_date,
+                    "profit": profit,
+                    "profit_pct": profit_pct_total,
+                })
+            logger.info(f"trade_id={trade_id} 3档全部完成，已自动平仓 avg_sell={avg_sell}, 盈亏={profit:+.2f}元")
+
+        return {
+            "tier":       tier,
+            "price":      tier_price,
+            "shares":     tier_shares,
+            "sold_amount": sold_amount,
+            "profit_pct": profit_pct,
+            "all_done":   all_done,
+        }
+
+    except Exception as e:
+        logger.error(f"mark_batch_sold 失败: {e}")
+        return None
+
+
+def mark_stop_loss(trade_id: int, sell_price: float, sell_date: str):
+    """止损平仓（止损触发，一次性清仓）"""
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+
+        row = pd.read_sql(text("SELECT * FROM sim_trades WHERE id=:id"), engine, params={"id": trade_id})
+        if row.empty:
+            return
+        r = row.iloc[0]
+        buy_price  = float(r["buy_price"])
+        buy_shares = int(r["buy_shares"])
+
+        profit = round((sell_price - buy_price) * buy_shares, 2)
+        profit_pct = round((sell_price / buy_price - 1) * 100, 2)
+
+        sql = text("""
+            UPDATE sim_trades
+            SET stop_loss_done = TRUE,
+                sell_price  = :sell_price,
+                sell_date   = :sell_date,
+                sell_type   = '止损',
+                profit      = :profit,
+                profit_pct  = :profit_pct,
+                status      = 'closed',
+                updated_at  = CURRENT_TIMESTAMP
+            WHERE id = :id
+        """)
+        with engine.begin() as conn:
+            conn.execute(sql, {
+                "id": trade_id,
+                "sell_price": sell_price,
+                "sell_date": sell_date,
+                "profit": profit,
+                "profit_pct": profit_pct,
+            })
+        logger.info(f"trade_id={trade_id} 止损平仓: 卖出价={sell_price}, 盈亏={profit:+.2f}元")
+
+        # 自动生成亏损总结（止损一定是亏损，不阻塞主流程）
+        try:
+            from skills.stock_sim_robot.trade_log import auto_log_if_loss
+            auto_log_if_loss(trade_id)
+        except Exception as _e:
+            logger.debug(f"auto_log_if_loss(止损) 非致命: {_e}")
+
+    except Exception as e:
+        logger.error(f"mark_stop_loss 失败: {e}")
+
+
+def increment_phase_b_fail(trade_id: int) -> int:
+    """
+    Phase B 买入价获取失败时调用：累加失败计数，返回当前失败次数。
+
+    Returns:
+        更新后的 phase_b_fail_count 值
+    """
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE sim_trades
+                SET phase_b_fail_count = COALESCE(phase_b_fail_count, 0) + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+            """), {"id": trade_id})
+            row = conn.execute(
+                text("SELECT phase_b_fail_count FROM sim_trades WHERE id = :id"),
+                {"id": trade_id}
+            ).fetchone()
+            return row[0] if row else 0
+    except Exception as e:
+        logger.error(f"increment_phase_b_fail 失败: {e}")
+        return 0
+
+
+def mark_phase_b_alerted(trade_id: int):
+    """标记该记录的 Phase B 飞书报警已发出（防止重复报警）"""
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        with engine.begin() as conn:
+            conn.execute(text("""
+                UPDATE sim_trades
+                SET phase_b_alerted = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id
+            """), {"id": trade_id})
+    except Exception as e:
+        logger.error(f"mark_phase_b_alerted 失败: {e}")
+
+
+def get_active_batch_positions() -> pd.DataFrame:
+    """
+    获取所有启用了分批卖出、且尚未全部完成的持仓
+    （用于盘中监控轮询）
+    """
+    try:
+        engine = _get_engine()
+        from sqlalchemy import text
+        sql = text("""
+            SELECT * FROM sim_trades
+            WHERE status = 'open'
+              AND batch_mode = TRUE
+              AND buy_price IS NOT NULL
+              AND buy_shares IS NOT NULL
+            ORDER BY created_at
+        """)
+        return pd.read_sql(sql, engine)
+    except Exception as e:
+        logger.error(f"get_active_batch_positions 失败: {e}")
+        return pd.DataFrame()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 新增表：sim_price_log / sim_selection_log / sim_nl_strategy / sim_audit_log
+# ══════════════════════════════════════════════════════════════════════════════
+
+_CREATE_SIM_PRICE_LOG = """
+CREATE TABLE IF NOT EXISTS sim_price_log (
+    id          SERIAL PRIMARY KEY,
+    trade_id    INT    NOT NULL,
+    code        VARCHAR(6) NOT NULL,
+    checked_at  TIMESTAMP NOT NULL,
+    price       FLOAT  NOT NULL,           -- effective_price（涨停修正后的真实市价）
+    price_raw   FLOAT,                     -- last（新浪原始 last 字段，用于对比）
+    high        FLOAT,                     -- 当日最高价
+    low         FLOAT,                     -- 当日最低价
+    bid1        FLOAT,                     -- 买1价
+    ask1        FLOAT,                     -- 卖1价
+    change_pct  FLOAT,                     -- 相对买入价的涨幅%（正=涨，负=跌）
+    rsi14       FLOAT,                     -- RSI(14)，按需计算（策略有指标条件时）
+    macd_hist   FLOAT,                     -- MACD柱状值，按需计算
+    sell1_price FLOAT,                     -- 当时档1目标价快照
+    sell3_price FLOAT,                     -- 当时档3目标价快照
+    stop_price  FLOAT,                     -- 当时止损价快照（buy_price * (1 + stop_loss_pct/100)）
+    event       VARCHAR(32)                -- NULL=正常检查 / 止损 / 第1档 / 第2档 / 第3档
+);
+CREATE INDEX IF NOT EXISTS idx_price_log_trade ON sim_price_log(trade_id, checked_at);
+CREATE INDEX IF NOT EXISTS idx_price_log_date  ON sim_price_log(checked_at);
+"""
+
+_CREATE_SIM_SELECTION_LOG = """
+CREATE TABLE IF NOT EXISTS sim_selection_log (
+    id              SERIAL PRIMARY KEY,
+    trade_date      VARCHAR(8) NOT NULL,   -- T 日（龙虎榜日期，YYYYMMDD）
+    trade_id        INT,                   -- 关联 sim_trades.id（入选股有值，候选无值）
+    rank            INT NOT NULL,          -- 排名：1=入选，2=次优，3=第三候选，以此类推
+    code            VARCHAR(6) NOT NULL,
+    name            VARCHAR(20),
+    signal_score    FLOAT,                 -- 综合评分（0-100）
+    t2_win_rate     FLOAT,                 -- T+2历史胜率（%）
+    close_price     FLOAT,                 -- T日收盘价
+    reason_tech     TEXT,                  -- 技术面分析摘要
+    reason_fund     TEXT,                  -- 资金面分析摘要
+    reason_history  TEXT,                  -- 历史胜率分析摘要
+    llm_rank_reason TEXT,                  -- LLM 对该股的排名理由（含与其他候选的对比分析）
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_selection_log_date    ON sim_selection_log(trade_date);
+CREATE INDEX IF NOT EXISTS idx_selection_log_trade   ON sim_selection_log(trade_id);
+"""
+
+_CREATE_SIM_NL_STRATEGY = """
+CREATE TABLE IF NOT EXISTS sim_nl_strategy (
+    id              SERIAL PRIMARY KEY,
+    trade_id        INT NOT NULL,          -- 绑定到具体持仓（sim_trades.id）
+    nl_text         TEXT NOT NULL,         -- 自然语言策略文本（用户输入或LLM草拟）
+    parsed_rules    JSONB,                 -- LLM 解析后的结构化规则 JSON（见 docs/architecture_plan.md）
+    hard_stop_pct   FLOAT DEFAULT -5.0,    -- 硬兜底止损线（始终生效，不被任何规则覆盖）
+    status          VARCHAR(16) DEFAULT 'draft',    -- draft / active / expired
+    source          VARCHAR(16) DEFAULT 'llm_auto', -- llm_auto（LLM草拟）/ user_input（用户手动）
+    confirmed_at    TIMESTAMP,             -- 人工确认时间（status改为active时记录）
+    confirmed_by    VARCHAR(32),           -- 确认人（当前固定为 'user'）
+    parse_error     TEXT,                  -- LLM 解析失败时的错误信息
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_nl_strategy_trade  ON sim_nl_strategy(trade_id, status);
+"""
+
+_CREATE_SIM_AUDIT_LOG = """
+CREATE TABLE IF NOT EXISTS sim_audit_log (
+    id              SERIAL PRIMARY KEY,
+    event_date      VARCHAR(8) NOT NULL,   -- YYYYMMDD，用于按天查询和分片
+    event_time      TIMESTAMP NOT NULL,    -- 精确到秒
+    event_type      VARCHAR(32) NOT NULL,  -- 事件类型（见下方常量列表）
+    trade_id        INT,                   -- 关联 sim_trades.id（可为 NULL）
+    code            VARCHAR(6),            -- 股票代码（可为 NULL）
+    name            VARCHAR(20),           -- 股票名称
+    summary         TEXT NOT NULL,         -- 人类可读摘要（一句话说明发生了什么）
+    detail          JSONB,                 -- 详细数据（原始数值/中间状态/决策依据等）
+    result          VARCHAR(16),           -- success / failed / skipped
+    operator        VARCHAR(32) DEFAULT 'robot',  -- robot / user / system
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_audit_log_date  ON sim_audit_log(event_date);
+CREATE INDEX IF NOT EXISTS idx_audit_log_trade ON sim_audit_log(trade_id);
+CREATE INDEX IF NOT EXISTS idx_audit_log_type  ON sim_audit_log(event_type);
+CREATE INDEX IF NOT EXISTS idx_audit_log_time  ON sim_audit_log(event_time DESC);
+"""
+
+# 审计事件类型常量
+AUDIT_PHASE_A_SELECT    = "phase_a_select"    # Phase A 选股完成
+AUDIT_PHASE_A_SKIP      = "phase_a_skip"      # Phase A 无满足条件股票
+AUDIT_PHASE_B_BUY       = "phase_b_buy"       # Phase B 回填买入价成功
+AUDIT_PHASE_B_FAIL      = "phase_b_fail"      # Phase B 获取开盘价失败
+AUDIT_MONITOR_CHECK     = "monitor_check"     # 盘中监控检查（每3分钟）
+AUDIT_MONITOR_SELL      = "monitor_sell"      # 监控触发分批卖出
+AUDIT_MONITOR_STOP      = "monitor_stop_loss" # 监控触发止损
+AUDIT_QUOTE_FAIL        = "quote_fail"        # 行情获取失败
+AUDIT_STRATEGY_CONFIRM  = "strategy_confirm"  # 用户确认 NL 策略
+AUDIT_STRATEGY_DRAFT    = "strategy_draft"    # LLM 草拟策略
+AUDIT_FORCE_CLOSE       = "force_close"       # 持仓超期强制平仓
+
+
+def create_extended_tables():
+    """
+    创建扩展表：sim_price_log / sim_selection_log / sim_nl_strategy / sim_audit_log
+    幂等操作，可重复调用。
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(text(_CREATE_SIM_PRICE_LOG))
+            conn.execute(text(_CREATE_SIM_SELECTION_LOG))
+            conn.execute(text(_CREATE_SIM_NL_STRATEGY))
+            conn.execute(text(_CREATE_SIM_AUDIT_LOG))
+        logger.info("扩展表 sim_price_log / sim_selection_log / sim_nl_strategy / sim_audit_log 已就绪 ✅")
+        return True
+    except Exception as e:
+        logger.error(f"创建扩展表失败: {e}")
+        return False
+
+
+# ── sim_price_log CRUD ────────────────────────────────────────────────────────
+
+def log_price_tick(
+    trade_id: int,
+    code: str,
+    price: float,
+    price_raw: float | None = None,
+    high: float | None = None,
+    low: float | None = None,
+    bid1: float | None = None,
+    ask1: float | None = None,
+    change_pct: float | None = None,
+    rsi14: float | None = None,
+    macd_hist: float | None = None,
+    sell1_price: float | None = None,
+    sell3_price: float | None = None,
+    stop_price: float | None = None,
+    event: str | None = None,
+) -> bool:
+    """
+    写入一条价格轨迹记录（每次 monitor 检查时调用，无论是否触发）
+
+    Args:
+        trade_id:    sim_trades.id
+        code:        股票代码
+        price:       effective_price（涨停修正后）
+        price_raw:   last（新浪原始）
+        change_pct:  相对买入价涨幅%
+        event:       触发事件名称（None=正常无触发 / 止损 / 第1档 / 第2档 / 第3档）
+
+    Returns:
+        True=写入成功, False=失败（降级处理，不影响主监控流程）
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO sim_price_log
+                    (trade_id, code, checked_at, price, price_raw, high, low,
+                     bid1, ask1, change_pct, rsi14, macd_hist,
+                     sell1_price, sell3_price, stop_price, event)
+                VALUES
+                    (:trade_id, :code, :checked_at, :price, :price_raw, :high, :low,
+                     :bid1, :ask1, :change_pct, :rsi14, :macd_hist,
+                     :sell1_price, :sell3_price, :stop_price, :event)
+            """), {
+                "trade_id":    int(trade_id),
+                "code":        str(code),
+                "checked_at":  datetime.now(),
+                "price":       float(price),
+                "price_raw":   float(price_raw) if price_raw is not None else None,
+                "high":        float(high) if high is not None else None,
+                "low":         float(low) if low is not None else None,
+                "bid1":        float(bid1) if bid1 is not None else None,
+                "ask1":        float(ask1) if ask1 is not None else None,
+                "change_pct":  float(change_pct) if change_pct is not None else None,
+                "rsi14":       float(rsi14) if rsi14 is not None else None,
+                "macd_hist":   float(macd_hist) if macd_hist is not None else None,
+                "sell1_price": float(sell1_price) if sell1_price is not None else None,
+                "sell3_price": float(sell3_price) if sell3_price is not None else None,
+                "stop_price":  float(stop_price) if stop_price is not None else None,
+                "event":       str(event) if event is not None else None,
+            })
+        return True
+    except Exception as e:
+        logger.warning(f"log_price_tick 写入失败 trade_id={trade_id} code={code}: {e}")
+        return False
+
+
+def get_price_log(trade_id: int) -> pd.DataFrame:
+    """获取某持仓的全部价格轨迹记录（按时间排序）"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        return pd.read_sql(
+            text("SELECT * FROM sim_price_log WHERE trade_id=:id ORDER BY checked_at"),
+            engine,
+            params={"id": int(trade_id)},
+        )
+    except Exception as e:
+        logger.error(f"get_price_log 失败 trade_id={trade_id}: {e}")
+        return pd.DataFrame()
+
+
+# ── sim_selection_log CRUD ────────────────────────────────────────────────────
+
+def save_selection_log(entries: list[dict]) -> bool:
+    """
+    保存选股过程记录（入选股 + Top3候选）
+
+    Args:
+        entries: list of dict，每个 dict 包含：
+            trade_date, trade_id(可选), rank, code, name, signal_score,
+            t2_win_rate, close_price, reason_tech, reason_fund,
+            reason_history, llm_rank_reason
+
+    Returns:
+        True=全部成功, False=有失败
+    """
+    if not entries:
+        return True
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            for e in entries:
+                conn.execute(text("""
+                    INSERT INTO sim_selection_log
+                        (trade_date, trade_id, rank, code, name, signal_score,
+                         t2_win_rate, close_price, reason_tech, reason_fund,
+                         reason_history, llm_rank_reason)
+                    VALUES
+                        (:trade_date, :trade_id, :rank, :code, :name, :signal_score,
+                         :t2_win_rate, :close_price, :reason_tech, :reason_fund,
+                         :reason_history, :llm_rank_reason)
+                """), {
+                    "trade_date":      str(e.get("trade_date", "")),
+                    "trade_id":        int(e["trade_id"]) if e.get("trade_id") else None,
+                    "rank":            int(e.get("rank", 1)),
+                    "code":            str(e.get("code", "")),
+                    "name":            str(e.get("name", "")) if e.get("name") else None,
+                    "signal_score":    float(e["signal_score"]) if e.get("signal_score") is not None else None,
+                    "t2_win_rate":     float(e["t2_win_rate"]) if e.get("t2_win_rate") is not None else None,
+                    "close_price":     float(e["close_price"]) if e.get("close_price") is not None else None,
+                    "reason_tech":     str(e["reason_tech"]) if e.get("reason_tech") else None,
+                    "reason_fund":     str(e["reason_fund"]) if e.get("reason_fund") else None,
+                    "reason_history":  str(e["reason_history"]) if e.get("reason_history") else None,
+                    "llm_rank_reason": str(e["llm_rank_reason"]) if e.get("llm_rank_reason") else None,
+                })
+        logger.info(f"save_selection_log: 写入 {len(entries)} 条选股记录 ✅")
+        return True
+    except Exception as e:
+        logger.error(f"save_selection_log 失败: {e}")
+        return False
+
+
+def get_selection_log(trade_date: str | None = None, trade_id: int | None = None) -> pd.DataFrame:
+    """查询选股过程记录"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        if trade_id is not None:
+            sql = text("SELECT * FROM sim_selection_log WHERE trade_id=:id ORDER BY rank")
+            params = {"id": int(trade_id)}
+        elif trade_date is not None:
+            sql = text("SELECT * FROM sim_selection_log WHERE trade_date=:d ORDER BY rank")
+            params = {"d": str(trade_date)}
+        else:
+            sql = text("SELECT * FROM sim_selection_log ORDER BY created_at DESC LIMIT 50")
+            params = {}
+        return pd.read_sql(sql, engine, params=params)
+    except Exception as e:
+        logger.error(f"get_selection_log 失败: {e}")
+        return pd.DataFrame()
+
+
+# ── sim_nl_strategy CRUD ──────────────────────────────────────────────────────
+
+def save_nl_strategy(
+    trade_id: int,
+    nl_text: str,
+    parsed_rules: dict | None = None,
+    hard_stop_pct: float = -5.0,
+    source: str = "llm_auto",
+    parse_error: str | None = None,
+) -> int | None:
+    """
+    保存一条自然语言策略（默认 status='draft'）
+
+    Returns:
+        新记录的 id，失败返回 None
+    """
+    import json
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            result = conn.execute(text("""
+                INSERT INTO sim_nl_strategy
+                    (trade_id, nl_text, parsed_rules, hard_stop_pct, status, source, parse_error)
+                VALUES
+                    (:trade_id, :nl_text, :parsed_rules, :hard_stop_pct, 'draft', :source, :parse_error)
+                RETURNING id
+            """), {
+                "trade_id":      int(trade_id),
+                "nl_text":       str(nl_text),
+                "parsed_rules":  json.dumps(parsed_rules, ensure_ascii=False) if parsed_rules else None,
+                "hard_stop_pct": float(hard_stop_pct),
+                "source":        str(source),
+                "parse_error":   str(parse_error) if parse_error else None,
+            })
+            new_id = result.scalar()
+        logger.info(f"save_nl_strategy: trade_id={trade_id} → strategy_id={new_id} ✅")
+        return new_id
+    except Exception as e:
+        logger.error(f"save_nl_strategy 失败 trade_id={trade_id}: {e}")
+        return None
+
+
+def confirm_nl_strategy(strategy_id: int, confirmed_by: str = "user") -> bool:
+    """
+    人工确认 NL 策略：将 status 改为 'active'，同时将同一 trade_id 的其他 active 策略置为 expired
+
+    Args:
+        strategy_id: sim_nl_strategy.id
+        confirmed_by: 确认人（默认 'user'）
+
+    Returns:
+        True=成功
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            # 先查出 trade_id
+            row = conn.execute(
+                text("SELECT trade_id FROM sim_nl_strategy WHERE id=:id"),
+                {"id": int(strategy_id)},
+            ).fetchone()
+            if not row:
+                logger.warning(f"confirm_nl_strategy: strategy_id={strategy_id} 不存在")
+                return False
+            trade_id = row[0]
+            # 将该 trade 下的已有 active 策略置为 expired
+            conn.execute(text("""
+                UPDATE sim_nl_strategy
+                SET status='expired', updated_at=CURRENT_TIMESTAMP
+                WHERE trade_id=:trade_id AND status='active'
+            """), {"trade_id": int(trade_id)})
+            # 激活目标策略
+            conn.execute(text("""
+                UPDATE sim_nl_strategy
+                SET status='active', confirmed_at=CURRENT_TIMESTAMP,
+                    confirmed_by=:confirmed_by, updated_at=CURRENT_TIMESTAMP
+                WHERE id=:id
+            """), {"id": int(strategy_id), "confirmed_by": str(confirmed_by)})
+        logger.info(f"confirm_nl_strategy: strategy_id={strategy_id} 已激活 ✅")
+        return True
+    except Exception as e:
+        logger.error(f"confirm_nl_strategy 失败 strategy_id={strategy_id}: {e}")
+        return False
+
+
+def get_active_nl_strategy(trade_id: int) -> dict | None:
+    """
+    获取某持仓当前 active 的 NL 策略
+
+    Returns:
+        dict（含 parsed_rules 已反序列化）或 None
+    """
+    import json
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        row = pd.read_sql(
+            text("SELECT * FROM sim_nl_strategy WHERE trade_id=:id AND status='active' ORDER BY confirmed_at DESC LIMIT 1"),
+            engine,
+            params={"id": int(trade_id)},
+        )
+        if row.empty:
+            return None
+        rec = row.iloc[0].to_dict()
+        # 反序列化 parsed_rules
+        if rec.get("parsed_rules") and isinstance(rec["parsed_rules"], str):
+            try:
+                rec["parsed_rules"] = json.loads(rec["parsed_rules"])
+            except Exception:
+                pass
+        return rec
+    except Exception as e:
+        logger.error(f"get_active_nl_strategy 失败 trade_id={trade_id}: {e}")
+        return None
+
+
+def get_nl_strategies_for_trade(trade_id: int) -> pd.DataFrame:
+    """获取某持仓的所有 NL 策略（按时间倒序）"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        return pd.read_sql(
+            text("SELECT * FROM sim_nl_strategy WHERE trade_id=:id ORDER BY created_at DESC"),
+            engine,
+            params={"id": int(trade_id)},
+        )
+    except Exception as e:
+        logger.error(f"get_nl_strategies_for_trade 失败: {e}")
+        return pd.DataFrame()
+
+
+# ── sim_audit_log CRUD ────────────────────────────────────────────────────────
+
+def write_audit_log(
+    event_type: str,
+    summary: str,
+    trade_id: int | None = None,
+    code: str | None = None,
+    name: str | None = None,
+    detail: dict | None = None,
+    result: str = "success",
+    operator: str = "robot",
+    event_time: datetime | None = None,
+) -> bool:
+    """
+    写入一条审计日志记录
+
+    Args:
+        event_type: 事件类型（使用 AUDIT_* 常量）
+        summary:    人类可读摘要（一句话）
+        trade_id:   关联持仓 ID（可为 None）
+        code:       股票代码（可为 None）
+        name:       股票名称（可为 None）
+        detail:     详细数据 dict（会序列化为 JSONB）
+        result:     success / failed / skipped
+        operator:   robot / user / system
+        event_time: 事件时间（默认为当前时间）
+
+    Returns:
+        True=写入成功，False=失败（降级，不影响主流程）
+
+    使用示例：
+        write_audit_log(
+            event_type=AUDIT_MONITOR_SELL,
+            summary="分批卖出第1档触发：002361 神剑股份 @15.00 涨幅+10.0%",
+            trade_id=42,
+            code="002361",
+            name="神剑股份",
+            detail={
+                "tier": 1, "price": 15.0, "target_price": 14.1,
+                "change_pct": 10.0, "profit_pct": 10.0, "shares": 300,
+            },
+        )
+    """
+    import json
+    now = event_time or datetime.now()
+    event_date = now.strftime("%Y%m%d")
+
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO sim_audit_log
+                    (event_date, event_time, event_type, trade_id, code, name,
+                     summary, detail, result, operator)
+                VALUES
+                    (:event_date, :event_time, :event_type, :trade_id, :code, :name,
+                     :summary, :detail, :result, :operator)
+            """), {
+                "event_date": event_date,
+                "event_time": now,
+                "event_type": str(event_type),
+                "trade_id":   int(trade_id) if trade_id is not None else None,
+                "code":       str(code) if code else None,
+                "name":       str(name) if name else None,
+                "summary":    str(summary),
+                "detail":     json.dumps(detail, ensure_ascii=False, default=str) if detail else None,
+                "result":     str(result),
+                "operator":   str(operator),
+            })
+        return True
+    except Exception as e:
+        # 审计日志写入失败不应影响主监控流程，只记录 WARNING
+        logger.warning(f"write_audit_log 失败 [{event_type}] {summary[:50]}: {e}")
+        return False
+
+
+def get_audit_logs(
+    trade_id: int | None = None,
+    event_date: str | None = None,
+    event_type: str | None = None,
+    limit: int = 100,
+) -> pd.DataFrame:
+    """
+    查询审计日志（按时间倒序）
+
+    Args:
+        trade_id:   按持仓过滤
+        event_date: 按日期过滤（YYYYMMDD）
+        event_type: 按事件类型过滤
+        limit:      最多返回行数
+
+    Returns:
+        DataFrame，按 event_time 倒序排列
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        conditions = []
+        params: dict = {"limit": limit}
+        if trade_id is not None:
+            conditions.append("trade_id = :trade_id")
+            params["trade_id"] = int(trade_id)
+        if event_date is not None:
+            conditions.append("event_date = :event_date")
+            params["event_date"] = str(event_date)
+        if event_type is not None:
+            conditions.append("event_type = :event_type")
+            params["event_type"] = str(event_type)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = text(f"SELECT * FROM sim_audit_log {where} ORDER BY event_time DESC LIMIT :limit")
+        return pd.read_sql(sql, engine, params=params)
+    except Exception as e:
+        logger.error(f"get_audit_logs 失败: {e}")
+        return pd.DataFrame()
+
+
+# ── 更新 create_tables 以包含扩展表 ──────────────────────────────────────────
+
+_ORIGINAL_CREATE_TABLES = create_tables  # 保存原函数引用
+
+
+def create_tables():
+    """
+    初始化所有表（核心表 + 扩展表），幂等操作，可重复调用。
+    包含：sim_trades / sim_summary / sim_strategy + 新字段迁移
+          + sim_price_log / sim_selection_log / sim_nl_strategy / sim_audit_log
+    """
+    ok1 = _ORIGINAL_CREATE_TABLES()
+    ok2 = create_extended_tables()
+    return ok1 and ok2
+
+
+if __name__ == "__main__":
+    # 测试：初始化建表
+    logging_ok = create_tables()
+    print(f"建表结果: {logging_ok}")

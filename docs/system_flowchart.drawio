@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-03-31" version="21.0.0">
+  <diagram id="stock-analysis-system" name="龙虎榜系统架构">
+    <mxGraphModel dx="2400" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3300" pageHeight="2339" math="0" shadow="0" background="#1e1e2e">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- 标题 -->
+        <mxCell id="title" value="龙虎榜交易策略分析系统" style="text;html=1;fontSize=36;fontStyle=1;align=center;fillColor=none;strokeColor=none;fontColor=#cdd6f4;" vertex="1" parent="1">
+          <mxGeometry x="400" y="30" width="2400" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== 第1行：网页层 ===================== -->
+        <mxCell id="label_web" value="🌐 网页层" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#89b4fa;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="120" width="200" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="w1" value="🏠 总览 Dashboard" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#313244;strokeColor=#89b4fa;fontColor=#cdd6f4;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="170" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w2" value="🏆 主板精选策略" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#313244;strokeColor=#89b4fa;fontColor=#cdd6f4;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="400" y="170" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w3" value="🎯 决策辅助信号" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#313244;strokeColor=#89b4fa;fontColor=#cdd6f4;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="740" y="170" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w4" value="📈 龙虎榜盈亏分析" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#313244;strokeColor=#89b4fa;fontColor=#cdd6f4;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="170" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w5" value="🤖 模拟炒股" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#313244;strokeColor=#89b4fa;fontColor=#cdd6f4;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="170" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w6" value="🔬 策略回测" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#313244;strokeColor=#89b4fa;fontColor=#cdd6f4;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1760" y="170" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w7" value="📉 回测分析" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#313244;strokeColor=#89b4fa;fontColor=#cdd6f4;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2100" y="170" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="w8" value="⚙️ 数据管理" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#313244;strokeColor=#89b4fa;fontColor=#cdd6f4;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2440" y="170" width="320" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== 第2行：数据采集 ===================== -->
+        <mxCell id="label_fetch" value="📡 数据采集" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#a6e3a1;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="320" width="200" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="f1" value="龙虎榜 Top10&#xa;AKShare 新浪" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1e3a2f;strokeColor=#a6e3a1;fontColor=#a6e3a1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="370" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f2" value="市场情绪&#xa;涨跌停 / 大盘" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1e3a2f;strokeColor=#a6e3a1;fontColor=#a6e3a1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="380" y="370" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f3" value="T+N 价格补全&#xa;新浪 / 东财双源" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1e3a2f;strokeColor=#a6e3a1;fontColor=#a6e3a1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="700" y="370" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f4" value="龙虎榜明细&#xa;席位 / 成交详情" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1e3a2f;strokeColor=#a6e3a1;fontColor=#a6e3a1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="370" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f5" value="机构席位追踪&#xa;近 5/10 日汇总" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1e3a2f;strokeColor=#a6e3a1;fontColor=#a6e3a1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1340" y="370" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f6" value="个股上榜统计&#xa;近 5/10 日次数" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1e3a2f;strokeColor=#a6e3a1;fontColor=#a6e3a1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1660" y="370" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f7" value="当日席位明细&#xa;买卖方营业部" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1e3a2f;strokeColor=#a6e3a1;fontColor=#a6e3a1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1980" y="370" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f_cron" value="⏰  Cron: 18:40 盘后 | 09:05 次日补全 | 14:55 盘中情绪" style="text;html=1;fontSize=15;fontColor=#6c7086;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="470" width="760" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== 第3行：龙虎榜分析 & 今日选股 ===================== -->
+        <mxCell id="label_lhb" value="🔍 龙虎榜详情分析" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#fab387;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="520" width="280" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="label_daily" value="📋 今日龙虎榜股票分析" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#cba6f7;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="520" width="320" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lhb1" value="技术面评分&#xa;40 分" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a2a1a;strokeColor=#fab387;fontColor=#fab387;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="570" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="lhb2" value="资金面评分&#xa;35 分" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a2a1a;strokeColor=#fab387;fontColor=#fab387;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="360" y="570" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="lhb3" value="历史胜率&#xa;25 分" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a2a1a;strokeColor=#fab387;fontColor=#fab387;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="660" y="570" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="lhb4" value="综合评分&#xa;0 ~ 100 分" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#5a3820;strokeColor=#fab387;fontColor=#fab387;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="960" y="570" width="280" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="d1" value="主板过滤&#xa;ST / 创业板排除" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a1a3a;strokeColor=#cba6f7;fontColor=#cba6f7;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="570" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d2" value="多维筛选&#xa;Top N / 市值 / 换手" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a1a3a;strokeColor=#cba6f7;fontColor=#cba6f7;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1900" y="570" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d3" value="候选股列表&#xa;评分 + 概率" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a1a3a;strokeColor=#cba6f7;fontColor=#cba6f7;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2200" y="570" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d4" value="格式化信号&#xa;喂给 LLM" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a1a3a;strokeColor=#cba6f7;fontColor=#cba6f7;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2500" y="570" width="280" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== 第4行：交易机器人 & 新闻监控 ===================== -->
+        <mxCell id="label_robot" value="🤖 交易机器人" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#f38ba8;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="720" width="220" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="label_news" value="📢 新闻监控 / 通知" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#f9e2af;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="720" width="280" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r1" value="Phase A  18:45&#xa;结算 + 选股 + 写 DB" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a1a1a;strokeColor=#f38ba8;fontColor=#f38ba8;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="770" width="300" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" value="Phase B  09:35&#xa;回填开盘买入价" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a1a1a;strokeColor=#f38ba8;fontColor=#f38ba8;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="380" y="770" width="300" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="r3" value="LLM 智能选股&#xa;百炼 / OpenAI / 规则" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a1a1a;strokeColor=#f38ba8;fontColor=#f38ba8;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="700" y="770" width="300" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="r4" value="持仓结算&#xa;止盈 / 止损 / 分批卖" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a1a1a;strokeColor=#f38ba8;fontColor=#f38ba8;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="770" width="300" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="n1" value="盘后扫描  18:30&#xa;情绪检查 + 推送" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a2e10;strokeColor=#f9e2af;fontColor=#f9e2af;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1700" y="770" width="300" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="早盘检查  09:20&#xa;竞价信号验证" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a2e10;strokeColor=#f9e2af;fontColor=#f9e2af;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2020" y="770" width="300" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="盘中监控  每 3 min&#xa;价格快照 / 触发卖出" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a2e10;strokeColor=#f9e2af;fontColor=#f9e2af;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2340" y="770" width="300" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="推送通知&#xa;飞书 / 钉钉 / 邮件" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#3a2e10;strokeColor=#f9e2af;fontColor=#f9e2af;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2660" y="770" width="300" height="110" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== 第5行：策略 & 回测 ===================== -->
+        <mxCell id="label_strat" value="⚡ 策略层" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#94e2d5;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="950" width="160" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="label_bt" value="🔬 回测引擎" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#74c7ec;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="950" width="180" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="s1" value="止损 -5%&#xa;止盈 +8%" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2e2e;strokeColor=#94e2d5;fontColor=#94e2d5;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1000" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" value="分批卖出&#xa;+3% / +5% / +8%" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2e2e;strokeColor=#94e2d5;fontColor=#94e2d5;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="360" y="1000" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" value="NL 自然语言策略&#xa;LLM 解析为 JSON" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2e2e;strokeColor=#94e2d5;fontColor=#94e2d5;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="660" y="1000" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="s4" value="情绪过滤&#xa;涨停 &lt; 30 不操作" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2e2e;strokeColor=#94e2d5;fontColor=#94e2d5;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="960" y="1000" width="280" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="bt1" value="回测参数输入&#xa;时间 / 阈值 / 评分" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2230;strokeColor=#74c7ec;fontColor=#74c7ec;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="1000" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="bt2" value="回测引擎&#xa;逐日遍历龙虎榜" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2230;strokeColor=#74c7ec;fontColor=#74c7ec;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="1000" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="bt3" value="回测结果&#xa;胜率 / 夏普 / 回撤" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2230;strokeColor=#74c7ec;fontColor=#74c7ec;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2240" y="1000" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="bt4" value="月度分析&#xa;胜率趋势 / 净值图" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2230;strokeColor=#74c7ec;fontColor=#74c7ec;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2560" y="1000" width="300" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== 第6行：复盘 & 日志 ===================== -->
+        <mxCell id="label_review" value="📝 复盘服务" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#cba6f7;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1170" width="180" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="label_log" value="📋 日志系统" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#a6adc8;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="1170" width="180" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="rv1" value="亏损复盘&#xa;自动生成教训" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a1a3a;strokeColor=#cba6f7;fontColor=#cba6f7;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1220" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="rv2" value="周期战报&#xa;飞书推送格式化" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a1a3a;strokeColor=#cba6f7;fontColor=#cba6f7;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="360" y="1220" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="rv3" value="审计日志&#xa;选股 / 买卖过程" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a1a3a;strokeColor=#cba6f7;fontColor=#cba6f7;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="660" y="1220" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="rv4" value="网页复盘查询&#xa;价格轨迹 / 回溯" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a1a3a;strokeColor=#cba6f7;fontColor=#cba6f7;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="960" y="1220" width="280" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lg1" value="文件日志 Loguru&#xa;7 天轮转 / 30 天保留" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#252535;strokeColor=#a6adc8;fontColor=#a6adc8;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1600" y="1220" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="lg2" value="DB 审计表&#xa;sim_audit_log" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#252535;strokeColor=#a6adc8;fontColor=#a6adc8;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1920" y="1220" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="lg3" value="价格快照&#xa;sim_price_log" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#252535;strokeColor=#a6adc8;fontColor=#a6adc8;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2240" y="1220" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="lg4" value="重试机制&#xa;最多 5 次 / 双源" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#252535;strokeColor=#a6adc8;fontColor=#a6adc8;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="2560" y="1220" width="300" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== 存储层 ===================== -->
+        <mxCell id="label_db" value="🗄️ 存储层" style="text;html=1;fontSize=22;fontStyle=1;fontColor=#89dceb;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1390" width="160" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="db_pg" value="PostgreSQL  stock_analysis 库&#xa;lhb_top10 · lhb_detail · lhb_jigou · lhb_ggtj · market_sentiment&#xa;sim_trades · sim_summary · sim_audit_log · sim_price_log · sim_selection_log" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1a2a30;strokeColor=#89dceb;fontColor=#89dceb;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1440" width="1280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="db_excel" value="Excel 本地开发模式&#xa;lhb_detail.xlsx · stock_kline.xlsx · backtest_results.xlsx · market_sentiment.xlsx" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#1e3020;strokeColor=#a6e3a1;fontColor=#a6e3a1;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="1380" y="1440" width="1120" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="db_docs" value="文档 / Markdown&#xa;logs/*.log · docs/loss_lessons.md" style="rounded=1;whiteSpace=wrap;html=1;fontSize=16;fillColor=#2a2010;strokeColor=#f9e2af;fontColor=#f9e2af;arcSize=8;" vertex="1" parent="1">
+          <mxGeometry x="2540" y="1440" width="400" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== 主干箭头 ===================== -->
+        <!-- 数据采集 → 龙虎榜分析 -->
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#a6e3a1;strokeWidth=3;fontColor=#a6e3a1;fontSize=14;" edge="1" source="f1" target="lhb1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a1l" value="K线/明细" style="edgeLabel;fontSize=14;fontColor=#a6e3a1;fillColor=none;strokeColor=none;" vertex="1" connectable="0" parent="a1">
+          <mxGeometry relative="0.5" as="geometry" />
+        </mxCell>
+
+        <!-- 数据采集 → 今日选股 -->
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#a6e3a1;strokeWidth=3;fontColor=#a6e3a1;fontSize=14;" edge="1" source="f1" target="d1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a2l" value="Top10" style="edgeLabel;fontSize=14;fontColor=#a6e3a1;fillColor=none;strokeColor=none;" vertex="1" connectable="0" parent="a2">
+          <mxGeometry relative="0.5" as="geometry" />
+        </mxCell>
+
+        <!-- 龙虎榜分析 → 交易机器人 -->
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#fab387;strokeWidth=3;fontColor=#fab387;fontSize=14;" edge="1" source="lhb4" target="r1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a3l" value="评分结果" style="edgeLabel;fontSize=14;fontColor=#fab387;fillColor=none;strokeColor=none;" vertex="1" connectable="0" parent="a3">
+          <mxGeometry relative="0.5" as="geometry" />
+        </mxCell>
+
+        <!-- 今日选股 → 交易机器人 -->
+        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#cba6f7;strokeWidth=3;fontColor=#cba6f7;fontSize=14;" edge="1" source="d4" target="r3" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a4l" value="候选信号" style="edgeLabel;fontSize=14;fontColor=#cba6f7;fillColor=none;strokeColor=none;" vertex="1" connectable="0" parent="a4">
+          <mxGeometry relative="0.5" as="geometry" />
+        </mxCell>
+
+        <!-- 机器人 → 新闻监控 -->
+        <mxCell id="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#f9e2af;strokeWidth=3;fontColor=#f9e2af;fontSize=14;" edge="1" source="r4" target="n1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a5l" value="持仓状态" style="edgeLabel;fontSize=14;fontColor=#f9e2af;fillColor=none;strokeColor=none;" vertex="1" connectable="0" parent="a5">
+          <mxGeometry relative="0.5" as="geometry" />
+        </mxCell>
+
+        <!-- 机器人 → 策略 -->
+        <mxCell id="a6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#94e2d5;strokeWidth=3;" edge="1" source="r4" target="s1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 采集 → 回测 -->
+        <mxCell id="a7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#74c7ec;strokeWidth=3;fontColor=#74c7ec;fontSize=14;" edge="1" source="f4" target="bt1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a7l" value="历史数据" style="edgeLabel;fontSize=14;fontColor=#74c7ec;fillColor=none;strokeColor=none;" vertex="1" connectable="0" parent="a7">
+          <mxGeometry relative="0.5" as="geometry" />
+        </mxCell>
+
+        <!-- 机器人 → 复盘 -->
+        <mxCell id="a8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#cba6f7;strokeWidth=3;fontColor=#cba6f7;fontSize=14;" edge="1" source="r4" target="rv1" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a8l" value="平仓记录" style="edgeLabel;fontSize=14;fontColor=#cba6f7;fillColor=none;strokeColor=none;" vertex="1" connectable="0" parent="a8">
+          <mxGeometry relative="0.5" as="geometry" />
+        </mxCell>
+
+        <!-- 复盘 → 日志 -->
+        <mxCell id="a9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#a6adc8;strokeWidth=3;fontColor=#a6adc8;fontSize=14;" edge="1" source="rv3" target="lg2" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- 复盘教训 → 机器人 LLM（反向虚线） -->
+        <mxCell id="a10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#f38ba8;strokeWidth=2;dashed=1;fontColor=#f38ba8;fontSize=14;" edge="1" source="rv1" target="r3" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="200" y="1330" />
+              <mxPoint x="200" y="825" />
+              <mxPoint x="850" y="825" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a10l" value="历史教训反馈 LLM" style="edgeLabel;fontSize=14;fontColor=#f38ba8;fillColor=none;strokeColor=none;" vertex="1" connectable="0" parent="a10">
+          <mxGeometry relative="0.5" as="geometry" />
+        </mxCell>
+
+        <!-- 所有→存储（虚线） -->
+        <mxCell id="a11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#89dceb;strokeWidth=2;dashed=1;" edge="1" source="lg2" target="db_pg" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="a12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;strokeColor=#89dceb;strokeWidth=2;dashed=1;" edge="1" source="f1" target="db_pg" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
