@@ -163,17 +163,12 @@ def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
 def calculate_technical_score(stock_code: str, trade_date: str) -> dict:
     """
     技术面打分系统（0~100分），返回 dict 以支持细项展示。
-    向下兼容：调用方可用 result["score"] 取总分，或直接 int(result) 如需旧接口。
+    向下兼容：调用方可用 result["score"] 取总分。
 
-    评分维度：
-    - 趋势位置（30分）：收盘 > MA5/MA10/MA20/MA60
-    - 多头排列奖励（+5分）：MA5 > MA10 > MA20 严格多头
-    - 量能配合（20分）：量比 2~5 最佳
-    - 涨幅位置（20分）：近20日涨幅是否在合理区间
-    - 创20日新高奖励（+5分）：收盘为近20日最高收盘
-    - K线形态（15分）：MACD金叉、RSI健康
-    - RSI强势区奖励（+5分）：RSI 50~70
-    - 基础分（15分）：默认给分
+    v2.2 起：委托给 modules/scorer.score_tech()，统一回测与模拟盘评分逻辑。
+    - scorer.score_tech 满分 40 → 线性映射到 100 分
+    - 保留旧 key：ma_bullish / above_ma20 / above_ma60 / new_high_20d /
+                   macd_golden / rsi_val / vol_ratio
 
     优先使用进程级 _KLINE_CACHE（回测时避免重复拉接口）。
 
@@ -188,109 +183,59 @@ def calculate_technical_score(stock_code: str, trade_date: str) -> dict:
     }
     try:
         start_dt = (pd.to_datetime(trade_date) - timedelta(days=120)).strftime("%Y%m%d")
-        # ── 优先走缓存 ──
         df = _kline_get(stock_code, start_dt, trade_date)
-        if df.empty:
+        if df.empty or len(df) < 30:
             return _default
-
-        if len(df) < 30:
-            return _default  # 数据不足时给中性分
-        # 截止到 trade_date 当天（缓存里可能含更新数据）
         if "日期" in df.columns:
             df = df[df["日期"].astype(str) <= trade_date]
         if len(df) < 30:
             return _default
 
+        # ── 委托给统一评分引擎 ────────────────────────────────────────
+        from modules.scorer import score_tech
+        res = score_tech(df, trade_date, lianban_count=0)
+        # score_tech 满分 40 → 线性映射到 0~100
+        raw_score_100 = int(round(res["score"] / 40 * 100))
+
+        # ── 填充旧兼容字段（供 select_stocks_daily 等调用方使用）──────
         close  = df["收盘"].values.astype(float)
-        volume = df["成交量"].values.astype(float)
+        volume = df["成交量"].values.astype(float) if "成交量" in df.columns else None
 
-        score = 0
-        detail = dict(_default)
+        ma5   = _sma(close, 5)
+        ma10  = _sma(close, 10)
+        ma20  = _sma(close, 20)
+        ma60  = _sma(close, min(60, len(close)))
 
-        # ===== 因子1：趋势位置（30分）+ 多头排列奖励（+5）=====
-        ma5  = _sma(close, 5)
-        ma10 = _sma(close, 10)
-        ma20 = _sma(close, 20)
-        ma60 = _sma(close, min(60, len(close)))
+        ma_bullish  = (
+            not np.isnan(ma5[-1]) and not np.isnan(ma10[-1]) and not np.isnan(ma20[-1])
+            and ma5[-1] > ma10[-1] > ma20[-1]
+        )
+        above_ma20  = not np.isnan(ma20[-1]) and close[-1] > ma20[-1]
+        above_ma60  = not np.isnan(ma60[-1]) and close[-1] > ma60[-1]
+        new_high_20d = (
+            len(close) >= 20
+            and close[-1] >= close[-20:].max() * 0.999
+        )
+        macd_golden = res.get("macd_score", 0) >= 10   # scorer 中金叉=10分
+        rsi_val     = res.get("rsi") or 50.0
+        vol_ratio   = res.get("volume_ratio") or 1.0
 
-        cur = close[-1]
-        if not np.isnan(ma5[-1])  and cur > ma5[-1]:   score += 5
-        if not np.isnan(ma10[-1]) and cur > ma10[-1]:  score += 5
-        if not np.isnan(ma20[-1]) and cur > ma20[-1]:
-            score += 10
-            detail["above_ma20"] = True
-        if not np.isnan(ma60[-1]) and cur > ma60[-1]:
-            score += 10
-            detail["above_ma60"] = True
-
-        # 多头排列：MA5 > MA10 > MA20
-        if (not np.isnan(ma5[-1]) and not np.isnan(ma10[-1]) and not np.isnan(ma20[-1])
-                and ma5[-1] > ma10[-1] > ma20[-1]):
-            score += 5
-            detail["ma_bullish"] = True
-
-        # ===== 因子2：量能配合（20分）=====
-        vol_ma5  = _sma(volume, 5)
-        vol_ma20 = _sma(volume, 20)
-        vol_ratio = 1.0
-
-        if (not np.isnan(vol_ma5[-1]) and not np.isnan(vol_ma20[-1])
-                and vol_ma20[-1] > 0):
-            vol_ratio = volume[-1] / vol_ma20[-1]
-            detail["vol_ratio"] = round(float(vol_ratio), 2)
-            if vol_ma5[-1] > vol_ma20[-1] * 1.5:
-                score += 10
-            elif vol_ma5[-1] > vol_ma20[-1] * 1.2:
-                score += 5
-
-            if 2 < vol_ratio < 5:
-                score += 10  # 适度放量
-            elif 1.5 < vol_ratio <= 2:
-                score += 5
-
-        # ===== 因子3：涨幅位置（20分）+ 创20日新高奖励（+5）=====
-        if len(close) >= 20:
-            gain_20d = (close[-1] / close[-20] - 1)
-            if 0 < gain_20d < 0.15:
-                score += 20
-            elif 0.15 <= gain_20d < 0.30:
-                score += 10
-            elif gain_20d >= 0.50:
-                score -= 10
-
-            # 创20日新高：今日收盘 = 近20日最高收盘
-            high_20d = close[-20:].max() if len(close) >= 20 else close[-1]
-            if close[-1] >= high_20d * 0.999:   # 容差 0.1%
-                score += 5
-                detail["new_high_20d"] = True
-
-        # ===== 因子4：K线形态（15分）+ RSI强势奖励（+5）=====
-        _, _, hist = _macd(close, 12, 26, 9)
-        if hist is not None and len(hist) >= 2:
-            if not np.isnan(hist[-1]) and not np.isnan(hist[-2]):
-                if hist[-1] > 0 and hist[-2] <= 0:
-                    score += 10  # 刚金叉
-                    detail["macd_golden"] = True
-                elif hist[-1] > hist[-2] > 0:
-                    score += 5   # MACD 柱放大
-
-        rsi = _rsi(close, 14)
-        rsi_val = 50.0
-        if not np.isnan(rsi[-1]):
-            rsi_val = float(rsi[-1])
-            detail["rsi_val"] = round(rsi_val, 1)
-            if 50 < rsi_val <= 70:   # 强势区（含奖励）
-                score += 5
-            elif 40 < rsi_val <= 50:
-                pass  # 中性，不加分
-            elif rsi_val > 80:
-                score -= 5  # 超买扣分
-
-        # ===== 基础分（15分）=====
-        score += 15
-
-        detail["score"] = int(max(0, min(100, score)))
-        return detail
+        return {
+            "score":        raw_score_100,
+            "ma_bullish":   ma_bullish,
+            "above_ma20":   above_ma20,
+            "above_ma60":   above_ma60,
+            "new_high_20d": new_high_20d,
+            "macd_golden":  macd_golden,
+            "rsi_val":      round(float(rsi_val), 1),
+            "vol_ratio":    round(float(vol_ratio), 2),
+            # 透传 scorer 的详细分项（可选用）
+            "detail":       res.get("detail", {}),
+            "gain20":       res.get("gain20"),
+            "ma5":          res.get("ma5"),
+            "ma10":         res.get("ma10"),
+            "ma20":         res.get("ma20"),
+        }
 
     except Exception as e:
         logger.debug(f"技术面评分失败 {stock_code}: {e}")

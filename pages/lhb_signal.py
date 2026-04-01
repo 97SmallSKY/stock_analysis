@@ -245,6 +245,42 @@ def _get_market_sentiment(trade_date: str) -> dict:
     return result
 
 
+def _get_lianban_map(trade_date: str) -> dict[str, int]:
+    """
+    获取指定交易日的连板股 code→连板数 映射（带 session_state 缓存）
+
+    数据来源：AKShare stock_zt_pool_strong_em
+    用途：在 score_tech() 中传入 lianban_count，确保页面与机器人评分一致
+    """
+    key = f"sig_lianban_{trade_date}"
+    cached = _ss_get(key, 600)
+    if cached is not None:
+        return cached
+
+    result: dict[str, int] = {}
+    try:
+        import akshare as ak
+        df_lb = safe_akshare_call(
+            ak.stock_zt_pool_strong_em, date=trade_date,
+            max_retries=2, base_delay=1.0, fallback=None,
+        )
+        if df_lb is not None and not df_lb.empty:
+            code_col = next((c for c in df_lb.columns if "代码" in c), None)
+            lian_col = next((c for c in df_lb.columns if "连板" in c), None)
+            if code_col and lian_col:
+                for _, row in df_lb.iterrows():
+                    c_ = str(row[code_col]).zfill(6)
+                    try:
+                        result[c_] = int(row[lian_col])
+                    except (ValueError, TypeError):
+                        pass
+    except Exception:
+        pass  # 获取失败时静默降级，不影响其他评分
+
+    _ss_set(key, result)
+    return result
+
+
 # ============================================================
 # 评分引擎（委托给 modules/scorer.py 统一实现）
 # ============================================================
@@ -465,16 +501,20 @@ def render():
     if not batch_mode:
         selected_opt = st.selectbox("选择股票", options=options_list, key="sig_stock_sel")
         idx          = options_list.index(selected_opt)
-        _render_single(codes[idx], names[idx], sel_date, top10.iloc[idx], mkt)
+        # 连板池（仅拉取当日，带 session_state 缓存，失败时静默降级）
+        lianban_map = _get_lianban_map(sel_date)
+        _render_single(codes[idx], names[idx], sel_date, top10.iloc[idx], mkt, lianban_map)
     else:
-        _render_batch(codes, names, sel_date, top10, mkt)
+        lianban_map = _get_lianban_map(sel_date)
+        _render_batch(codes, names, sel_date, top10, mkt, lianban_map)
 
 
 # ============================================================
 # 单股详情视图
 # ============================================================
 
-def _render_single(code: str, name: str, trade_date: str, lhb_row: pd.Series, mkt: dict):
+def _render_single(code: str, name: str, trade_date: str, lhb_row: pd.Series, mkt: dict,
+                   lianban_map: dict | None = None):
     st.divider()
     st.subheader(f"③ {name}（{code}）综合决策")
 
@@ -484,7 +524,8 @@ def _render_single(code: str, name: str, trade_date: str, lhb_row: pd.Series, mk
         seat_df  = _get_lhb_seat_detail(code, trade_date)
         hist     = _get_history_winrate(code)
 
-        t_res = _score_tech(kline, trade_date)
+        lianban_count = (lianban_map or {}).get(code, 0)
+        t_res = _score_tech(kline, trade_date, lianban_count=lianban_count)
         f_res = _score_fund(lhb_row, fund_flow, seat_df)
         h_res = _score_history(hist)
         total = t_res["score"] + f_res["score"] + h_res["score"]
@@ -1019,7 +1060,8 @@ def _render_op_checklist(name: str, code: str, advice: dict):
 # 批量评分视图
 # ============================================================
 
-def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame, mkt: dict):
+def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame, mkt: dict,
+                  lianban_map: dict | None = None):
     st.divider()
     st.subheader("③ Top10 批量评分对比")
 
@@ -1033,7 +1075,8 @@ def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame
         hist     = _get_history_winrate(code)
         lhb_row  = top10.iloc[i] if i < len(top10) else pd.Series()
 
-        t_r = _score_tech(kline, trade_date)
+        lianban_count = (lianban_map or {}).get(code, 0)
+        t_r = _score_tech(kline, trade_date, lianban_count=lianban_count)
         f_r = _score_fund(lhb_row, fund_flow, seat_df)
         h_r = _score_history(hist)
         tot = t_r["score"] + f_r["score"] + h_r["score"]
@@ -1065,6 +1108,7 @@ def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame
             "净买强度":  _strength_str,
             "量比":     f"{t_r.get('volume_ratio'):.2f}" if t_r.get("volume_ratio") is not None else "—",
             "近20日涨幅": f"{t_r.get('gain20', 0):+.1f}%" if t_r.get("gain20") is not None else "—",
+            "连板":     f"{lianban_count}板" if lianban_count > 0 else "—",
             "席位亮点": seat_summary,
             "操作建议": adv["action"],
         })

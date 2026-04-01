@@ -187,12 +187,23 @@ def _days_since(trade_date_str: str) -> int:
 
 
 # ── 价格获取 ──────────────────────────────────────────────────────────
-# 注意：以下函数已在 modules/market_data.py 中有统一实现（get_kline_raw / get_t2_prices）
-# trade_runner 内保留私有副本以维持独立性和稳定性，两者行为完全一致。
-# 后续可通过 from modules.market_data import get_kline_raw as _fetch_kline 简化。
 
 def _fetch_kline(code: str, start_date: str, days: int = 5) -> pd.DataFrame | None:
-    """拉取 start_date 起 days 根 K 线（不复权）"""
+    """拉取 start_date 起 days 根 K 线（不复权）
+
+    优先委托给 modules/market_data.get_kline_raw（统一数据层）。
+    若 market_data 模块导入失败则降级为内置实现（保障 trade_runner 独立运行）。
+    """
+    # ── 优先路径：market_data 统一层 ──────────────────────────────────
+    try:
+        from modules.market_data import get_kline_raw
+        result = get_kline_raw(code, start_date, days=days, adjust="")
+        if result is not None and not result.empty:
+            return result
+    except Exception:
+        pass  # 静默降级，不影响交易流程
+
+    # ── 降级路径：内置实现（与 market_data.get_kline_raw 逻辑完全一致）──
     prefix  = "sh" if code.startswith(("6", "9")) else "sz"
     end_dt  = (pd.Timestamp(start_date) + pd.Timedelta(days=days * 2 + 5)).strftime("%Y%m%d")
     symbol  = f"{prefix}{code}"
