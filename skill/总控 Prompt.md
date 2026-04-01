@@ -77,7 +77,7 @@ nohup /root/miniconda3/bin/python -m streamlit run app.py \
 | `MONITOR_MAX_WORKERS` | 4 | 盘中监控并发线程数 |
 | `MONITOR_PRICELOG_MIN_CHANGE_PCT` | 0.2 | price_log 写入最小涨跌幅阈值（%）|
 | `MAX_OPEN_POSITIONS` | 2 | Phase A 每日最多同时开仓数 |
-| `STORAGE_MODE` | postgres | `excel` 时切换为 Excel 存储 |
+| `STORAGE_MODE` | `excel`（本地）/ `postgres`（服务器） | 存储模式切换；**服务器上必须通过环境变量设置为 `postgres`** |
 
 ## cron 任务清单
 
@@ -88,7 +88,7 @@ nohup /root/miniconda3/bin/python -m streamlit run app.py \
 | `5 9 工作日` | 次日 T+1 价格补全 |
 | `*/3 9-15 工作日` | 盘中监控，触发时推飞书（4线程并发，批量写 price_log）|
 | `50 18 工作日` | 盘后 Phase A 选股建仓（`sim_robot_run.py phase_a`）|
-| `40 18 工作日` | 盘后全量数据更新（7步）|
+| `40 18 工作日` | 盘后全量数据更新（8步，含量比补全）|
 | `@reboot` | 服务器重启后 2 分钟自动拉起 |
 
 ---
@@ -102,7 +102,7 @@ nohup /root/miniconda3/bin/python -m streamlit run app.py \
 - LLM 辅助选股（Phase A/B 机器人）
 - 模拟交易机器人 + PostgreSQL 持久化
 
-**技术栈**：Python 3.13 · Streamlit 1.43 · PostgreSQL · SQLAlchemy · AKShare · Plotly · Pandas · Loguru · 可选 LLM
+**技术栈**：Python 3.13.12 · Streamlit 1.55.0 · PostgreSQL · SQLAlchemy · AKShare · Plotly · Pandas · Loguru · 可选 LLM
 
 ---
 
@@ -126,9 +126,11 @@ stock_analysis/
 │   ├── data_fetcher.py         # 行情/情绪/市场温度计
 │   └── analyzer.py             # 回测核心（simulate_with_stoploss）
 ├── scripts/
-│   ├── daily_update.py         # 每日7步数据更新
+│   ├── daily_update.py         # 每日8步数据更新（Step8=量比补全）
 │   ├── sim_robot_run.py        # 模拟炒股机器人（phase_a/phase_b）
-│   └── start_stock.sh          # Streamlit 保活脚本（cron 每5分钟）
+│   ├── start_stock.sh          # Streamlit 保活脚本（cron 每5分钟）
+│   ├── llm_select.py           # 独立 LLM 选股脚本
+│   └── fix_reasons.py          # 历史原因字段回填
 ├── skills/stock_sim_robot/
 │   ├── fetch_signal.py         # 信号评分（净买入强度/对倒检测）
 │   ├── llm_select.py           # LLM 辅助选股
@@ -291,6 +293,8 @@ stock_analysis/
 | price_log 批量写入 | ✅ | `sim_trade_db.log_price_ticks_batch()` |
 | 回测成本扣除（roundtrip_cost） | ✅ | `analyzer.simulate_with_stoploss()` |
 | 页面查询 LIMIT 限流 | ✅ | `pages/sim_trading._load_trades(limit=800)` |
+| 机器人日志 Tab | ✅ | `pages/sim_trading.py` Tab5（级别筛选 / 关键词过滤 / 日志下载）|
+| 量比字段补全（Step8） | ✅ | `scripts/daily_update.step8_fill_volume_ratio()` |
 | 分级降速框架 | ❌ P1 | — |
 | 亏损原因自动归类 | ❌ P1 | — |
 | 营业部动态评分表 | ❌ P2 | — |
@@ -303,18 +307,20 @@ stock_analysis/
 
 **已建表：**
 - `lhb_top10`（含 `流通市值`【万元】、`龙虎榜净买额`、`净买额占总成交比`）
-- `lhb_top10_prices`、`lhb_detail`、`lhb_seat_detail`（含 `解读` 字段）
+- `lhb_top10_prices`（含 `UNIQUE(代码, trade_date)` 约束，防止重复写入）
+- `lhb_detail`、`lhb_seat_detail`（含 `解读` 字段）
 - `market_sentiment`、`lhb_jigou`、`lhb_ggtj`
 - `sim_trades`：
 
   | 字段类型 | 字段名 |
   |---------|-------|
   | 基础信息 | `trade_date, code, name, signal_score, t2_win_rate, seat_tags` |
-  | 买卖信息 | `buy_price, buy_shares, buy_amount, list_price, sell_price, sell_date, sell_type` |
+  | 买卖信息 | `buy_price, buy_source, buy_shares, buy_amount, list_price, sell_price, sell_date, sell_type` |
   | 分批止盈 | `sell1_pct/price/shares/done, sell2_*, sell3_*, stop_loss_pct` |
   | AHS/风控 | `invest_ratio, net_buy_strength_pct, duodao_risk` |
   | 原因说明 | `llm_reason, reason_tech, reason_fund, reason_history, reason_seat` |
   | 状态 | `status`（open/closed/abandoned）, `week_tag` |
+  | 待落地 | `loss_reason`（亏损原因分类，P1 计划中）|
 
 - `sim_summary`（周汇总）、`sim_strategy`（止盈止损配置）
 - `sim_selection_log`、`sim_audit_log`、`sim_trade_events`、`sim_nl_strategy`
@@ -363,7 +369,7 @@ stock_analysis/
 6. 日期统一兼容 YYYYMMDD / datetime / date 字符串
 7. 页面层不写过重逻辑，放到 `modules/` 或 `utils/`
 8. 不引入重量级新依赖（除非明确要求）
-9. Streamlit 1.43+ 兼容，保持 `use_container_width=True` 风格（等版本升级后统一替换）
+9. Streamlit 1.55+ 兼容，保持 `use_container_width=True` 风格（等版本升级后统一替换）
 10. Python 3.13 兼容优先
 11. 新增逻辑考虑 Excel / PostgreSQL 双模式兼容
 12. **禁止 `df.iloc[1]` 或自然日 +1 作为 T+1**（见 ❌ X1）
@@ -408,7 +414,9 @@ Streamlit 侧边栏强依赖带 Emoji 的中文页面名称（如 `🤖 模拟�
 
 ## 3. Streamlit `use_container_width` Deprecation Warning
 
-`pages/` 下共 71 处 `use_container_width=True`。Streamlit 1.43+ 中仍有效，触发 warning。
+`pages/` 下共 71 处 `use_container_width=True`。Streamlit 1.55.0 中仍有效，触发 warning：
+> `use_container_width will be removed after 2025-12-31. For True, use width='stretch'`
+
 **策略：暂不修改**，等版本升级后统一替换（图表类→`width='stretch'`）。
 **新增代码继续沿用 `use_container_width=True`**，保持风格一致。
 
@@ -447,6 +455,30 @@ D2-1 并发改造后，函数签名从 `-> list[dict]` 改为 `-> tuple[list[dic
 ## 9. 东方财富 K 线代理超时（已知，非 Bug）
 
 服务器出口走代理，`push2his.eastmoney.com` 有时连接失败。已有 `utils/retry.safe_akshare_call()` 三次重试，最终 fallback 返回 None。**不是代码 bug，是运行环境限制**。
+
+## 10. `storage.write` append 模式日期去重 Bug（2026-04-01 修复）
+
+**现象**：`storage.write(df, "lhb_top10_prices", mode="append")` 在 Excel 模式下，会按日期做去重，导致**同一天多只股票只保留一条**（同日多股数据丢失）。
+
+**修复**：PostgreSQL 模式下改为 `INSERT ... ON CONFLICT DO NOTHING`；Excel 模式下改为直接追加。
+
+**规则**：向 `lhb_top10_prices` 等**同日多条数据**的表写入时，**禁止使用会触发日期去重的 append 逻辑**，必须明确使用 upsert 或 `ON CONFLICT DO NOTHING`。
+
+## 11. `daily_update.py` Step3 INSERT 逻辑修复（2026-04-01）
+
+**现象**：旧版 step3（T+N 价格补全）直接 INSERT，若同记录已存在会报 UNIQUE 约束冲突报错。
+
+**修复**：改为 `INSERT ... ON CONFLICT DO NOTHING`，幂等执行，支持重复运行不报错。
+
+**规则**：所有批量写入历史价格的操作都必须使用幂等写法（`ON CONFLICT DO NOTHING` 或 `upsert`）。
+
+## 12. SHORT_KLINE 退市/停牌股票不可补全（2026-04-01）
+
+**现象**：backfill 脚本（`backfill_v4`）4057/4064 成功，6 条失败，标注 `SHORT_KLINE`。
+
+**原因**：这 6 条记录对应**退市或长期停牌股票**（如 `300280 紫天退`、`603388 *ST 元成` 等），其 K 线数据不足，无法计算 T+1 买入价。
+
+**规则**：`SHORT_KLINE` 失败属于**正常不可补全情况**，无需处理。补全脚本可以忽略此类记录，不必告警。
 
 ---
 
