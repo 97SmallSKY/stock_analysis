@@ -1198,6 +1198,70 @@ def log_price_tick(
         return False
 
 
+def log_price_ticks_batch(entries: list[dict]) -> int:
+    """
+    批量写入 sim_price_log。
+
+    Args:
+        entries: 每条记录字段与 log_price_tick 参数一致。
+
+    Returns:
+        成功写入条数（失败时返回 0，不抛出异常）
+    """
+    if not entries:
+        return 0
+
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        sql = text("""
+            INSERT INTO sim_price_log
+                (trade_id, code, checked_at, price, price_raw, high, low,
+                 bid1, ask1, change_pct, rsi14, macd_hist,
+                 sell1_price, sell3_price, stop_price, event)
+            VALUES
+                (:trade_id, :code, :checked_at, :price, :price_raw, :high, :low,
+                 :bid1, :ask1, :change_pct, :rsi14, :macd_hist,
+                 :sell1_price, :sell3_price, :stop_price, :event)
+        """)
+
+        params = []
+        now_ts = datetime.now()
+        for item in entries:
+            try:
+                params.append({
+                    "trade_id": int(item["trade_id"]),
+                    "code": str(item["code"]),
+                    "checked_at": item.get("checked_at") or now_ts,
+                    "price": float(item["price"]),
+                    "price_raw": float(item["price_raw"]) if item.get("price_raw") is not None else None,
+                    "high": float(item["high"]) if item.get("high") is not None else None,
+                    "low": float(item["low"]) if item.get("low") is not None else None,
+                    "bid1": float(item["bid1"]) if item.get("bid1") is not None else None,
+                    "ask1": float(item["ask1"]) if item.get("ask1") is not None else None,
+                    "change_pct": float(item["change_pct"]) if item.get("change_pct") is not None else None,
+                    "rsi14": float(item["rsi14"]) if item.get("rsi14") is not None else None,
+                    "macd_hist": float(item["macd_hist"]) if item.get("macd_hist") is not None else None,
+                    "sell1_price": float(item["sell1_price"]) if item.get("sell1_price") is not None else None,
+                    "sell3_price": float(item["sell3_price"]) if item.get("sell3_price") is not None else None,
+                    "stop_price": float(item["stop_price"]) if item.get("stop_price") is not None else None,
+                    "event": str(item["event"]) if item.get("event") is not None else None,
+                })
+            except Exception as _e:
+                logger.debug(f"跳过非法 price_log entry: {_e}")
+
+        if not params:
+            return 0
+
+        with engine.begin() as conn:
+            conn.execute(sql, params)
+        return len(params)
+
+    except Exception as e:
+        logger.warning(f"log_price_ticks_batch 写入失败，count={len(entries)}: {e}")
+        return 0
+
+
 def get_price_log(trade_id: int) -> pd.DataFrame:
     """获取某持仓的全部价格轨迹记录（按时间排序）"""
     try:

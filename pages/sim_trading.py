@@ -158,13 +158,18 @@ def _save_strategy(strategy: dict) -> bool:
 
 # ─── 数据加载 ────────────────────────────────────────────────────────────
 
-def _load_trades() -> pd.DataFrame:
-    """从 PostgreSQL 加载 sim_trades"""
+def _load_trades(limit: int = 800) -> pd.DataFrame:
+    """从 PostgreSQL 加载 sim_trades（默认限制最近 N 条）"""
     try:
         engine = storage._get_engine()
         from sqlalchemy import text
-        sql = text("SELECT * FROM sim_trades ORDER BY created_at DESC")
-        df = pd.read_sql(sql, engine)
+        sql = text("""
+            SELECT *
+            FROM sim_trades
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """)
+        df = pd.read_sql(sql, engine, params={"limit": int(limit)})
         return df
     except Exception as e:
         st.error(f"加载交易记录失败: {e}")
@@ -212,9 +217,21 @@ def render():
     st.title("🤖 模拟炒股 — 交易记录与绩效")
     st.caption("基于龙虎榜主板策略 | **T日**=上榜日 · **T+1**=次日集合竞价买入 · **T+2**=第2交易日分批卖出 | 总账户资金10万元")
 
+    with st.expander("⚙️ 页面性能设置", expanded=False):
+        st.session_state["sim_trading_load_limit"] = st.number_input(
+            "交易记录加载上限",
+            min_value=200,
+            max_value=5000,
+            value=int(st.session_state.get("sim_trading_load_limit", 800) or 800),
+            step=200,
+            help="仅影响首屏加载的数据量，值越大页面越慢。",
+        )
+
     # ── 加载数据 ─────────────────────────────────────────────────────────
     with st.spinner("加载交易数据..."):
-        df = _load_trades()
+        # 先限制查询量，避免首屏全量读表
+        load_limit = int(st.session_state.get("sim_trading_load_limit", 800) or 800)
+        df = _load_trades(limit=load_limit)
         df_summary = _load_summary()
 
     if df.empty:

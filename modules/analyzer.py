@@ -518,6 +518,7 @@ def simulate_with_stoploss(
     stop_loss: float = -0.05,
     stop_profit: float = 0.08,
     max_hold_days: int = 3,
+    roundtrip_cost: float = 0.0025,
 ) -> Optional[dict]:
     """
     模拟带止盈止损的交易
@@ -539,16 +540,23 @@ def simulate_with_stoploss(
 
         if len(df) < 2:
             return None
-        
-        buy_price = float(df.iloc[1]["开盘"])
-        
-        for day_idx in range(1, min(len(df), max_hold_days + 2)):
-            if day_idx > max_hold_days:
+
+        # 语义统一：trade_date=T日（上榜日），T+1（下一根交易日）开盘买入
+        buy_idx = 1
+        buy_price = float(df.iloc[buy_idx]["开盘"])
+
+        for day_idx in range(buy_idx, min(len(df), buy_idx + max_hold_days + 1)):
+            held_days = day_idx - buy_idx + 1
+            if held_days > max_hold_days:
                 sell_price = float(df.iloc[day_idx]["收盘"])
+                gross_ret = (sell_price - buy_price) / buy_price
+                net_ret = gross_ret - roundtrip_cost
                 return {
                     "buy_price": buy_price, "sell_price": sell_price,
-                    "return_rate": (sell_price - buy_price) / buy_price,
-                    "hold_days": day_idx, "exit_reason": "到期卖出",
+                    "return_rate": net_ret,
+                    "return_rate_gross": gross_ret,
+                    "hold_days": held_days, "exit_reason": "到期卖出",
+                    "cost_rate": roundtrip_cost,
                 }
             
             day_open = float(df.iloc[day_idx]["开盘"])
@@ -560,29 +568,53 @@ def simulate_with_stoploss(
             min_return = (day_low - buy_price) / buy_price
             open_return = (day_open - buy_price) / buy_price
             
-            if day_idx > 1 and open_return <= stop_loss:
+            if held_days > 1 and open_return <= stop_loss:
+                gross_ret = open_return
+                net_ret = gross_ret - roundtrip_cost
                 return {"buy_price": buy_price, "sell_price": day_open,
-                        "return_rate": open_return, "hold_days": day_idx,
-                        "exit_reason": "开盘止损"}
+                        "return_rate": net_ret,
+                        "return_rate_gross": gross_ret,
+                        "hold_days": held_days,
+                        "exit_reason": "开盘止损",
+                        "cost_rate": roundtrip_cost}
             if open_return >= stop_profit:
+                gross_ret = open_return
+                net_ret = gross_ret - roundtrip_cost
                 return {"buy_price": buy_price, "sell_price": day_open,
-                        "return_rate": open_return, "hold_days": day_idx,
-                        "exit_reason": "开盘止盈"}
+                        "return_rate": net_ret,
+                        "return_rate_gross": gross_ret,
+                        "hold_days": held_days,
+                        "exit_reason": "开盘止盈",
+                        "cost_rate": roundtrip_cost}
             if min_return <= stop_loss:
+                gross_ret = stop_loss
+                net_ret = gross_ret - roundtrip_cost
                 return {"buy_price": buy_price,
                         "sell_price": buy_price * (1 + stop_loss),
-                        "return_rate": stop_loss, "hold_days": day_idx,
-                        "exit_reason": "盘中止损"}
+                        "return_rate": net_ret,
+                        "return_rate_gross": gross_ret,
+                        "hold_days": held_days,
+                        "exit_reason": "盘中止损",
+                        "cost_rate": roundtrip_cost}
             if max_return >= stop_profit:
+                gross_ret = stop_profit
+                net_ret = gross_ret - roundtrip_cost
                 return {"buy_price": buy_price,
                         "sell_price": buy_price * (1 + stop_profit),
-                        "return_rate": stop_profit, "hold_days": day_idx,
-                        "exit_reason": "盘中止盈"}
+                        "return_rate": net_ret,
+                        "return_rate_gross": gross_ret,
+                        "hold_days": held_days,
+                        "exit_reason": "盘中止盈",
+                        "cost_rate": roundtrip_cost}
         
         sell_price = float(df.iloc[-1]["收盘"])
+        gross_ret = (sell_price - buy_price) / buy_price
+        net_ret = gross_ret - roundtrip_cost
         return {"buy_price": buy_price, "sell_price": sell_price,
-                "return_rate": (sell_price - buy_price) / buy_price,
-                "hold_days": len(df) - 1, "exit_reason": "数据截止"}
+                "return_rate": net_ret,
+                "return_rate_gross": gross_ret,
+                "hold_days": max(1, len(df) - buy_idx), "exit_reason": "数据截止",
+                "cost_rate": roundtrip_cost}
     
     except Exception as e:
         logger.debug(f"止盈止损模拟失败 {stock_code}: {e}")
@@ -605,6 +637,7 @@ def run_backtest(
     min_net_buy: float = 50_000_000,
     min_tech_score: int = 50,
     save: bool = True,
+    roundtrip_cost: float = 0.0025,
 ) -> pd.DataFrame:
     """
     完整策略回测（已优化：进程级 K 线缓存，同一只股只拉一次 API）
@@ -663,7 +696,6 @@ def run_backtest(
             _kline_get(code, prefetch_start, prefetch_end)
             if ci % 10 == 0:
                 logger.info(f"  prefetch [{ci+1}/{len(all_codes)}] {code}")
-            time.sleep(0.3)   # 保护接口，仅 prefetch 阶段节流
     logger.info(f"K 线预拉完成，共缓存 {len(_KLINE_CACHE)} 只")
 
     results = []
@@ -690,6 +722,7 @@ def run_backtest(
                     stop_loss=stop_loss,
                     stop_profit=stop_profit,
                     max_hold_days=max_hold_days,
+                    roundtrip_cost=roundtrip_cost,
                 )
             else:
                 from modules.data_fetcher import get_next_day_return

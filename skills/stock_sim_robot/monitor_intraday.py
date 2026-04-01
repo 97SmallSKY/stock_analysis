@@ -53,6 +53,7 @@ if __name__ == "__main__" or os.environ.get("MONITOR_FORCE_RUN") != "1":
                 sys.exit(0)
 
 from loguru import logger
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 _ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(_ROOT))
@@ -70,7 +71,6 @@ try:
         BATCH_SELL_TIERS,
         get_live_tiers,
         load_strategy,
-        log_price_tick,
         write_audit_log,
         AUDIT_MONITOR_CHECK,
         AUDIT_MONITOR_SELL,
@@ -115,7 +115,7 @@ def _send_feishu(message: str):
         logger.error(f"飞书推送异常: {e}")
 
 
-def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = False) -> list[dict]:
+def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = False) -> tuple[list[dict], dict | None]:
     """
     检查单个持仓是否触发分批卖出或止损条件（v2：使用 effective_price）
 
@@ -132,7 +132,9 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
         dry_run:  True 时只检测，不执行 DB 写入和飞书推送
 
     Returns:
-        触发事件列表，每个 dict 包含 tier/type/price/shares/profit_pct 等
+        (触发事件列表, price_log_entry)
+        - 事件列表：每个 dict 包含 tier/type/price/shares/profit_pct 等
+        - price_log_entry：用于批量写入 sim_price_log 的记录（dry_run 或无效数据时可能为 None）
     """
     if strategy is None:
         strategy = load_strategy()
@@ -152,6 +154,7 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
 
     # events 必须在所有 return 路径之前初始化，防止 UnboundLocalError
     events = []
+    price_log_entry = None
 
     # ── buy_price / buy_shares 空值防御：Phase B 未回填时跳过监控 ────────
     # Phase B（09:35）回填前 buy_price=None/0，此时无法计算涨跌幅，直接跳过
@@ -161,7 +164,7 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
         logger.info(
             f"  ⏳ {name}({code}) buy_price 尚未回填（等待 Phase B），跳过本次监控"
         )
-        return events
+        return events, price_log_entry, price_log_entry, price_log_entry, price_log_entry
     buy_price  = float(_raw_bp)
     buy_shares = int(_raw_bs) if (_raw_bs is not None and _raw_bs != 0) else 0
     if buy_price <= 0:
@@ -182,7 +185,7 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
                 f"  ⏳ [T+1合规] {name}({code}) 买入日={_get_nth_trading_day(trade_date, 1)}，"
                 f"最早可卖={t2_date}，今天={today_str}，跳过（A股T+1制度）"
             )
-            return events  # 买入当天或买入前不允许卖出（events=[]，已初始化）
+            return events, price_log_entry  # 买入当天或买入前不允许卖出（events=[]，已初始化）
     except Exception as _compliance_err:
         logger.warning(f"  T+1合规检查异常（非致命，继续执行）: {_compliance_err}")
 
@@ -405,28 +408,28 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
                         "all_done":     False,
                     })
 
-    # ── 写 price_log（事后补充触发事件字段）────────────────────────
+    # ── 写 price_log（转为 run_monitor 统一批量写入）────────────────
     if not dry_run:
         try:
-            log_price_tick(
-                trade_id=trade_id,
-                code=code,
-                price=current_price,
-                price_raw=raw_last,
-                high=high,
-                low=low,
-                bid1=bid1,
-                ask1=ask1,
-                change_pct=round(change_pct, 4),
-                sell1_price=sell1_price if sell1_price > 0 else None,
-                sell3_price=sell3_price if sell3_price > 0 else None,
-                stop_price=stop_price,
-                event=triggered_event,
-            )
+            price_log_entry = {
+                "trade_id": trade_id,
+                "code": code,
+                "price": current_price,
+                "price_raw": raw_last,
+                "high": high,
+                "low": low,
+                "bid1": bid1,
+                "ask1": ask1,
+                "change_pct": round(change_pct, 4),
+                "sell1_price": sell1_price if sell1_price > 0 else None,
+                "sell3_price": sell3_price if sell3_price > 0 else None,
+                "stop_price": stop_price,
+                "event": triggered_event,
+            }
         except Exception as e:
-            logger.warning(f"  price_log 写入失败 trade_id={trade_id}: {e}")
+            logger.warning(f"  price_log 构建失败 trade_id={trade_id}: {e}")
 
-    return events
+    return events, price_log_entry
 
 
 def run_monitor(dry_run: bool = False) -> list[dict]:
@@ -463,10 +466,18 @@ def run_monitor(dry_run: bool = False) -> list[dict]:
         f"{' [DRY-RUN]' if dry_run else ''}"
     )
     all_events = []
+    price_logs = []
 
-    for _, pos in positions.iterrows():
-        try:
-            # 打印持仓止盈进度摘要（INFO级别，便于日志中快速看出进度）
+    # 并发参数（可通过环境变量调整）
+    max_workers = int(os.getenv("MONITOR_MAX_WORKERS", "4") or "4")
+    # 价格变化阈值（%）：低于阈值且无触发事件时可跳过 price_log，降低写库量
+    change_log_threshold = float(os.getenv("MONITOR_PRICELOG_MIN_CHANGE_PCT", "0.2") or "0.2")
+
+    # 构建任务并发执行（网络 IO 型：行情抓取收益明显）
+    pos_rows = [row for _, row in positions.iterrows()]
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, len(pos_rows)))) as ex:
+        future_map = {}
+        for pos in pos_rows:
             _s1d = bool(pos.get("sell1_done"))
             _s2d = bool(pos.get("sell2_done"))
             _s3d = bool(pos.get("sell3_done"))
@@ -480,14 +491,33 @@ def run_monitor(dry_run: bool = False) -> list[dict]:
                 f"买入价={float(pos.get('buy_price') or 0):.3f} "
                 f"止盈进度: {_progress}"
             )
-            events = check_and_trigger(pos, strategy=strategy, dry_run=dry_run)
-            all_events.extend(events)
+            future_map[ex.submit(check_and_trigger, pos, strategy, dry_run)] = pos
+
+        for fut in as_completed(future_map):
+            pos = future_map[fut]
+            try:
+                events, plog = fut.result()
+                all_events.extend(events)
+                if plog is not None:
+                    # 无事件时按阈值降频；有事件必写
+                    chg = abs(float(plog.get("change_pct") or 0.0))
+                    has_event = bool(plog.get("event"))
+                    if has_event or chg >= change_log_threshold:
+                        price_logs.append(plog)
+            except Exception as e:
+                code = pos.get("code", "?")
+                name = pos.get("name", "?")
+                logger.error(f"  {name}({code}) check_and_trigger 异常: {e}")
+                continue
+
+    # 批量落库 price_log
+    if price_logs and not dry_run:
+        try:
+            from skills.stock_sim_robot.sim_trade_db import log_price_ticks_batch
+            inserted = log_price_ticks_batch(price_logs)
+            logger.debug(f"price_log 批量写入: {inserted}/{len(price_logs)}")
         except Exception as e:
-            code = pos.get("code", "?")
-            name = pos.get("name", "?")
-            logger.error(f"  {name}({code}) check_and_trigger 异常: {e}")
-            # 单只股票异常不影响其他持仓的检查
-            continue
+            logger.warning(f"price_log 批量写入失败: {e}")
 
     if all_events and not dry_run:
         logger.info(f"盘中监控触发 {len(all_events)} 个卖出事件，推送飞书...")
@@ -564,7 +594,7 @@ if __name__ == "__main__":
                   f"档3=+{strategy['sell3_pct']}%")
             print()
             for _, pos in positions.iterrows():
-                events = check_and_trigger(pos, strategy=strategy, dry_run=True)
+                events, _ = check_and_trigger(pos, strategy=strategy, dry_run=True)
                 code  = pos["code"]
                 name  = pos["name"]
                 bp    = float(pos["buy_price"])
