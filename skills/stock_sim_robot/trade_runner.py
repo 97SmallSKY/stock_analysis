@@ -1029,10 +1029,11 @@ def run_phase_b(trade_date: str | None = None) -> dict:
         except Exception as _e:
             logger.debug(f"  写入BUY流水非致命: {_e}")
 
-        # ── 初始化三档分批卖出计划 ───────────────────────────────────────
+        # ── 初始化三档分批卖出计划（传入当前 AHS，动态调节止盈档位）────────────────
         try:
             from skills.stock_sim_robot.sim_trade_db import init_batch_sell
-            init_batch_sell(trade_id, buy_price, buy_shares)
+            init_batch_sell(trade_id, buy_price, buy_shares,
+                            ahs=_phase_b_ahs if "_phase_b_ahs" in dir() else 60)
         except Exception as e:
             logger.warning(f"  初始化分批卖出计划失败: {e}")
 

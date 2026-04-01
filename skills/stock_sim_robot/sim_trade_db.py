@@ -671,26 +671,53 @@ def get_live_tiers(strategy_key: str = "default") -> list[dict]:
 
 
 def init_batch_sell(trade_id: int, buy_price: float, buy_shares: int,
-                    strategy_key: str = "default"):
+                    strategy_key: str = "default", ahs: int = 60):
     """
-    买入成交后初始化三档分批卖出计划（从 DB 读取当前策略）
+    买入成交后初始化三档分批卖出计划（从 DB 读取当前策略，AHS 感知动态微调）
 
     分配股数规则：
       第1档 = floor(buy_shares * ratio1 / 100) * 100（100股取整）
       第2档 = floor(buy_shares * ratio2 / 100) * 100
       第3档 = buy_shares - sell1_shares - sell2_shares（剩余全部）
 
+    AHS 感知止盈档位调整：
+      AHS < 50（修复/危险期）：第1档 +2%（原+3%），第2档 +4%（原+5%）→ 更快锁利
+      AHS ≥ 70（强势期）    ：第3档 +10%（原+8%） → 让利润奔跑
+      其余：使用策略默认值
+
     Args:
         trade_id:     sim_trades 的 id
         buy_price:    买入价
         buy_shares:   买入股数
         strategy_key: 策略键（默认 'default'）
+        ahs:          当前账户健康评分（0~100，默认60=中性）
     """
     try:
         # ── 实时读取策略 ──────────────────────────────────────────────
         strategy = load_strategy(strategy_key)
         tiers    = get_live_tiers(strategy_key)
         stop_pct = strategy["stop_loss_pct"]
+
+        # ── AHS 感知微调止盈档位（不改动比例/股数，只调价格锚点）──────────────
+        t1_pct = tiers[0]["pct"]  # 原第1档涨幅%
+        t2_pct = tiers[1]["pct"]  # 原第2档涨幅%
+        t3_pct = tiers[2]["pct"]  # 原第3档涨幅%
+
+        if ahs < 50:
+            # 修复/危险期：更快锁利，降低前两档目标
+            t1_pct = min(t1_pct, 2.0)   # 第1档 ≤ +2%（原+3%）
+            t2_pct = min(t2_pct, 4.0)   # 第2档 ≤ +4%（原+5%）
+            logger.info(
+                f"  init_batch_sell: AHS={ahs} < 50（保守期），止盈档位下调: "
+                f"+{t1_pct}% / +{t2_pct}% / +{t3_pct}%"
+            )
+        elif ahs >= 70:
+            # 强势期：让利润奔跑，第3档目标上调
+            t3_pct = max(t3_pct, 10.0)  # 第3档 ≥ +10%（原+8%）
+            logger.info(
+                f"  init_batch_sell: AHS={ahs} >= 70（强势期），止盈档位上调: "
+                f"+{t1_pct}% / +{t2_pct}% / +{t3_pct}%"
+            )
 
         engine = _get_engine()
         from sqlalchemy import text
@@ -706,9 +733,9 @@ def init_batch_sell(trade_id: int, buy_price: float, buy_shares: int,
             s2 = 0
             s3 = buy_shares
 
-        p1 = round(buy_price * (1 + tiers[0]["pct"] / 100), 3)
-        p2 = round(buy_price * (1 + tiers[1]["pct"] / 100), 3)
-        p3 = round(buy_price * (1 + tiers[2]["pct"] / 100), 3)
+        p1 = round(buy_price * (1 + t1_pct / 100), 3)
+        p2 = round(buy_price * (1 + t2_pct / 100), 3)
+        p3 = round(buy_price * (1 + t3_pct / 100), 3)
 
         sql = text("""
             UPDATE sim_trades
@@ -723,16 +750,16 @@ def init_batch_sell(trade_id: int, buy_price: float, buy_shares: int,
         with engine.begin() as conn:
             conn.execute(sql, {
                 "id":    trade_id,
-                "p1pct": tiers[0]["pct"], "p1": p1, "s1": s1,
-                "p2pct": tiers[1]["pct"], "p2": p2, "s2": s2,
-                "p3pct": tiers[2]["pct"], "p3": p3, "s3": s3,
+                "p1pct": t1_pct, "p1": p1, "s1": s1,
+                "p2pct": t2_pct, "p2": p2, "s2": s2,
+                "p3pct": t3_pct, "p3": p3, "s3": s3,
                 "slpct": stop_pct,
             })
         logger.info(
-            f"trade_id={trade_id} 分批卖出计划已初始化（策略={strategy_key}）: "
-            f"档1={p1:.3f}(+{tiers[0]['pct']}%,{s1}股) | "
-            f"档2={p2:.3f}(+{tiers[1]['pct']}%,{s2}股) | "
-            f"档3={p3:.3f}(+{tiers[2]['pct']}%,{s3}股) | "
+            f"trade_id={trade_id} 分批卖出计划已初始化（策略={strategy_key}，AHS={ahs}）: "
+            f"档1={p1:.3f}(+{t1_pct}%,{s1}股) | "
+            f"档2={p2:.3f}(+{t2_pct}%,{s2}股) | "
+            f"档3={p3:.3f}(+{t3_pct}%,{s3}股) | "
             f"止损={stop_pct}%"
         )
     except Exception as e:

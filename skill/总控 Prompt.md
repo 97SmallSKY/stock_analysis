@@ -179,10 +179,16 @@ stock_analysis/
 ## 选股与因子规则
 
 4. 核心因子与使用约束：
-   - **净买入强度**：使用"净买入额 / 自由流通市值"标准化，阈值建议 ≥ 0.5%，禁止直接用绝对额排名
+   - **净买入强度**：已落地实现「净买入额 / 流通市值（%）」归一化（数据来自 `lhb_top10.流通市值` 字段，无需额外 API 调用）
+     - 评分阈值：≥2%→15分 / ≥1%→12分 / ≥0.5%→8分 / ≥0.1%→4分
+     - 字段落库：`sim_trades.net_buy_strength_pct`（每笔开仓时写入）
+     - 实现位置：`skills/stock_sim_robot/fetch_signal.py` `_score_fund()`
    - **上榜原因**：优先选"涨幅偏离"（涨停板），回避"振幅偏离"（分歧过大）
    - **机构席位**：买方 ≥ 2 个机构席位为强信号；卖方有机构则降权或排除
-   - **对倒检测**：买卖双方出现同一营业部或关联营业部时，直接剔除该股票
+   - **对倒检测**：已落地实现基于 `lhb_seat_detail.解读` 字段文本分析（无需席位明细 API）
+     - 规则：净买额为负 + 解读含「买」字 → 疑似对倒，-10 分惩罚；机构只卖不买 → -5 分
+     - 字段落库：`sim_trades.duodao_risk BOOLEAN`
+     - 实现位置：`skills/stock_sim_robot/fetch_signal.py` `_score_fund()`
    - 若某因子尚未落库或数据不完整，必须设计兼容降级方案，不得抛错
 
 5. 交易成本（回测中必须扣除，不可省略）：
@@ -198,20 +204,29 @@ stock_analysis/
 ## 风控规则
 
 7. 个股层面风控（强制执行）：
-   - 单只最大仓位：不超过总资金的 25%
+   - 单只最大仓位：不超过总资金的 25%（AHS 低于 50 时自动压缩至 10%）
    - 最大持有期：3 个交易日
 
 8. 组合层面风控：
    - 每日最多持仓 3~4 只
-   - 同日买入上限 2~3 只
+   - 同日买入上限 2~3 只（实现为 `MAX_OPEN_POSITIONS=2`）
    - 至少保留 20% 现金
 
-9. 策略熔断规则：
+9. 策略熔断规则（已代码落地，位于 `sim_trade_db.check_circuit_breaker()`）：
    - 单日亏损 > -3% 总资金：当日停止所有新开仓
-   - 连续亏损 3 天：强制休息 1 个交易日
-   - 周亏损 > 5%：该周剩余交易日停止操作
-   - 月内回撤 > 8%：该月剩余交易日停止操作
-   - 最大回撤 > 15%（从峰值）：全部清仓，策略暂停至少 1 个月
+   - 连续亏损 ≥ 3 笔：跳过今日开仓
+   - 周亏损 > -5%：本周剩余交易日停止操作
+   - 月亏损 > -8%：本月剩余交易日停止操作
+   - 最大回撤 > -15%（从峰值）：全部清仓，建议策略暂停
+   - **手动覆盖**：设置环境变量 `SKIP_CIRCUIT_BREAKER=1` 可绕过（Session 级也可通过 UI 操作）
+
+9b. 账户健康评分（AHS）联动仓位（已代码落地，位于 `sim_trade_db.calc_account_health_score()`）：
+   - AHS（0~100）由 `sim_trade_db.calc_account_health_score()` 计算
+   - 评分因子：近10笔胜率（±25）+ 平均盈亏（±15）+ 连续亏损惩罚（最多-20）+ 今日盈亏（±10）
+   - 仓位系数：AHS≥75→×1.2；60~74→×1.0；50~59→×0.75；30~49→×0.5；<30→×0.0(最低0.1)
+   - 止盈目标：AHS<50 时下调至 ×0.75（更快锁利），AHS≥70 可略微放开（×1.1）
+   - **Phase B 高开放弃阈值**：AHS≥70→9%；AHS≥50→7%；AHS<50→5%
+   - **分批止盈自适应**：AHS<50 时第1档 +2%（原+3%），第2档 +4%（原+5%）；AHS≥70 第3档 +10%（原+8%）
 
 ## 页面与模块约定
 
@@ -238,15 +253,26 @@ stock_analysis/
 # 数据表概况（重要）
 
 主要表包括：
-- lhb_top10
+- lhb_top10（含 `流通市值`、`龙虎榜净买额`、`净买额占总成交比` 字段）
 - lhb_top10_prices
 - lhb_detail
+- lhb_seat_detail（含 `解读` 字段，用于对倒检测）
 - market_sentiment
 - lhb_jigou
 - lhb_ggtj
-- lhb_seat_detail
-- sim_trades
-- sim_summary
+- sim_trades（核心字段如下）
+  - 基础：`trade_date, code, name, signal_score, t2_win_rate, seat_tags`
+  - 买卖：`buy_price, buy_shares, buy_amount, list_price, sell_price, sell_date, sell_type`
+  - 分批止盈：`sell1_pct/price/shares/done, sell2_*, sell3_*, stop_loss_pct`
+  - AHS/风控：`invest_ratio, net_buy_strength_pct, duodao_risk`
+  - 原因：`llm_reason, reason_tech, reason_fund, reason_history, reason_seat`
+  - 状态：`status`（open/closed/abandoned）, `week_tag`
+- sim_summary（周汇总）
+- sim_strategy（止盈止损配置，可页面修改）
+- sim_selection_log（每日选股候选记录）
+- sim_audit_log（Phase A/B 运行审计）
+- sim_trade_events（BUY/SELL 流水）
+- sim_nl_strategy（LLM 草拟自然语言策略）
 
 改进方案中建议新增的表（优先级由高到低）：
 - `dept_performance`：营业部历史表现统计（T+1/T+3/T+5 胜率），月频更新

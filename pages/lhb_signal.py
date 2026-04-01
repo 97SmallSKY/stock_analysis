@@ -497,6 +497,17 @@ def _score_fund(lhb_row: pd.Series, fund_flow: dict, seat_df: pd.DataFrame) -> d
     mf_label = f"{main_net/1e8:+.2f}亿" if main_net is not None else "暂无"
     detail["③主力净流入(5日)"] = f"{mf_score}/8分（{mf_label}）"
 
+    # ── 净买入强度（%市值）：展示用，不影响评分 ──────────────────────
+    _net_buy  = lhb_row.get("龙虎榜净买额")
+    _circ_val = lhb_row.get("流通市值") or lhb_row.get("流通股本")
+    try:
+        _strength_pct = round(float(_net_buy) / float(_circ_val) * 100, 3) \
+            if (_net_buy is not None and _circ_val is not None
+                and pd.notna(_net_buy) and pd.notna(_circ_val)
+                and float(_circ_val) > 0) else None
+    except Exception:
+        _strength_pct = None
+
     return {
         "score": min(score, 35),
         "detail": detail,
@@ -504,6 +515,7 @@ def _score_fund(lhb_row: pd.Series, fund_flow: dict, seat_df: pd.DataFrame) -> d
         "jigou_buy": jigou_buy,
         "famous_buy": famous_buy,
         "has_jigou_sell": has_jigou_sell,
+        "net_buy_strength_pct": _strength_pct,  # 净买入强度（%市值），供页面展示
     }
 
 
@@ -861,6 +873,11 @@ def _render_single(code: str, name: str, trade_date: str, lhb_row: pd.Series, mk
             f"<div style='margin-top:-16px;text-align:center;font-size:.8em;color:{fc}'>{seat_sub}</div>",
             unsafe_allow_html=True
         )
+        # 净买入强度附加展示
+        _f_strength = f_res.get("net_buy_strength_pct")
+        if _f_strength is not None:
+            _s_icon = "🟢" if _f_strength >= 1.0 else ("🟡" if _f_strength >= 0.5 else "🔴")
+            st.caption(f"{_s_icon} 净买入强度：**{_f_strength:.2f}%** 流通市值")
 
     # 历史胜率卡
     with c4:
@@ -1299,6 +1316,17 @@ def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame
         fy_tag = "/".join(f_r.get("famous_buy", []))
         seat_summary = " | ".join(filter(None, [jg_tag, fy_tag])) or "—"
 
+        # 净买入强度：优先从 f_r 取（fetch_signal 已计算），降级从 lhb_row 估算
+        _strength = f_r.get("net_buy_strength_pct")
+        if _strength is None:
+            _net_buy    = lhb_row.get("龙虎榜净买额") or 0
+            _circ_val   = lhb_row.get("流通市值") or lhb_row.get("流通股本") or 0
+            try:
+                _strength = round(float(_net_buy) / float(_circ_val) * 100, 3) if float(_circ_val) > 0 else None
+            except Exception:
+                _strength = None
+        _strength_str = f"{_strength:.2f}%" if _strength is not None else "—"
+
         results.append({
             "排名": i + 1,
             "股票":     f"{name}（{code}）",
@@ -1306,6 +1334,7 @@ def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame
             "技术面":   t_r["score"],
             "资金面":   f_r["score"],
             "历史胜率": h_r["score"],
+            "净买强度":  _strength_str,
             "近20日涨幅": f"{t_r.get('gain20', 0):+.1f}%" if t_r.get("gain20") is not None else "—",
             "席位亮点": seat_summary,
             "操作建议": adv["action"],

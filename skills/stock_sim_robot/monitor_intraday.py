@@ -466,6 +466,20 @@ def run_monitor(dry_run: bool = False) -> list[dict]:
 
     for _, pos in positions.iterrows():
         try:
+            # 打印持仓止盈进度摘要（INFO级别，便于日志中快速看出进度）
+            _s1d = bool(pos.get("sell1_done"))
+            _s2d = bool(pos.get("sell2_done"))
+            _s3d = bool(pos.get("sell3_done"))
+            _progress = (
+                f"档1={'✅' if _s1d else '⏳'} "
+                f"档2={'✅' if _s2d else '⏳'} "
+                f"档3={'✅' if _s3d else '⏳'}"
+            )
+            logger.debug(
+                f"  持仓 {pos.get('name','?')}({pos.get('code','?')}) "
+                f"买入价={float(pos.get('buy_price') or 0):.3f} "
+                f"止盈进度: {_progress}"
+            )
             events = check_and_trigger(pos, strategy=strategy, dry_run=dry_run)
             all_events.extend(events)
         except Exception as e:
@@ -564,18 +578,33 @@ if __name__ == "__main__":
                     from utils.retry import fetch_realtime_quote as _fq
                     q = _fq(code)
                     if q:
-                        ep  = q["effective_price"]
-                        chg = (ep / bp - 1) * 100
-                        s1  = float(pos.get("sell1_price") or 0)
-                        s3  = float(pos.get("sell3_price") or 0)
-                        sl  = round(bp * (1 + strategy["stop_loss_pct"] / 100), 3)
+                        ep   = q["effective_price"]
+                        chg  = (ep / bp - 1) * 100
+                        s1p  = float(pos.get("sell1_price") or 0)
+                        s2p  = float(pos.get("sell2_price") or 0)
+                        s3p  = float(pos.get("sell3_price") or 0)
+                        s1d  = bool(pos.get("sell1_done"))
+                        s2d  = bool(pos.get("sell2_done"))
+                        s3d  = bool(pos.get("sell3_done"))
+                        s1s  = int(pos.get("sell1_shares") or 0)
+                        s2s  = int(pos.get("sell2_shares") or 0)
+                        s3s  = int(pos.get("sell3_shares") or 0)
+                        sl   = round(bp * (1 + strategy["stop_loss_pct"] / 100), 3)
                         bid1 = q.get("bid1", 0)
                         ask1 = q.get("ask1", 0)
                         flag = " [涨停]" if (ask1 == 0 and bid1 > 0 and bid1 > q["last"]) else ""
+                        # 止盈进度展示
+                        def _tier_str(done, price, shares, pct_val):
+                            done_tag = "✅已触发" if done else "⏳待触发"
+                            arrow    = "→" if not done and ep >= price * 0.98 else "  "
+                            return f"{done_tag} {arrow} {price:.3f}(+{pct_val:.1f}%, {shares}股)"
                         print(
                             f"  📈 {name}({code}): 有效价={ep:.3f}{flag} "
                             f"raw_last={q['last']:.3f} 涨幅={chg:+.2f}%\n"
-                            f"     档1触发={s1:.3f}  档3清仓={s3:.3f}  止损线={sl:.3f}"
+                            f"     止损线={sl:.3f} | 分批止盈进度:\n"
+                            f"       第1档: {_tier_str(s1d, s1p, s1s, float(pos.get('sell1_pct') or 3))}\n"
+                            f"       第2档: {_tier_str(s2d, s2p, s2s, float(pos.get('sell2_pct') or 5))}\n"
+                            f"       第3档: {_tier_str(s3d, s3p, s3s, float(pos.get('sell3_pct') or 8))}"
                         )
                     else:
                         print(f"  ❌ {name}({code}): 行情获取失败")
