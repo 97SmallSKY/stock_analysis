@@ -34,7 +34,7 @@
 ```
 远程服务器别名 : jd
 项目目录       : ~/stock_analysis
-Python 解释器  : /root/miniconda3/bin/python  (Python 3.13.x)
+Python 解释器  : /root/miniconda3/bin/python  (Python 3.13.12)
 Streamlit 端口 : 8051
 服务地址       : http://117.72.184.8:8051
 ```
@@ -67,6 +67,12 @@ nohup /root/miniconda3/bin/python -m streamlit run app.py \
 /root/miniconda3/bin/python scripts/daily_update.py
 /root/miniconda3/bin/python scripts/sim_robot_run.py phase_a
 /root/miniconda3/bin/python scripts/sim_robot_run.py phase_b
+
+# 手动触发 T+N 价格补全（盘后或补全历史数据时用）
+# 单日补全：
+/root/miniconda3/bin/python scripts/daily_update.py --step 3
+# 全量 backfill（历史数据补全，成功率提示 SHORT_KLINE = 正常不可补全）：
+/root/miniconda3/bin/python scripts/backfill_v4.py
 ```
 
 ## 关键环境变量
@@ -206,6 +212,10 @@ stock_analysis/
 - `modules/analyzer.simulate_with_stoploss()` 已于 2026-04-01 新增 `roundtrip_cost=0.0025` 参数
   - 返回字段：`return_rate`（净收益）、`return_rate_gross`（毛收益）、`cost_rate`
 
+**关于降级兼容路径：**
+- `fetch_signal._score_fund()` 中保留了旧绝对额阈值作为降级路径（`float_mktcap` 为 0/None 时回退）
+- **禁止删除降级路径**：部分历史记录没有流通市值数据，删除会导致这些史法评分直接巬为 0
+
 **6. 日期与交易日历（非常重要）**
 - T+1 日必须通过交易日历查找，**禁止 `df.iloc[1]` 或自然日 +1**（见 ❌ X1）
 - 技术面打分数据截止 T 日收盘，禁止包含 T+1 数据
@@ -307,7 +317,7 @@ stock_analysis/
 
 **已建表：**
 - `lhb_top10`（含 `流通市值`【万元】、`龙虎榜净买额`、`净买额占总成交比`）
-- `lhb_top10_prices`（含 `UNIQUE(代码, trade_date)` 约束，防止重复写入）
+- `lhb_top10_prices`（含 `UNIQUE(代码, trade_date)` 约束；已新增 `volume_ratio` 字段（相对历史均値的量比））
 - `lhb_detail`、`lhb_seat_detail`（含 `解读` 字段）
 - `market_sentiment`、`lhb_jigou`、`lhb_ggtj`
 - `sim_trades`：
@@ -317,7 +327,7 @@ stock_analysis/
   | 基础信息 | `trade_date, code, name, signal_score, t2_win_rate, seat_tags` |
   | 买卖信息 | `buy_price, buy_source, buy_shares, buy_amount, list_price, sell_price, sell_date, sell_type` |
   | 分批止盈 | `sell1_pct/price/shares/done, sell2_*, sell3_*, stop_loss_pct` |
-  | AHS/风控 | `invest_ratio, net_buy_strength_pct, duodao_risk` |
+  | AHS/风控 | `invest_ratio, net_buy_strength_pct`（净买入强度%）, `duodao_risk`（对倒风险评分）|
   | 原因说明 | `llm_reason, reason_tech, reason_fund, reason_history, reason_seat` |
   | 状态 | `status`（open/closed/abandoned）, `week_tag` |
   | 待落地 | `loss_reason`（亏损原因分类，P1 计划中）|
@@ -492,6 +502,8 @@ D2-1 并发改造后，函数签名从 `-> list[dict]` 改为 `-> tuple[list[dic
 6. 改进因子优先级：净买入强度（已完成）→ 营业部动态评分 → 机构席位细分 → 北向资金验证
 7. 若发现现有逻辑有明显 bug，先指出并给修复建议，不要顺手大改整套架构
 8. 如果要求"直接改代码"，也要先给出改动摘要，再给代码
+9. **禁止删除因子降级兼容路径**：改进因子时，旧逻辑作为 fallback 保留，避免无 float_mktcap 数据的历史记录评分降为 0
+10. **每次部署到服务器后**，必须先停止并重启 Streamlit，再进行页面功能验证
 
 ---
 
