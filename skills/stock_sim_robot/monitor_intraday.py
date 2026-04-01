@@ -273,6 +273,26 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
                     "shares":         buy_shares,
                 },
             )
+            # 写入交易流水
+            try:
+                from skills.stock_sim_robot.sim_trade_db import log_trade_event
+                profit_val  = round((current_price - buy_price) * buy_shares, 2)
+                profit_pct_ = round((current_price / buy_price - 1) * 100, 4)
+                log_trade_event(
+                    trade_id=trade_id,
+                    code=code,
+                    name=name,
+                    event_type="STOP_LOSS",
+                    price=current_price,
+                    shares=buy_shares,
+                    event_date=today_str,
+                    tier=0,
+                    profit=profit_val,
+                    profit_pct=profit_pct_,
+                    note=f"止损触发 涨幅={change_pct:+.2f}% 止损线={stop_loss_pct}%",
+                )
+            except Exception as _le:
+                logger.debug(f"  止损流水记录非致命: {_le}")
 
         events.append({
             "type":       "止损",
@@ -335,6 +355,25 @@ def check_and_trigger(pos_row, strategy: dict | None = None, dry_run: bool = Fal
                                 "is_limit_up":  is_limit_up,
                             },
                         )
+                        # 写入交易流水
+                        try:
+                            from skills.stock_sim_robot.sim_trade_db import log_trade_event
+                            profit_val_  = round((current_price - buy_price) * info["shares"], 2)
+                            log_trade_event(
+                                trade_id=trade_id,
+                                code=code,
+                                name=name,
+                                event_type=f"SELL_T{tier}",
+                                price=current_price,
+                                shares=info["shares"],
+                                event_date=today_str,
+                                tier=tier,
+                                profit=profit_val_,
+                                profit_pct=round(info["profit_pct"] / 100, 4),
+                                note=f"第{tier}档卖出触发 涨幅={change_pct:+.2f}% 目标价={target_price:.3f}",
+                            )
+                        except Exception as _le:
+                            logger.debug(f"  卖出流水记录非致命: {_le}")
                         events.append({
                             "type":         f"分批卖出第{tier}档",
                             "tier":         tier,

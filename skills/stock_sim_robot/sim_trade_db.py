@@ -133,6 +133,8 @@ _ALTER_SIM_TRADES_NEW_COLS = [
     # Phase B 失败计数（跨 cron 持久化）
     "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS phase_b_fail_count INT DEFAULT 0",
     "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS phase_b_alerted    BOOLEAN DEFAULT FALSE",
+    # 需求3：仓位比例（新制=LLM决策，旧记录为NULL=固定10万制）
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS invest_ratio       FLOAT",
 ]
 
 
@@ -481,6 +483,70 @@ def _current_week_tag() -> str:
     today = date.today()
     iso   = today.isocalendar()
     return f"{iso[0]}-W{iso[1]:02d}"
+
+
+# ── 总资金10万制：可用资金查询 ────────────────────────────────────────────
+
+TOTAL_CAPITAL = 100_000.0  # 模拟账户总本金（元）
+
+
+def get_available_capital(total_capital: float = TOTAL_CAPITAL) -> dict:
+    """
+    查询当前可用资金
+
+    计算逻辑：
+      - 已投入 = sum(open 持仓的 buy_amount)（buy_amount 在 Phase A 决策时写入，Phase B 确认后不变）
+      - 可用余额 = total_capital - 已投入
+      - 注意：历史旧记录 buy_amount 可能为 100000（每笔固定制），新记录为实际投入
+
+    Returns:
+        {
+          "total":     100000.0,  # 总本金
+          "invested":   30000.0,  # 已投入（open 持仓合计）
+          "available":  70000.0,  # 可用余额
+          "open_count":       1,  # 当前持仓数
+          "open_positions": [    # 各持仓详情
+            {"code": ..., "name": ..., "cost": ...}
+          ]
+        }
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        df = pd.read_sql(
+            text("SELECT id, code, name, buy_amount FROM sim_trades WHERE status='open'"),
+            engine,
+        )
+        if df.empty:
+            return {
+                "total": total_capital, "invested": 0.0,
+                "available": total_capital, "open_count": 0,
+                "open_positions": [],
+            }
+        invested = float(df["buy_amount"].fillna(0).sum())
+        # 防止极端历史数据导致已投入超过总本金
+        invested = min(invested, total_capital)
+        return {
+            "total":     total_capital,
+            "invested":  round(invested, 2),
+            "available": round(total_capital - invested, 2),
+            "open_count": len(df),
+            "open_positions": [
+                {
+                    "code": str(r["code"]),
+                    "name": str(r["name"]) if r["name"] else "",
+                    "cost": float(r["buy_amount"]) if r["buy_amount"] else 0.0,
+                }
+                for _, r in df.iterrows()
+            ],
+        }
+    except Exception as e:
+        logger.warning(f"get_available_capital 失败，返回满额: {e}")
+        return {
+            "total": total_capital, "invested": 0.0,
+            "available": total_capital, "open_count": 0,
+            "open_positions": [],
+        }
 
 
 # ── 策略配置读写 ──────────────────────────────────────────────────────────
@@ -1448,10 +1514,154 @@ def create_tables():
     """
     ok1 = _ORIGINAL_CREATE_TABLES()
     ok2 = create_extended_tables()
-    return ok1 and ok2
+    ok3 = create_trade_events_table()
+    return ok1 and ok2 and ok3
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# sim_trade_events：交易流水表（每次买入/加仓/分批卖出/止损/平仓各一条独立记录）
+# ══════════════════════════════════════════════════════════════════════════════
+
+_CREATE_SIM_TRADE_EVENTS = """
+CREATE TABLE IF NOT EXISTS sim_trade_events (
+    id          SERIAL PRIMARY KEY,
+    trade_id    INT    NOT NULL,           -- 关联 sim_trades.id
+    code        VARCHAR(6)  NOT NULL,      -- 股票代码
+    name        VARCHAR(20),               -- 股票名称
+    event_type  VARCHAR(20) NOT NULL,      -- BUY / SELL_T1 / SELL_T2 / SELL_T3 / STOP_LOSS / EXPIRED / FORCE_CLOSE
+    event_date  VARCHAR(8),                -- YYYYMMDD
+    event_time  TIMESTAMP,                 -- 精确时间（监控触发时有值）
+    price       FLOAT  NOT NULL,           -- 成交价/参考价
+    shares      INT    NOT NULL,           -- 股数（买入为正，卖出为正股数）
+    amount      FLOAT,                     -- 金额（price × shares）
+    tier        INT,                       -- 分批档次（1/2/3，买入时为0）
+    profit      FLOAT,                     -- 本次操作盈亏（元，卖出时有值）
+    profit_pct  FLOAT,                     -- 本次操作盈亏%（相对买入价）
+    source      VARCHAR(32),               -- 行情来源（sina_realtime 等）
+    note        TEXT,                      -- 备注（如"买入价回填"/"止损触发"）
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_trade_events_trade ON sim_trade_events(trade_id, event_type);
+CREATE INDEX IF NOT EXISTS idx_trade_events_date  ON sim_trade_events(event_date);
+"""
+
+
+def create_trade_events_table() -> bool:
+    """创建 sim_trade_events 表（幂等）"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(text(_CREATE_SIM_TRADE_EVENTS))
+        logger.info("sim_trade_events 表已就绪 ✅")
+        return True
+    except Exception as e:
+        logger.error(f"创建 sim_trade_events 表失败: {e}")
+        return False
+
+
+def log_trade_event(
+    trade_id: int,
+    code: str,
+    name: str,
+    event_type: str,
+    price: float,
+    shares: int,
+    event_date: str | None = None,
+    event_time=None,
+    tier: int | None = None,
+    profit: float | None = None,
+    profit_pct: float | None = None,
+    source: str | None = None,
+    note: str | None = None,
+) -> bool:
+    """
+    写入一条交易流水记录
+
+    event_type 枚举：
+      BUY         - 买入（Phase B 回填买入价时写入）
+      SELL_T1     - 第1档分批卖出（盘中监控触发）
+      SELL_T2     - 第2档分批卖出
+      SELL_T3     - 第3档分批卖出（通常即全部卖出）
+      STOP_LOSS   - 止损清仓
+      EXPIRED     - 持有到期平仓（T+2收盘）
+      FORCE_CLOSE - 超时强制平仓（超过 FORCE_CLOSE_DAYS）
+
+    Returns:
+        True=写入成功，False=失败（降级，不影响主流程）
+    """
+    from datetime import date as _date, datetime as _datetime
+    now = _datetime.now()
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO sim_trade_events
+                    (trade_id, code, name, event_type, event_date, event_time,
+                     price, shares, amount, tier, profit, profit_pct, source, note)
+                VALUES
+                    (:trade_id, :code, :name, :event_type, :event_date, :event_time,
+                     :price, :shares, :amount, :tier, :profit, :profit_pct, :source, :note)
+            """), {
+                "trade_id":   int(trade_id),
+                "code":       str(code),
+                "name":       str(name) if name else None,
+                "event_type": str(event_type),
+                "event_date": str(event_date) if event_date else _date.today().strftime("%Y%m%d"),
+                "event_time": event_time or now,
+                "price":      float(price),
+                "shares":     int(shares),
+                "amount":     round(float(price) * int(shares), 2),
+                "tier":       int(tier) if tier is not None else None,
+                "profit":     round(float(profit), 2) if profit is not None else None,
+                "profit_pct": round(float(profit_pct), 4) if profit_pct is not None else None,
+                "source":     str(source) if source else None,
+                "note":       str(note) if note else None,
+            })
+        return True
+    except Exception as e:
+        logger.warning(f"log_trade_event 失败 trade_id={trade_id} [{event_type}]: {e}")
+        return False
+
+
+def get_trade_events(trade_id: int | None = None, event_date: str | None = None,
+                     limit: int = 200) -> pd.DataFrame:
+    """
+    查询交易流水记录（按时间倒序）
+
+    Args:
+        trade_id:   按持仓过滤（None=全部）
+        event_date: 按日期过滤（YYYYMMDD，None=全部）
+        limit:      最多返回条数
+
+    Returns:
+        DataFrame，按 event_time / created_at 倒序
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        conditions = []
+        params: dict = {"limit": limit}
+        if trade_id is not None:
+            conditions.append("trade_id = :trade_id")
+            params["trade_id"] = int(trade_id)
+        if event_date is not None:
+            conditions.append("event_date = :event_date")
+            params["event_date"] = str(event_date)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        sql = text(
+            f"SELECT * FROM sim_trade_events {where} "
+            f"ORDER BY COALESCE(event_time, created_at) DESC LIMIT :limit"
+        )
+        return pd.read_sql(sql, engine, params=params)
+    except Exception as e:
+        logger.error(f"get_trade_events 失败: {e}")
+        return pd.DataFrame()
 
 
 if __name__ == "__main__":
     # 测试：初始化建表
     logging_ok = create_tables()
+    create_trade_events_table()
     print(f"建表结果: {logging_ok}")

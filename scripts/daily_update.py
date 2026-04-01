@@ -142,7 +142,14 @@ def step3_fill_null_prices():
                         if all(col in raw.columns for col in ["日期", "开盘", "最高", "最低", "收盘"]):
                             return raw[["日期", "开盘", "最高", "最低", "收盘"]].sort_values("日期").reset_index(drop=True)
                 except Exception as e:
-                    logger.warning(f"  [主源/{attempt+1}/2] {c} 拉取失败: {type(e).__name__}")
+                    status_code = getattr(getattr(e, 'response', None), 'status_code', 'N/A')
+                    logger.error(
+                        f"  [新浪日K/{attempt+1}/2] {prefix}{c} 拉取失败 "
+                        f"| 接口=stock_zh_a_daily "
+                        f"| 错误类型={type(e).__name__} "
+                        f"| 状态码={status_code} "
+                        f"| 详情={str(e)[:300]}"
+                    )
                     time.sleep(2)
 
             # 备用源：东方财富 stock_zh_a_hist（支持北交所代码直接传6位）
@@ -157,14 +164,21 @@ def step3_fill_null_prices():
                         if all(col in raw2.columns for col in ["日期", "开盘", "最高", "最低", "收盘"]):
                             return raw2[["日期", "开盘", "最高", "最低", "收盘"]].sort_values("日期").reset_index(drop=True)
                 except Exception as e:
-                    logger.warning(f"  [备用源/{attempt+1}/2] {c} 拉取失败: {type(e).__name__}")
+                    status_code = getattr(getattr(e, 'response', None), 'status_code', 'N/A')
+                    logger.error(
+                        f"  [东方财富日K/{attempt+1}/2] {c} 拉取失败 "
+                        f"| 接口=stock_zh_a_hist "
+                        f"| 错误类型={type(e).__name__} "
+                        f"| 状态码={status_code} "
+                        f"| 详情={str(e)[:300]}"
+                    )
                     time.sleep(2)
 
             # 第三路：北交所可转债直接跳过（没有K线）
             if prefix == "bj" or c[:3] in ("127", "128", "110", "113"):
                 logger.info(f"  {c} 北交所/可转债代码，无K线数据，安全跳过")
             else:
-                logger.warning(f"  {c} @ {trade_date_str}: 两路数据源均失败，跳过")
+                logger.error(f"  {c} @ {trade_date_str}: 两路数据源（新浪+东方财富）均失败，跳过本次价格补全")
             return None
 
         # 向后兼容：保留 fetch_sina 别名

@@ -47,13 +47,15 @@ from skills.stock_sim_robot.sim_trade_db import (
     write_audit_log,
     AUDIT_PHASE_A_SELECT,
     AUDIT_PHASE_A_SKIP,
+    get_available_capital,
+    TOTAL_CAPITAL,
 )
 from skills.stock_sim_robot.fetch_signal import get_mainboard_signals
 from skills.stock_sim_robot.llm_select import select_stock, STOP_LOSS_PCT
 
 MAX_HOLD_DAYS       = 3  # 超过 3 个交易日强制平仓
 MAX_OPEN_POSITIONS  = 2  # 同时最多持仓数量（含 buy_price=None 的待回填仓）
-BUY_AMOUNT          = 100000  # 每笔买入金额（元）
+BUY_AMOUNT          = TOTAL_CAPITAL  # 兼容旧代码（现在总资金即10万）
 
 
 # ── 飞书报警（Phase B 失败时使用）────────────────────────────────────────
@@ -609,6 +611,19 @@ def run_phase_a(trade_date: str | None = None) -> dict:
             pass
     else:
         logger.info(f"开始选股（{today_str}）...")
+        # ── 查询当前可用资金（用于 LLM 仓位决策）─────────────────────
+        try:
+            capital_info = get_available_capital()
+            logger.info(
+                f"账户状况: 总={capital_info['total']:,.0f} "
+                f"已投={capital_info['invested']:,.0f} "
+                f"可用={capital_info['available']:,.0f} "
+                f"持仓={capital_info['open_count']}只"
+            )
+        except Exception as _ce:
+            logger.warning(f"get_available_capital 失败，使用默认满额: {_ce}")
+            capital_info = None
+
         signals = get_mainboard_signals(today_str)
 
         if not signals:
@@ -626,7 +641,7 @@ def run_phase_a(trade_date: str | None = None) -> dict:
             except Exception:
                 pass
         else:
-            selection = select_stock(signals)
+            selection = select_stock(signals, capital_info=capital_info)
 
             if selection.get("code") == "SKIP":
                 logger.info(f"选股结果：SKIP — {selection.get('reason')}")
@@ -664,7 +679,8 @@ def run_phase_a(trade_date: str | None = None) -> dict:
                     "reason_fund":     selection.get("reason_fund", ""),
                     "reason_history":  selection.get("reason_history", ""),
                     "reason_seat":     selection.get("reason_seat", ""),
-                    "buy_amount":      float(BUY_AMOUNT),
+                    "buy_amount":      float(selection.get("invest_amount") or TOTAL_CAPITAL),
+                    "invest_ratio":    selection.get("invest_ratio", 1.0),
                     "week_tag":        week_tag,
                     "status":          "open",
                 }
@@ -880,6 +896,23 @@ def run_phase_b(trade_date: str | None = None) -> dict:
             "new_list_price":   new_list_price,
         })
         logger.info(f"  ✅ {name} 买入价={buy_price}（{buy_source}）, 股数={buy_shares}, 挂牌价={new_list_price}")
+
+        # ── 写入交易流水（BUY 事件）────────────────────────────────────────
+        try:
+            from skills.stock_sim_robot.sim_trade_db import log_trade_event
+            log_trade_event(
+                trade_id=trade_id,
+                code=code,
+                name=name,
+                event_type="BUY",
+                price=buy_price,
+                shares=buy_shares,
+                event_date=_get_nth_trading_day(td, 1),  # T+1 日
+                source=buy_source,
+                note=f"Phase B 回填买入价，挂牌价={new_list_price}",
+            )
+        except Exception as _e:
+            logger.debug(f"  写入BUY流水非致命: {_e}")
 
         # ── 初始化三档分批卖出计划 ───────────────────────────────────────
         try:

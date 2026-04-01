@@ -133,7 +133,7 @@ def _calc_list_price(close_price: float, gain20: float | None) -> tuple[float, f
 
 # ── 规则引擎 fallback ─────────────────────────────────────────────────
 
-def _rule_based_select(signals: list[dict]) -> dict:
+def _rule_based_select(signals: list[dict], capital_info: dict | None = None) -> dict:
     """
     基于规则的选股（LLM 不可用时的 fallback）
 
@@ -217,21 +217,69 @@ def _rule_based_select(signals: list[dict]) -> dict:
         "t2_win_rate":     chosen["t2_win_rate"],
         "seat_tags":       chosen["seat_tags"],
         "from_llm":        False,
+        "invest_ratio":   _default_invest_ratio(capital_info, chosen),
+        "invest_amount":  round(_default_invest_ratio(capital_info, chosen) * TOTAL_CAPITAL, 2),
+        "invest_reason":  "规则引擎默认仓位",
     }
+
+
+def _default_invest_ratio(capital_info: dict | None, chosen: dict) -> float:
+    """
+    规则引擎 fallback 时的默认仓位比例计算
+
+    规则（保守估算）：
+      - 无持仓：0.6
+      - 1只持仓：0.4
+      - 2只及以上持仓：0.3
+      - 信号评分高（≥75）：+0.1
+      - 可用资金 < 20000：最多 0.2
+    """
+    from skills.stock_sim_robot.sim_trade_db import TOTAL_CAPITAL
+    if capital_info is None:
+        return 0.6
+    available  = capital_info.get("available", TOTAL_CAPITAL)
+    open_count = capital_info.get("open_count", 0)
+    score      = float(chosen.get("signal_score") or 0)
+
+    if available < 20000:
+        return 0.2
+    if open_count == 0:
+        base = 0.6
+    elif open_count == 1:
+        base = 0.4
+    else:
+        base = 0.3
+    if score >= 75:
+        base = min(base + 0.1, 1.0)
+    return round(base, 2)
+
+
+TOTAL_CAPITAL = 100_000.0  # 与 sim_trade_db.TOTAL_CAPITAL 保持一致（本模块内部用）
 
 
 # ── LLM 调用 ──────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """你是一位专业的量化交易助手，专注于 A 股主板短线交易（龙虎榜策略）。
 
-你的任务：从今日龙虎榜主板候选信号中，选出 1 只最值得操作的股票，并设定合理的 T+2 挂牌卖出价。
+你的任务：从今日龙虎榜主板候选信号中，选出 1 只最值得操作的股票，并设定合理的 T+2 挂牌卖出价，同时决定本次仓位比例。
 
 策略背景：
 - T 日（今日）：龙虎榜上榜，分析信号
 - T+1 日（明日）：开盘集合竞价买入
 - T+2 日：设挂单卖出（冲高走人策略）
-- 固定买入金额：10万元/笔，股数 = floor(100000/买入价/100)*100
+- 账户总资金：10万元（TOTAL_CAPITAL=100000）
 - 止损线：-5%（T+2收盘价 < 买入价×95% 时自动止损）
+
+💵 仓位管理规则（重要）：
+- 用户消息中会提供当前账户资金状况（available_capital、invested、open_positions）
+- 你需要在 invest_ratio 字段给出本次仓位比例建议（0.0~1.0）
+- 仓位原则：
+  * 无持仓时：可建议 0.6~0.8（较积极）
+  * 有1只持仓时：可建议 0.3~0.5（分散风险）
+  * 可用资金不足 20000 元时：建议 SKIP 或 invest_ratio ≤ 0.2
+  * 信号质量很高（评分≥75且T+2胜率≥60%）时，可上调一档
+  * 信号质量较差（评分<55或涨幅>20%）时，应下调一档
+- invest_amount = TOTAL_CAPITAL × invest_ratio（系统自动计算实际买入金额）
 
 选股核心规则（按权重排序）：
 1. 综合评分越高越好（≥65 优先）
@@ -253,11 +301,13 @@ _SYSTEM_PROMPT = """你是一位专业的量化交易助手，专注于 A 股主
    - 如果历史教训提示某类股票（高位追涨/RSI>80/特定板块）容易亏损，请在选股时降低该类股票的优先级
    - 如果历史教训提示止损模式与某候选股高度相似，请在理由中明确说明规避原因
 
-请输出严格的 JSON 格式（不要包含其他文字），包含4个维度的选股理由：
+请输出严格的 JSON 格式（不要包含其他文字），包含4个维度的选股理由和仓位建议：
 {
   "code": "股票代码（6位）或 SKIP",
   "name": "股票名称",
   "list_price_pct": 目标涨幅（数字，如5.0表示+5%）,
+  "invest_ratio": 仓位比例（0.0~1.0，如0.5表示用50%资金=5万元）,
+  "invest_reason": "仓位决策理由（30字以内，说明为何选择该比例）",
   "reason": "综合选股摘要（60字以内，用于飞书通知）",
   "reason_tech": "技术面分析（包含RSI/均线/MACD/涨幅位置，50字以内）",
   "reason_fund": "资金面分析（包含净买入额/排名/席位质量，50字以内）",
@@ -266,7 +316,7 @@ _SYSTEM_PROMPT = """你是一位专业的量化交易助手，专注于 A 股主
 }"""
 
 
-def _call_llm(signals: list[dict]) -> Optional[dict]:
+def _call_llm(signals: list[dict], capital_info: dict | None = None) -> Optional[dict]:
     """
     调用 LLM 进行选股
 
@@ -274,6 +324,11 @@ def _call_llm(signals: list[dict]) -> Optional[dict]:
       1. OpenClaw ~/.openclaw/openclaw.json 配置的 provider（百炼/qwen 等）
       2. 环境变量 OPENAI_API_KEY / LLM_API_KEY
       3. 返回 None → 规则引擎 fallback
+
+    Args:
+        signals:       主板候选信号列表
+        capital_info:  账户资金状况（可选），格式:
+                       {total, available, invested, open_count, open_positions}
 
     Returns:
         解析后的 dict，或 None（失败时）
@@ -331,9 +386,31 @@ def _call_llm(signals: list[dict]) -> Optional[dict]:
         except Exception as _e:
             logger.debug(f"读取亏损教训非致命: {_e}")
 
+        # ── 注入账户资金状况 ─────────────────────────────────────────────
+        capital_text = ""
+        if capital_info:
+            pos_list = capital_info.get("open_positions", [])
+            pos_desc = "无" if not pos_list else "、".join(
+                f"{p['name']}（{p['code']}）¥{p['cost']:,.0f}"
+                for p in pos_list
+            )
+            capital_text = (
+                f"\n\n【当前账户资金状况】\n"
+                f"- 总资金：¥{capital_info.get('total', 100000):,.0f}\n"
+                f"- 已投入：¥{capital_info.get('invested', 0):,.0f}\n"
+                f"- 可用余额：¥{capital_info.get('available', 100000):,.0f}\n"
+                f"- 当前持仓数：{capital_info.get('open_count', 0)} 只\n"
+                f"- 持仓明细：{pos_desc}\n"
+                f"请据此给出合理的 invest_ratio（仓位比例，0.0~1.0）。"
+            )
+            logger.info(
+                f"资金上下文注入 LLM: 可用={capital_info.get('available'):,.0f}元 "
+                f"持仓={capital_info.get('open_count')}只"
+            )
+
         user_msg = (
-            f"{signal_text}{loss_context}\n\n"
-            f"请根据以上信号数据，选出 1 只最佳主板股票并设定挂牌价。\n"
+            f"{signal_text}{loss_context}{capital_text}\n\n"
+            f"请根据以上信号数据，选出 1 只最佳主板股票并设定挂牌价和仓位比例。\n"
             f"直接输出 JSON，不要包含其他说明文字。"
         )
 
@@ -366,20 +443,26 @@ def _call_llm(signals: list[dict]) -> Optional[dict]:
 
 # ── 主入口 ────────────────────────────────────────────────────────────
 
-def select_stock(signals: list[dict]) -> dict:
+def select_stock(signals: list[dict], capital_info: dict | None = None) -> dict:
     """
     主选股函数：尝试 LLM → 失败则 fallback 到规则引擎
 
     Args:
-        signals: get_mainboard_signals() 的返回值
+        signals:      get_mainboard_signals() 的返回值
+        capital_info: 账户资金状况（来自 get_available_capital()），
+                      用于让 LLM 决策仓位比例
 
     Returns:
         dict，包含：
           code, name, signal_score, close_price,
           list_price, list_price_pct, stop_loss_pct,
+          invest_ratio, invest_amount,
           reason, reason_tech, reason_fund, reason_history, reason_seat,
           t2_win_rate, seat_tags, from_llm
     """
+    from skills.stock_sim_robot.sim_trade_db import TOTAL_CAPITAL
+    total_capital = TOTAL_CAPITAL
+
     if not signals:
         return {
             "code": "SKIP", "name": "无候选", "reason": "今日无主板候选信号",
@@ -387,20 +470,26 @@ def select_stock(signals: list[dict]) -> dict:
             "list_price": 0, "list_price_pct": 0, "stop_loss_pct": STOP_LOSS_PCT,
             "close_price": 0, "signal_score": 0, "from_llm": False,
             "t2_win_rate": None, "seat_tags": [],
+            "invest_ratio": 0.0, "invest_amount": 0.0,
         }
 
     # 尝试 LLM
-    llm_result = _call_llm(signals)
+    llm_result = _call_llm(signals, capital_info=capital_info)
     if llm_result and llm_result.get("code") and llm_result["code"] != "SKIP":
         code = str(llm_result["code"]).zfill(6)
         # 在 signals 中找到对应数据
         chosen = next((s for s in signals if s["code"] == code), None)
         if chosen is None:
             logger.warning(f"LLM 选了 {code} 但在信号列表中找不到，使用规则引擎")
-            return _rule_based_select(signals)
+            return _rule_based_select(signals, capital_info=capital_info)
 
-        list_pct   = float(llm_result.get("list_price_pct", 5.0))
-        list_price = round(chosen["close_price"] * (1 + list_pct / 100), 2)
+        list_pct     = float(llm_result.get("list_price_pct", 5.0))
+        list_price   = round(chosen["close_price"] * (1 + list_pct / 100), 2)
+        invest_ratio = float(llm_result.get("invest_ratio") or 0.6)
+        # 限制在合理范围
+        invest_ratio = max(0.1, min(1.0, invest_ratio))
+        invest_amount = round(total_capital * invest_ratio, 2)
+        logger.info(f"LLM 仓位决策: invest_ratio={invest_ratio} → invest_amount={invest_amount:,.0f}元")
 
         return {
             "code":            chosen["code"],
@@ -410,6 +499,9 @@ def select_stock(signals: list[dict]) -> dict:
             "list_price":      list_price,
             "list_price_pct":  list_pct,
             "stop_loss_pct":   STOP_LOSS_PCT,
+            "invest_ratio":    invest_ratio,
+            "invest_amount":   invest_amount,
+            "invest_reason":   llm_result.get("invest_reason", ""),
             "reason":          llm_result.get("reason", "LLM 选股"),
             "reason_tech":     llm_result.get("reason_tech", ""),
             "reason_fund":     llm_result.get("reason_fund", ""),
@@ -428,11 +520,12 @@ def select_stock(signals: list[dict]) -> dict:
             "list_price": 0, "list_price_pct": 0, "stop_loss_pct": STOP_LOSS_PCT,
             "close_price": 0, "signal_score": 0, "from_llm": True,
             "t2_win_rate": None, "seat_tags": [],
+            "invest_ratio": 0.0, "invest_amount": 0.0,
         }
 
     # Fallback: 规则引擎
     logger.info("使用规则引擎 fallback 选股")
-    return _rule_based_select(signals)
+    return _rule_based_select(signals, capital_info=capital_info)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

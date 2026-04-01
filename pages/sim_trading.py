@@ -114,7 +114,7 @@ def _source_label(src: str) -> str:
 
 def render():
     st.title("🤖 模拟炒股 — 交易记录与绩效")
-    st.caption("基于龙虎榜主板策略 | **T日**=上榜日 · **T+1**=次日集合竞价买入 · **T+2**=第2交易日分批卖出 | 固定10万/笔")
+    st.caption("基于龙虎榜主板策略 | **T日**=上榜日 · **T+1**=次日集合竞价买入 · **T+2**=第2交易日分批卖出 | 总账户资金10万元")
 
     # ── 加载数据 ─────────────────────────────────────────────────────────
     with st.spinner("加载交易数据..."):
@@ -137,6 +137,46 @@ def render():
 
     closed = df[df["status"] == "closed"].copy()
     open_  = df[df["status"] == "open"].copy()
+
+    # ── 账户资金卡片（总资金10万制）─────────────────────────────────────
+    @st.cache_data(ttl=60, show_spinner=False)
+    def _load_capital_info():
+        try:
+            from skills.stock_sim_robot.sim_trade_db import get_available_capital
+            return get_available_capital()
+        except Exception:
+            return {"total": 100000.0, "invested": 0.0, "available": 100000.0, "open_count": 0}
+
+    cap = _load_capital_info()
+    total_profit = closed["profit"].sum() if not closed.empty else 0
+    nav = 1.0 + total_profit / cap["total"] if cap["total"] > 0 else 1.0
+
+    cap_col1, cap_col2, cap_col3, cap_col4 = st.columns(4)
+    cap_col1.metric(
+        "🏦 账户总资金",
+        f"¥{cap['total']:,.0f}",
+        help="模拟账户总本金（固定10万元）",
+    )
+    cap_col2.metric(
+        "💼 已投入仓位",
+        f"¥{cap['invested']:,.0f}",
+        delta=f"{cap['invested']/cap['total']*100:.0f}% 已用" if cap["total"] > 0 else None,
+        help=f"当前 open 持仓合计已用资金（{cap['open_count']} 只）",
+    )
+    cap_col3.metric(
+        "💵 可用余额",
+        f"¥{cap['available']:,.0f}",
+        delta=f"{cap['available']/cap['total']*100:.0f}% 可用" if cap["total"] > 0 else None,
+        delta_color="normal",
+        help="可用于下次买入的资金",
+    )
+    cap_col4.metric(
+        "📊 账户净值",
+        f"{nav:.4f}",
+        delta=f"{(nav-1)*100:+.2f}%" if nav != 1.0 else None,
+        delta_color="normal",
+        help="累计净值 = 1.0 + 历史总盈亏 / 初始10万",
+    )
 
     # ── 顶部统计卡片 ─────────────────────────────────────────────────────
     total  = len(closed)
@@ -371,6 +411,125 @@ def render():
         if not open_.empty:
             st.info(f"📌 当前持仓中 {len(open_)} 笔，买入价等待 T+1 开盘后 09:35 自动回填。")
 
+        # ── 交易流水视图（切换Tab）──────────────────────────────────────
+        st.divider()
+        st.markdown("#### 📜 交易流水（每次买卖各一条记录）")
+        st.caption("每笔买入/分批卖出/止损/平仓单独显示一条流水记录（新交易自动记录，旧历史数据无流水）")
+
+        @st.cache_data(ttl=60, show_spinner=False)
+        def _load_trade_events():
+            try:
+                from skills.stock_sim_robot.sim_trade_db import get_trade_events
+                return get_trade_events(limit=200)
+            except Exception:
+                return pd.DataFrame()
+
+        events_df = _load_trade_events()
+
+        if events_df.empty:
+            st.info("📭 暂无交易流水记录。流水记录从下次 Phase B 买入回填后开始自动生成。")
+        else:
+            # 过滤（可选）
+            evt_filter_col1, evt_filter_col2 = st.columns([2, 2])
+            evt_type_filter = evt_filter_col1.selectbox(
+                "按类型过滤",
+                ["全部", "BUY", "SELL_T1", "SELL_T2", "SELL_T3", "STOP_LOSS", "EXPIRED", "FORCE_CLOSE"],
+                key="evt_type_filter",
+            )
+            evt_code_filter = evt_filter_col2.text_input("按代码/名称过滤", placeholder="如: 002361", key="evt_code_filter")
+
+            disp_ev = events_df.copy()
+            if evt_type_filter != "全部":
+                disp_ev = disp_ev[disp_ev["event_type"] == evt_type_filter]
+            if evt_code_filter.strip():
+                kw = evt_code_filter.strip().lower()
+                disp_ev = disp_ev[
+                    disp_ev["code"].str.lower().str.contains(kw, na=False)
+                    | disp_ev["name"].fillna("").str.lower().str.contains(kw, na=False)
+                ]
+
+            # 美化列名
+            _EVENT_TYPE_ZH = {
+                "BUY":         "💰 买入",
+                "SELL_T1":     "🟡 卖出档1",
+                "SELL_T2":     "🟡 卖出档2",
+                "SELL_T3":     "🟢 卖出档3(清)",
+                "STOP_LOSS":   "🔴 止损",
+                "EXPIRED":     "⚪ 持有到期",
+                "FORCE_CLOSE": "🟠 强制平仓",
+            }
+            disp_ev["操作类型"] = disp_ev["event_type"].map(
+                lambda x: _EVENT_TYPE_ZH.get(str(x), str(x))
+            )
+
+            cols_ev = [c for c in [
+                "event_date", "操作类型", "name", "code", "price", "shares", "amount",
+                "profit", "profit_pct", "note",
+            ] if c in ["event_date", "操作类型", "name", "code", "price", "shares", "amount", "profit", "profit_pct", "note"]
+                and (c in disp_ev.columns or c == "操作类型")]
+
+            # 格式化
+            def _fmt_ev_pct(v):
+                try:
+                    f = float(v)
+                    import math
+                    if math.isnan(f): return "—"
+                    return f"{f:+.2f}%"
+                except: return "—"
+
+            disp_ev2 = disp_ev.copy()
+            if "profit_pct" in disp_ev2.columns:
+                disp_ev2["profit_pct"] = disp_ev2["profit_pct"].apply(_fmt_ev_pct)
+            if "price" in disp_ev2.columns:
+                disp_ev2["price"] = disp_ev2["price"].apply(
+                    lambda v: f"¥{float(v):.3f}" if v is not None else "—"
+                )
+            if "amount" in disp_ev2.columns:
+                disp_ev2["amount"] = disp_ev2["amount"].apply(
+                    lambda v: f"¥{float(v):,.0f}" if v is not None else "—"
+                )
+            if "profit" in disp_ev2.columns:
+                disp_ev2["profit"] = disp_ev2["profit"].apply(
+                    lambda v: f"¥{float(v):+,.2f}" if v is not None else "—"
+                )
+
+            # 重命名列
+            disp_ev2 = disp_ev2.rename(columns={
+                "event_date": "日期", "name": "名称", "code": "代码",
+                "price": "价格", "shares": "股数", "amount": "金额",
+                "profit": "本次盈亏(元)", "profit_pct": "盈亏%", "note": "备注",
+            })
+            final_cols = [c for c in ["日期", "操作类型", "名称", "代码", "价格", "股数", "金额", "本次盈亏(元)", "盈亏%", "备注"] if c in disp_ev2.columns]
+
+            def _ev_color(val):
+                try:
+                    if "%" in str(val):
+                        f = float(str(val).replace("%", "").replace("+", ""))
+                        if f > 0: return "color: #E84040; font-weight: bold"
+                        elif f < 0: return "color: #33CC66; font-weight: bold"
+                except: pass
+                return ""
+
+            st.dataframe(
+                disp_ev2[final_cols].style.map(_ev_color, subset=["盈亏%"] if "盈亏%" in final_cols else []),
+                use_container_width=True,
+                hide_index=True,
+                height=400,
+                column_config={
+                    "日期": st.column_config.TextColumn("🗓️ 日期", width="small"),
+                    "操作类型": st.column_config.TextColumn("📋 类型", width="small"),
+                    "名称": st.column_config.TextColumn("🏷️ 名称", width="small"),
+                    "代码": st.column_config.TextColumn("🔢 代码", width="small"),
+                    "价格": st.column_config.TextColumn("💰 成交价", width="small"),
+                    "股数": st.column_config.NumberColumn("📊 股数", width="small"),
+                    "金额": st.column_config.TextColumn("💵 金额", width="small"),
+                    "本次盈亏(元)": st.column_config.TextColumn("🏦 盈亏(元)", width="small"),
+                    "盈亏%": st.column_config.TextColumn("📈 盈亏%", width="small"),
+                    "备注": st.column_config.TextColumn("📝 备注"),
+                }
+            )
+            st.caption(f"共 {len(disp_ev)} 条流水（已过滤）")
+
     # ═══════════════════════════════════════════════════════════════════
     # TAB 2：净值曲线 + 每笔盈亏柱状图
     # ═══════════════════════════════════════════════════════════════════
@@ -516,11 +675,31 @@ def render():
             )
 
     # ═══════════════════════════════════════════════════════════════════
-    # TAB 4：选股理由详情（4维度展开）
+    # TAB 4：选股理由详情（4维度展开 + 同期龙虎榜Top10对比）
     # ═══════════════════════════════════════════════════════════════════
     with tab4:
         st.subheader("🔍 选股理由与交易复盘详情")
-        st.caption("点击展开查看每笔交易的 AI 逻辑（技术面/资金面/历史胜率/席位分析）及亏损复盘")
+        st.caption("点击展开查看每笔交易的 AI 逻辑（技术面/资金面/历史胜率/席位分析）及同期候选对比")
+
+        # ── 加载 sim_selection_log（候选对比数据）───────────────────────────
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _load_selection_log_all():
+            try:
+                from skills.stock_sim_robot.sim_trade_db import get_selection_log
+                return get_selection_log()
+            except Exception:
+                return pd.DataFrame()
+
+        # ── 加载 lhb_top10（同期龙虎榜完整数据）──────────────────────────────
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _load_lhb_top10_for_compare():
+            try:
+                return storage.read("lhb_top10")
+            except Exception:
+                return pd.DataFrame()
+
+        sel_log_df = _load_selection_log_all()
+        lhb_top10_all = _load_lhb_top10_for_compare()
 
         for _, row in df.sort_values("created_at", ascending=False).iterrows():
             is_open = row["status"] == "open"
@@ -554,37 +733,177 @@ def render():
                 col_d.metric("最终盈亏", pct_str)
                 st.divider()
 
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.markdown("##### 📌 AI 综合摘要")
-                    st.info(row.get("llm_reason") or row.get("list_reason") or "无记录")
+                # ── Tab内子Tab：选股理由 / 候选对比 ──────────────────────
+                inner_tab1, inner_tab2, inner_tab3 = st.tabs(
+                    ["📌 AI选股理由", "🏆 同期候选对比（选股记录）", "📊 同期龙虎榜Top10"]
+                )
 
-                    st.markdown("##### ⚡ 技术面分析")
-                    st.write(row.get("reason_tech") or "—")
+                with inner_tab1:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown("##### 📌 AI 综合摘要")
+                        st.info(row.get("llm_reason") or row.get("list_reason") or "无记录")
 
-                    st.markdown("##### 💰 资金面分析")
-                    st.write(row.get("reason_fund") or "—")
+                        st.markdown("##### ⚡ 技术面分析")
+                        st.write(row.get("reason_tech") or "—")
 
-                with c2:
-                    st.markdown("##### 📊 历史胜率分析")
-                    st.write(row.get("reason_history") or "—")
+                        st.markdown("##### 💰 资金面分析")
+                        st.write(row.get("reason_fund") or "—")
 
-                    st.markdown("##### 🏛 席位深度分析")
-                    st.write(row.get("reason_seat") or "—")
+                    with c2:
+                        st.markdown("##### 📊 历史胜率分析")
+                        st.write(row.get("reason_history") or "—")
 
-                    # 席位标签
-                    seat_raw = row.get("seat_tags")
-                    if seat_raw:
-                        try:
-                            tags = json.loads(seat_raw) if isinstance(seat_raw, str) else seat_raw
-                            if tags:
-                                st.markdown("##### 🏷 关键席位打标")
-                                st.markdown("`" + "` · `".join(tags) + "`")
-                        except Exception:
-                            pass
+                        st.markdown("##### 🏛 席位深度分析")
+                        st.write(row.get("reason_seat") or "—")
 
-                if row.get("buy_source"):
-                    st.caption(f"行情来源: {_source_label(row['buy_source'])}")
+                        # 席位标签
+                        seat_raw = row.get("seat_tags")
+                        if seat_raw:
+                            try:
+                                tags = json.loads(seat_raw) if isinstance(seat_raw, str) else seat_raw
+                                if tags:
+                                    st.markdown("##### 🏷 关键席位打标")
+                                    st.markdown("`" + "` · `".join(tags) + "`")
+                            except Exception:
+                                pass
+
+                    if row.get("buy_source"):
+                        st.caption(f"行情来源: {_source_label(row['buy_source'])}")
+
+                with inner_tab2:
+                    # ── 从 sim_selection_log 取同日候选对比 ───────────────
+                    trade_date_str = str(row.get("trade_date", ""))
+                    trade_id_val   = row.get("id")
+
+                    # 优先按 trade_id 精确匹配，其次按 trade_date 匹配
+                    if not sel_log_df.empty and "trade_date" in sel_log_df.columns:
+                        if trade_id_val and "trade_id" in sel_log_df.columns:
+                            cand_df = sel_log_df[sel_log_df["trade_id"] == int(trade_id_val)].copy()
+                            if cand_df.empty:
+                                cand_df = sel_log_df[sel_log_df["trade_date"].astype(str) == trade_date_str].copy()
+                        else:
+                            cand_df = sel_log_df[sel_log_df["trade_date"].astype(str) == trade_date_str].copy()
+                    else:
+                        cand_df = pd.DataFrame()
+
+                    if cand_df.empty:
+                        st.info("📭 暂无该交易日的候选记录。（旧交易未保存候选对比，新交易会自动记录。）")
+                    else:
+                        cand_df = cand_df.sort_values("rank")
+                        st.caption(f"共 {len(cand_df)} 只候选（排名1=最终入选，其余为落选候选）")
+                        for _, cand_row in cand_df.iterrows():
+                            is_winner = (cand_row.get("rank") == 1)
+                            winner_badge = "✅ **最终入选**" if is_winner else f"❌ 落选（排名 #{cand_row.get('rank', '?')}）"
+                            cand_score = cand_row.get("signal_score")
+                            cand_t2 = cand_row.get("t2_win_rate")
+                            cand_close = cand_row.get("close_price")
+                            score_str = f"{float(cand_score):.0f}分" if cand_score is not None and not pd.isna(cand_score) else "N/A"
+                            t2_str_c = f"{float(cand_t2):.1f}%" if cand_t2 is not None and not pd.isna(cand_t2) else "N/A"
+                            close_str = f"¥{float(cand_close):.3f}" if cand_close is not None and not pd.isna(cand_close) else "N/A"
+                            cand_header = (
+                                f"{winner_badge}  |  {cand_row.get('name', '?')}（{cand_row.get('code', '?')}）"
+                                f"  综合评分={score_str}  T+2胜率={t2_str_c}  T日收盘={close_str}"
+                            )
+                            with st.expander(cand_header, expanded=is_winner):
+                                cc1, cc2 = st.columns(2)
+                                with cc1:
+                                    st.markdown("**⚡ 技术面**")
+                                    st.write(cand_row.get("reason_tech") or "—")
+                                    st.markdown("**💰 资金面**")
+                                    st.write(cand_row.get("reason_fund") or "—")
+                                with cc2:
+                                    st.markdown("**📊 历史胜率**")
+                                    st.write(cand_row.get("reason_history") or "—")
+                                    if cand_row.get("llm_rank_reason"):
+                                        st.markdown("**🤖 AI排名理由**")
+                                        st.info(str(cand_row["llm_rank_reason"]))
+
+                with inner_tab3:
+                    # ── 从 lhb_top10 取同日完整龙虎榜（主板过滤）─────────────
+                    trade_date_str3 = str(row.get("trade_date", ""))
+                    selected_code   = str(row.get("code", ""))
+
+                    if lhb_top10_all is not None and not lhb_top10_all.empty and "trade_date" in lhb_top10_all.columns:
+                        day_lhb = lhb_top10_all[lhb_top10_all["trade_date"].astype(str) == trade_date_str3].copy()
+                    else:
+                        day_lhb = pd.DataFrame()
+
+                    if day_lhb.empty:
+                        st.info(f"📭 {trade_date_str3} 暂无龙虎榜Top10数据（可能数据库尚未收录该日）。")
+                    else:
+                        # 数值清洗
+                        for _nc in ["龙虎榜净买额", "流通市值", "换手率", "涨跌幅"]:
+                            if _nc in day_lhb.columns:
+                                day_lhb[_nc] = pd.to_numeric(day_lhb[_nc], errors="coerce")
+
+                        # 主板标识列
+                        def _is_mb(c):
+                            c = str(c).zfill(6)
+                            if c.startswith("688"): return False
+                            if c.startswith("6"): return True
+                            if c[:3] in ("000", "001", "002", "003"): return True
+                            return False
+
+                        if "代码" in day_lhb.columns:
+                            day_lhb["代码"] = day_lhb["代码"].astype(str).str.zfill(6)
+                            day_lhb["是主板"] = day_lhb["代码"].apply(_is_mb)
+                            day_lhb["是否入选"] = day_lhb["代码"].apply(
+                                lambda c: "✅ 本次入选" if c == selected_code else ""
+                            )
+
+                        # 排序：按净买入额降序
+                        if "龙虎榜净买额" in day_lhb.columns:
+                            day_lhb = day_lhb.sort_values("龙虎榜净买额", ascending=False)
+
+                        st.caption(f"{trade_date_str3} 龙虎榜共 {len(day_lhb)} 条记录，其中主板 {day_lhb.get('是主板', pd.Series(dtype=bool)).sum()} 只")
+
+                        # 展示列选择
+                        lhb_cols_want = ["是否入选", "代码", "名称", "是主板", "龙虎榜净买额", "流通市值", "换手率", "涨跌幅"]
+                        lhb_cols_avail = [c for c in lhb_cols_want if c in day_lhb.columns]
+                        disp_lhb = day_lhb[lhb_cols_avail].copy()
+
+                        # 格式化
+                        if "龙虎榜净买额" in disp_lhb.columns:
+                            disp_lhb["净买入(亿)"] = (disp_lhb["龙虎榜净买额"] / 1e8).round(4)
+                            disp_lhb = disp_lhb.drop(columns=["龙虎榜净买额"])
+                        if "流通市值" in disp_lhb.columns:
+                            disp_lhb["市值(亿)"] = (disp_lhb["流通市值"] / 1e8).round(1)
+                            disp_lhb = disp_lhb.drop(columns=["流通市值"])
+                        if "涨跌幅" in disp_lhb.columns:
+                            disp_lhb["涨跌幅"] = disp_lhb["涨跌幅"].apply(
+                                lambda v: f"{v:+.2f}%" if pd.notna(v) else "—"
+                            )
+                        if "换手率" in disp_lhb.columns:
+                            disp_lhb["换手率"] = disp_lhb["换手率"].apply(
+                                lambda v: f"{v:.2f}%" if pd.notna(v) else "—"
+                            )
+                        if "是主板" in disp_lhb.columns:
+                            disp_lhb["板块"] = disp_lhb["是主板"].apply(lambda v: "✅主板" if v else "创业/科创")
+                            disp_lhb = disp_lhb.drop(columns=["是主板"])
+
+                        # 高亮入选行
+                        def _highlight_selected(row_data):
+                            if row_data.get("是否入选", "") == "✅ 本次入选":
+                                return ["background-color: rgba(232,85,62,0.15)"] * len(row_data)
+                            return [""] * len(row_data)
+
+                        st.dataframe(
+                            disp_lhb.style.apply(_highlight_selected, axis=1),
+                            use_container_width=True,
+                            hide_index=True,
+                            height=400,
+                            column_config={
+                                "是否入选": st.column_config.TextColumn("🏆", width="small"),
+                                "代码": st.column_config.TextColumn("代码", width="small"),
+                                "名称": st.column_config.TextColumn("名称", width="small"),
+                                "板块": st.column_config.TextColumn("板块", width="small"),
+                                "净买入(亿)": st.column_config.NumberColumn("净买入(亿)", format="%.4f"),
+                                "市值(亿)": st.column_config.NumberColumn("市值(亿)", format="%.1f"),
+                                "换手率": st.column_config.TextColumn("换手率", width="small"),
+                                "涨跌幅": st.column_config.TextColumn("涨跌幅", width="small"),
+                            }
+                        )
 
     # ═══════════════════════════════════════════════════════════════════
     # TAB 5：机器人日志查看（含日志级别筛选 + 关键词过滤）
