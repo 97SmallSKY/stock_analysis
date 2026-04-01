@@ -195,6 +195,161 @@ def render():
 
     st.divider()
 
+    # ── 账户健康仪表盘 + 熔断状态告警 ───────────────────────────────────
+    @st.cache_data(ttl=120, show_spinner=False)
+    def _load_health_data():
+        try:
+            from skills.stock_sim_robot.sim_trade_db import (
+                get_performance_stats, calc_account_health_score, check_circuit_breaker
+            )
+            stats = get_performance_stats()
+            ahs   = calc_account_health_score(stats)
+            cb    = check_circuit_breaker(stats=stats)
+            return stats, ahs, cb
+        except Exception as _e:
+            return {}, 60, {"allow_open": True, "level": "ok", "reason": "", "ahs": 60}
+
+    _stats, _ahs, _cb = _load_health_data()
+    _total_closed = _stats.get("total_closed", 0)
+
+    # ── AHS 图标与颜色 ───────────────────────────────────────────────────
+    if _ahs >= 70:
+        _ahs_icon, _ahs_color, _ahs_label = "🟢", "#33CC66", "强势期"
+    elif _ahs >= 50:
+        _ahs_icon, _ahs_color, _ahs_label = "🟡", "#FFCC00", "正常期"
+    elif _ahs >= 30:
+        _ahs_icon, _ahs_color, _ahs_label = "🟠", "#FFA500", "修复期"
+    else:
+        _ahs_icon, _ahs_color, _ahs_label = "🔴", "#E84040", "危险期"
+
+    # ── 熔断告警横幅（顶置，最显眼位置）───────────────────────────────
+    # 判断是否已人工开启 SKIP_CIRCUIT_BREAKER
+    import os as _os
+    _skip_env = _os.getenv("SKIP_CIRCUIT_BREAKER", "0") == "1"
+    # 也支持 session_state 内的临时覆盖（页面开关）
+    _skip_session = st.session_state.get("_skip_cb", False)
+    _cb_skipped   = _skip_env or _skip_session
+
+    if _cb["level"] == "halt" and not _cb_skipped:
+        st.markdown(
+            "<div style='padding:14px 18px;background:#2d0000;border-left:6px solid #E84040;"
+            "border-radius:8px;margin-bottom:12px;'>"
+            "<span style='font-size:1.3em;font-weight:bold;color:#E84040;'>🔴 熔断触发 — 今日 Phase A 已暂停开仓</span><br>"
+            f"<span style='color:#ffaaaa;'>{_cb.get('reason','')}</span><br>"
+            "<span style='color:#888;font-size:0.9em;'>如需人工覆盖，请在下方点击「手动开启开仓」按钮（本次 Session 有效）</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    elif _cb["level"] == "warning" and not _cb_skipped:
+        st.markdown(
+            "<div style='padding:12px 18px;background:#2b2000;border-left:6px solid #FFA500;"
+            "border-radius:8px;margin-bottom:12px;'>"
+            "<span style='font-size:1.1em;font-weight:bold;color:#FFA500;'>⚠️ 健康度预警</span><br>"
+            f"<span style='color:#ffd580;'>{_cb.get('reason','')}</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    elif _cb_skipped:
+        st.markdown(
+            "<div style='padding:10px 18px;background:#002b1a;border-left:6px solid #33CC66;"
+            "border-radius:8px;margin-bottom:12px;'>"
+            "✅ <b style='color:#33CC66;'>熔断已人工覆盖</b> — Phase A 将正常执行开仓逻辑"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── AHS 仪表盘卡片行 ─────────────────────────────────────────────────
+    st.markdown("##### 🏥 账户健康仪表盘")
+    _h1, _h2, _h3, _h4, _h5 = st.columns(5)
+
+    _h1.metric(
+        f"{_ahs_icon} AHS 健康评分",
+        f"{_ahs}/100" if _total_closed >= 3 else "积累中",
+        delta=_ahs_label,
+        delta_color="off",
+        help=(
+            "账户健康评分（AHS），基于近10笔实战绩效计算（0~100）。\n\n"
+            "评分组成：近10笔胜率（±25分） + 平均盈亏（±15分）+ 连续亏损惩罚（最多-20分）+ 今日盈亏修正（±10分）\n\n"
+            "不足5笔时默认60分（中性），随交易积累越来越准确。"
+        ),
+    )
+    _h2.metric(
+        "📊 近10笔胜率",
+        f"{_stats.get('recent_win_rate', 0):.0f}%" if _total_closed >= 1 else "—",
+        delta=f"近{_stats.get('recent_trades', 0)}笔",
+        delta_color="off",
+        help="近10笔已平仓交易中盈利笔数比例",
+    )
+    _cl = _stats.get("consecutive_losses", 0)
+    _h3.metric(
+        "🔴 连续亏损",
+        f"{_cl} 笔" if _total_closed >= 1 else "—",
+        delta="⚠️ 接近熔断" if _cl == 2 else ("连续盈利" if _cl == 0 else None),
+        delta_color="inverse" if _cl >= 2 else "off",
+        help="当前连续亏损笔数。连续亏损 ≥ 3 笔将触发熔断，跳过当日开仓。",
+    )
+    _wpnl = _stats.get("week_pnl", 0.0)
+    _h4.metric(
+        "📅 本周盈亏",
+        f"{_wpnl:+.1f}%" if _total_closed >= 1 else "—",
+        delta="⚠️ 接近熔断阈值" if -5.0 < _wpnl < -3.0 else None,
+        delta_color="inverse" if _wpnl < -3 else "off",
+        help="本周已结算盈亏 / 总资金10万。超过 -5% 触发周熔断。",
+    )
+    # 熔断状态指示器
+    if _cb["level"] == "halt" and not _cb_skipped:
+        _cb_display = "🔴 熔断中"
+        _cb_delta   = "今日暂停开仓"
+    elif _cb["level"] == "warning":
+        _cb_display = "🟡 预警"
+        _cb_delta   = "仓位已压缩"
+    else:
+        _cb_display = "🟢 正常"
+        _cb_delta   = "可正常开仓"
+    _h5.metric(
+        "🛡️ 熔断状态",
+        _cb_display,
+        delta=_cb_delta,
+        delta_color="off",
+        help=(
+            "熔断规则：单日亏损>-3% / 连续亏损≥3笔 / 周亏损>-5% / 月亏损>-8% / 近期最大回撤>-15%\n\n"
+            "触发时 Phase A 自动跳过开仓，可在下方手动覆盖（本次Session有效）。"
+        ),
+    )
+
+    # ── 手动覆盖开关区 ───────────────────────────────────────────────────
+    with st.expander("🔧 风控手动干预（谨慎操作）", expanded=(_cb["level"] == "halt" and not _cb_skipped)):
+        _sw_col1, _sw_col2 = st.columns([3, 2])
+        with _sw_col1:
+            if _cb_skipped:
+                st.success("✅ 熔断当前已被人工覆盖，Phase A 将正常开仓。")
+                if st.button("🔒 重新启用熔断保护", type="secondary"):
+                    st.session_state["_skip_cb"] = False
+                    _load_health_data.clear()
+                    st.rerun()
+            else:
+                st.warning(
+                    "⚠️ 以下操作将绕过熔断保护，允许 Phase A 强制开仓。\n\n"
+                    "**适用场景：** 你已手动评估风险，确认当前市场适合操作（如今日大盘超跌反弹机会）。\n\n"
+                    "**范围：** 仅本次浏览器 Session 有效，关闭页面后自动失效。"
+                )
+                if st.button("🔓 手动开启开仓（覆盖熔断）", type="primary",
+                             disabled=not (_cb["level"] in ("halt", "warning"))):
+                    st.session_state["_skip_cb"] = True
+                    _load_health_data.clear()
+                    st.rerun()
+        with _sw_col2:
+            st.caption("**熔断原因**")
+            st.caption(_cb.get("reason") or "当前无熔断，系统运行正常。")
+            if _total_closed >= 3:
+                st.caption(
+                    f"近10笔均盈亏：{_stats.get('recent_avg_pnl',0):+.2f}%\n\n"
+                    f"本月盈亏：{_stats.get('month_pnl',0):+.1f}%\n\n"
+                    f"最大回撤：{_stats.get('max_drawdown_pct',0):.1f}%"
+                )
+
+    st.divider()
+
     # ── Tabs 布局 ─────────────────────────────────────────────────────────
     tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
         [

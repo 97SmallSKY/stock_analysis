@@ -92,6 +92,66 @@ def render():
         if st.button("📈 龙虎榜盈亏分析", use_container_width=True):
             _nav_to("📈 龙虎榜盈亏分析")
 
+    # ── 模拟账户 AHS 健康仪表盘（首页简版）──────────────────────────────
+    @st.cache_data(ttl=180, show_spinner=False)
+    def _dash_health():
+        try:
+            from skills.stock_sim_robot.sim_trade_db import (
+                get_performance_stats, calc_account_health_score, check_circuit_breaker
+            )
+            s   = get_performance_stats()
+            ahs = calc_account_health_score(s)
+            cb  = check_circuit_breaker(stats=s)
+            return s, ahs, cb
+        except Exception:
+            return {}, 60, {"allow_open": True, "level": "ok", "reason": "", "ahs": 60}
+
+    _ds, _dahs, _dcb = _dash_health()
+
+    # 只在有数据时才展示（不足3笔不渲染，避免干扰首页洁净感）
+    if _ds.get("total_closed", 0) >= 1:
+        st.markdown("#### 🤖 模拟账户健康状态")
+
+        # 熔断告警横幅（首页版，精简）
+        if _dcb["level"] == "halt":
+            st.error(
+                f"🔴 **熔断触发 — Phase A 今日暂停开仓** ｜ {_dcb.get('reason','')}\n\n"
+                "前往 [🤖 模拟炒股](?page=sim_trading) 页面可查看详情并手动覆盖。",
+                icon="🔴",
+            )
+        elif _dcb["level"] == "warning":
+            st.warning(
+                f"⚠️ **账户健康预警** ｜ {_dcb.get('reason','')}\n\n"
+                "AHS 偏低，仓位已自动压缩。",
+                icon="⚠️",
+            )
+
+        # AHS 指标卡片行
+        _dahs_icon = "🟢" if _dahs >= 70 else ("🟡" if _dahs >= 50 else ("🟠" if _dahs >= 30 else "🔴"))
+        _dc1, _dc2, _dc3, _dc4 = st.columns(4)
+        _dc1.metric(
+            f"{_dahs_icon} AHS 健康评分",
+            f"{_dahs}/100",
+            help="账户健康评分：0~100，基于近10笔实战绩效。",
+        )
+        _dc2.metric(
+            "📊 近10笔胜率",
+            f"{_ds.get('recent_win_rate', 0):.0f}%",
+            delta=f"近{_ds.get('recent_trades', 0)}笔",
+            delta_color="off",
+        )
+        _cl_d = _ds.get("consecutive_losses", 0)
+        _dc3.metric(
+            "🔴 连续亏损",
+            f"{_cl_d} 笔",
+            delta="接近熔断" if _cl_d == 2 else None,
+            delta_color="inverse",
+        )
+        _cb_txt = "🔴 熔断中" if _dcb["level"] == "halt" else ("🟡 预警" if _dcb["level"] == "warning" else "🟢 正常")
+        _dc4.metric("🛡️ 熔断状态", _cb_txt)
+
+        st.divider()
+
     st.divider()
 
     # ============================================================
