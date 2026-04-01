@@ -903,7 +903,18 @@ def render():
                         st.write(row.get("reason_tech") or "—")
 
                         st.markdown("##### 💰 资金面分析")
-                        st.write(row.get("reason_fund") or "—")
+                        _r_fund_text = row.get("reason_fund") or "—"
+                        # 补充展示净买强度和对倒风险（若 DB 有此字段）
+                        _strength_val = row.get("net_buy_strength_pct")
+                        _duodao_val   = row.get("duodao_risk")
+                        if _strength_val is not None and not pd.isna(_strength_val):
+                            st.write(_r_fund_text)
+                            _s_icon = "🟢" if float(_strength_val) >= 1.0 else ("🟡" if float(_strength_val) >= 0.5 else "🔴")
+                            st.caption(f"{_s_icon} 净买入强度：**{float(_strength_val):.2f}%** 流通市值")
+                        else:
+                            st.write(_r_fund_text)
+                        if _duodao_val:
+                            st.warning("⚠️ **对倒风险标记**：入选时系统已识别此股存在疑似对倒特征，需谨慎复盘。")
 
                     with c2:
                         st.markdown("##### 📊 历史胜率分析")
@@ -953,12 +964,20 @@ def render():
                             cand_score = cand_row.get("signal_score")
                             cand_t2 = cand_row.get("t2_win_rate")
                             cand_close = cand_row.get("close_price")
+                            cand_strength = cand_row.get("net_buy_strength_pct")
+                            cand_duodao   = cand_row.get("duodao_risk")
                             score_str = f"{float(cand_score):.0f}分" if cand_score is not None and not pd.isna(cand_score) else "N/A"
                             t2_str_c = f"{float(cand_t2):.1f}%" if cand_t2 is not None and not pd.isna(cand_t2) else "N/A"
                             close_str = f"¥{float(cand_close):.3f}" if cand_close is not None and not pd.isna(cand_close) else "N/A"
+                            strength_str_c = (
+                                f" | 净买强度={float(cand_strength):.2f}%"
+                                if cand_strength is not None and not pd.isna(cand_strength) else ""
+                            )
+                            duodao_tag_c = " ⚠️[疑似对倒]" if cand_duodao else ""
                             cand_header = (
                                 f"{winner_badge}  |  {cand_row.get('name', '?')}（{cand_row.get('code', '?')}）"
                                 f"  综合评分={score_str}  T+2胜率={t2_str_c}  T日收盘={close_str}"
+                                f"{strength_str_c}{duodao_tag_c}"
                             )
                             with st.expander(cand_header, expanded=is_winner):
                                 cc1, cc2 = st.columns(2)
@@ -967,6 +986,11 @@ def render():
                                     st.write(cand_row.get("reason_tech") or "—")
                                     st.markdown("**💰 资金面**")
                                     st.write(cand_row.get("reason_fund") or "—")
+                                    if cand_strength is not None and not pd.isna(cand_strength):
+                                        _ci = "🟢" if float(cand_strength) >= 1.0 else ("🟡" if float(cand_strength) >= 0.5 else "🔴")
+                                        st.caption(f"{_ci} 净买入强度：**{float(cand_strength):.2f}%** 市值")
+                                    if cand_duodao:
+                                        st.warning("⚠️ 该候选股存在疑似对倒特征")
                                 with cc2:
                                     st.markdown("**📊 历史胜率**")
                                     st.write(cand_row.get("reason_history") or "—")

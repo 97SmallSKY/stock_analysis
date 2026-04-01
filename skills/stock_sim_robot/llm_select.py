@@ -226,25 +226,28 @@ def _rule_based_select(signals: list[dict], capital_info: dict | None = None) ->
         f"挂牌目标涨幅 +{target_pct}%（基于涨幅位置规则）。"
     )
 
+    _invest_ratio = _default_invest_ratio(capital_info, chosen)
     return {
-        "code":            chosen["code"],
-        "name":            chosen["name"],
-        "signal_score":    chosen["signal_score"],
-        "close_price":     chosen["close_price"],
-        "list_price":      list_price,
-        "list_price_pct":  target_pct,
-        "stop_loss_pct":   STOP_LOSS_PCT,
-        "reason":          reason_summary,       # 综合摘要（飞书用）
-        "reason_tech":     reason_tech,
-        "reason_fund":     reason_fund,
-        "reason_history":  reason_history,
-        "reason_seat":     reason_seat,
-        "t2_win_rate":     chosen["t2_win_rate"],
-        "seat_tags":       chosen["seat_tags"],
-        "from_llm":        False,
-        "invest_ratio":   _default_invest_ratio(capital_info, chosen),
-        "invest_amount":  round(_default_invest_ratio(capital_info, chosen) * TOTAL_CAPITAL, 2),
-        "invest_reason":  "规则引擎默认仓位",
+        "code":                   chosen["code"],
+        "name":                   chosen["name"],
+        "signal_score":           chosen["signal_score"],
+        "close_price":            chosen["close_price"],
+        "list_price":             list_price,
+        "list_price_pct":         target_pct,
+        "stop_loss_pct":          STOP_LOSS_PCT,
+        "reason":                 reason_summary,       # 综合摘要（飞书用）
+        "reason_tech":            reason_tech,
+        "reason_fund":            reason_fund,
+        "reason_history":         reason_history,
+        "reason_seat":            reason_seat,
+        "t2_win_rate":            chosen["t2_win_rate"],
+        "seat_tags":              chosen["seat_tags"],
+        "from_llm":               False,
+        "invest_ratio":           _invest_ratio,
+        "invest_amount":          round(_invest_ratio * TOTAL_CAPITAL, 2),
+        "invest_reason":          "规则引擎默认仓位",
+        "net_buy_strength_pct":   chosen.get("net_buy_strength_pct"),
+        "duodao_risk":            bool(chosen.get("duodao_risk", False)),
     }
 
 
@@ -540,24 +543,26 @@ def select_stock(signals: list[dict], capital_info: dict | None = None) -> dict:
                     f"（LLM仅负责选股+挂牌价）")
 
         return {
-            "code":            chosen["code"],
-            "name":            chosen["name"],
-            "signal_score":    chosen["signal_score"],
-            "close_price":     chosen["close_price"],
-            "list_price":      list_price,
-            "list_price_pct":  list_pct,
-            "stop_loss_pct":   STOP_LOSS_PCT,
-            "invest_ratio":    invest_ratio,
-            "invest_amount":   invest_amount,
-            "invest_reason":   "规则风控",  # 仓位由规则引擎决定，非LLM
-            "reason":          llm_result.get("reason", "LLM 选股"),
-            "reason_tech":     llm_result.get("reason_tech", ""),
-            "reason_fund":     llm_result.get("reason_fund", ""),
-            "reason_history":  llm_result.get("reason_history", ""),
-            "reason_seat":     llm_result.get("reason_seat", ""),
-            "t2_win_rate":     chosen["t2_win_rate"],
-            "seat_tags":       chosen["seat_tags"],
-            "from_llm":        True,
+            "code":                   chosen["code"],
+            "name":                   chosen["name"],
+            "signal_score":           chosen["signal_score"],
+            "close_price":            chosen["close_price"],
+            "list_price":             list_price,
+            "list_price_pct":         list_pct,
+            "stop_loss_pct":          STOP_LOSS_PCT,
+            "invest_ratio":           invest_ratio,
+            "invest_amount":          invest_amount,
+            "invest_reason":          "规则风控",  # 仓位由规则引擎决定，非LLM
+            "reason":                 llm_result.get("reason", "LLM 选股"),
+            "reason_tech":            llm_result.get("reason_tech", ""),
+            "reason_fund":            llm_result.get("reason_fund", ""),
+            "reason_history":         llm_result.get("reason_history", ""),
+            "reason_seat":            llm_result.get("reason_seat", ""),
+            "t2_win_rate":            chosen["t2_win_rate"],
+            "seat_tags":              chosen["seat_tags"],
+            "from_llm":               True,
+            "net_buy_strength_pct":   chosen.get("net_buy_strength_pct"),
+            "duodao_risk":            bool(chosen.get("duodao_risk", False)),
         }
 
     elif llm_result and llm_result.get("code") == "SKIP":

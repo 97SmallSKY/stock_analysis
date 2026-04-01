@@ -135,6 +135,9 @@ _ALTER_SIM_TRADES_NEW_COLS = [
     "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS phase_b_alerted    BOOLEAN DEFAULT FALSE",
     # 需求3：仓位比例（新制=LLM决策，旧记录为NULL=固定10万制）
     "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS invest_ratio       FLOAT",
+    # 信号评分引擎新字段（v2.2 2026-04-01）
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS net_buy_strength_pct FLOAT",        # 净买入强度（%市值）
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS duodao_risk          BOOLEAN DEFAULT FALSE",  # 对倒风险标记
 ]
 
 

@@ -716,23 +716,25 @@ def run_phase_a(trade_date: str | None = None) -> dict:
                 # 写入 DB（buy_price 在 Phase B 回填）
                 seat_tags_str = json_str(selection.get("seat_tags", []))
                 record = {
-                    "trade_date":      today_str,
-                    "code":            selection["code"],
-                    "name":            selection["name"],
-                    "signal_score":    selection["signal_score"],
-                    "t2_win_rate":     selection["t2_win_rate"],
-                    "seat_tags":       seat_tags_str,
-                    "list_price":      selection["list_price"],
-                    "list_reason":     selection.get("reason", ""),
-                    "llm_reason":      selection.get("reason", ""),      # 综合摘要
-                    "reason_tech":     selection.get("reason_tech", ""),
-                    "reason_fund":     selection.get("reason_fund", ""),
-                    "reason_history":  selection.get("reason_history", ""),
-                    "reason_seat":     selection.get("reason_seat", ""),
-                    "buy_amount":      float(selection.get("invest_amount") or TOTAL_CAPITAL),
-                    "invest_ratio":    selection.get("invest_ratio", 1.0),
-                    "week_tag":        week_tag,
-                    "status":          "open",
+                    "trade_date":             today_str,
+                    "code":                   selection["code"],
+                    "name":                   selection["name"],
+                    "signal_score":           selection["signal_score"],
+                    "t2_win_rate":            selection["t2_win_rate"],
+                    "seat_tags":              seat_tags_str,
+                    "list_price":             selection["list_price"],
+                    "list_reason":            selection.get("reason", ""),
+                    "llm_reason":             selection.get("reason", ""),      # 综合摘要
+                    "reason_tech":            selection.get("reason_tech", ""),
+                    "reason_fund":            selection.get("reason_fund", ""),
+                    "reason_history":         selection.get("reason_history", ""),
+                    "reason_seat":            selection.get("reason_seat", ""),
+                    "buy_amount":             float(selection.get("invest_amount") or TOTAL_CAPITAL),
+                    "invest_ratio":           selection.get("invest_ratio", 1.0),
+                    "net_buy_strength_pct":   selection.get("net_buy_strength_pct"),   # 净买入强度（%市值）
+                    "duodao_risk":            bool(selection.get("duodao_risk", False)),  # 对倒风险标记
+                    "week_tag":               week_tag,
+                    "status":                 "open",
                 }
                 new_id = open_trade(record)
                 result["new_trade"] = {
@@ -901,6 +903,69 @@ def run_phase_b(trade_date: str | None = None) -> dict:
             except Exception as _e:
                 logger.debug(f"phase_b_fail 记录非致命: {_e}")
             result["errors"].append({"code": code, "name": name, "error": "T+1开盘价获取失败"})
+            continue
+
+        # ── 高开放弃检查（AHS 感知，防止追高）──────────────────────────────
+        # 拿到 T日收盘价（开仓参考价），估算今日高开幅度
+        _ref_price = float(pos.get("list_price") or 0)
+        # list_price 是挂牌价（约 ref_close×1.05），反推 T日收盘价
+        _t_close = _ref_price / 1.05 if _ref_price > 0 else 0
+        # 若 pos 中有 close_price 字段更好；否则用 buy_amount/buy_shares 近似（可能还是None）
+
+        # 优先从 DB 原始挂牌价反推（T日挂牌价≈close×1.05）
+        if _t_close <= 0:
+            _t_close = buy_price  # 无法反推时用买入价自身（不触发放弃）
+
+        _gap_pct = (buy_price / _t_close - 1) * 100 if _t_close > 0 else 0
+
+        # 读取当前 AHS 来动态设置放弃阈值
+        _abandon_threshold = 7.0  # 默认
+        try:
+            from skills.stock_sim_robot.sim_trade_db import (
+                get_performance_stats, calc_account_health_score,
+            )
+            _phase_b_stats = get_performance_stats()
+            _phase_b_ahs   = calc_account_health_score(_phase_b_stats)
+            if _phase_b_ahs >= 70:
+                _abandon_threshold = 9.0   # 强势期：可以追高至 9%
+            elif _phase_b_ahs >= 50:
+                _abandon_threshold = 7.0   # 正常期：7%
+            else:
+                _abandon_threshold = 5.0   # 疲弱/修复期：更保守
+            logger.info(
+                f"  Phase B 高开阈值: {_abandon_threshold}%（AHS={_phase_b_ahs}）"
+                f"  当前高开幅度: {_gap_pct:+.1f}%"
+            )
+        except Exception as _ahs_e:
+            logger.debug(f"  AHS 读取失败，使用默认阈值 7%: {_ahs_e}")
+
+        if _gap_pct > _abandon_threshold:
+            _abandon_msg = (
+                f"❌ **高开放弃** — {name}（{code}）\n"
+                f"T+1 开盘价 {buy_price:.2f}，高开 **{_gap_pct:+.1f}%**（阈值={_abandon_threshold}%，AHS={_phase_b_ahs if '_phase_b_ahs' in dir() else '?'}）\n"
+                f"撤销本次买入，状态改为 abandoned，不计入亏损"
+            )
+            logger.warning(f"  {_abandon_msg.replace(chr(10), ' ')}")
+            # 将状态改为 abandoned（不写 sell_price，不计盈亏）
+            try:
+                from utils.storage import storage as _stor
+                from sqlalchemy import text as _text
+                _eng = _stor._get_engine()
+                with _eng.begin() as _conn:
+                    _conn.execute(_text("""
+                        UPDATE sim_trades
+                        SET status='abandoned', sell_type='高开放弃',
+                            sell_date=:sd, updated_at=CURRENT_TIMESTAMP
+                        WHERE id=:id
+                    """), {"id": trade_id, "sd": date.today().strftime("%Y%m%d")})
+                logger.info(f"  trade_id={trade_id} 状态已改为 abandoned")
+            except Exception as _ab_e:
+                logger.error(f"  abandoned 状态更新失败: {_ab_e}")
+            try:
+                _send_feishu_alert(_abandon_msg)
+            except Exception:
+                pass
+            result["errors"].append({"code": code, "name": name, "error": f"高开{_gap_pct:+.1f}%超过阈值{_abandon_threshold}%，已放弃买入"})
             continue
 
         buy_shares = int(BUY_AMOUNT / buy_price / 100) * 100
