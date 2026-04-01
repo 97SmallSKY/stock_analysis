@@ -352,20 +352,29 @@ def _score_tech(kline: pd.DataFrame, trade_date: str) -> dict:
     macd_label = f"DIF={macd_val}, HIST={hist_val}" if macd_val is not None else "数据不足"
     detail["③MACD金叉/多头"] = f"{macd_score}/10分（{macd_label}）"
 
-    # ── ④ 量能放大（10分）───────────────────────────────────
-    vol_score = 0
-    ratio     = 1.0
-    if volume is not None and len(volume) >= 20:
-        vol5  = volume[-5:].mean()
-        vol20 = volume[-20:].mean()
-        ratio = vol5 / vol20 if vol20 > 0 else 1.0
-        if ratio >= 2.0:   vol_score = 10
-        elif ratio >= 1.5: vol_score = 8
-        elif ratio >= 1.2: vol_score = 6
-        elif ratio >= 1.0: vol_score = 4
-        else:              vol_score = 1
+    # ── ④ 量比/量能（10分）：当日成交量 / 近5日均量（标准量比定义）────
+    vol_score    = 0
+    volume_ratio = None
+    if volume is not None and len(volume) >= 6:
+        vol5_avg = volume[-6:-1].mean()  # 前5日均量（排除今日）
+        if vol5_avg > 0:
+            volume_ratio = round(float(volume[-1]) / float(vol5_avg), 2)
+            if volume_ratio >= 3.0:   vol_score = 10   # 极度放量
+            elif volume_ratio >= 2.0: vol_score = 8    # 明显放量
+            elif volume_ratio >= 1.5: vol_score = 6    # 温和放量
+            elif volume_ratio >= 1.0: vol_score = 4    # 平量
+            else:                     vol_score = 1    # 缩量
+        elif volume is not None and len(volume) >= 20:
+            # 前5日均量为0（停牌复牌等），降级用20日均量
+            vol20 = volume[-20:].mean()
+            if vol20 > 0:
+                volume_ratio = round(float(volume[-1]) / float(vol20), 2)
+                if volume_ratio >= 2.0: vol_score = 8
+                elif volume_ratio >= 1.5: vol_score = 6
+                else: vol_score = 3
     raw_score += vol_score
-    detail["④量能放大"] = f"{vol_score}/10分（近5日均量/20日均量={ratio:.2f}）"
+    vr_str = f"{volume_ratio:.2f}" if volume_ratio is not None else "N/A"
+    detail["④量比"] = f"{vol_score}/10分（量比={vr_str}，今日量/近5日均量）"
 
     # ── ⑤ 近20日涨幅位置（10分）────────────────────────────
     gain20_score = 0
@@ -407,12 +416,13 @@ def _score_tech(kline: pd.DataFrame, trade_date: str) -> dict:
     normalized = round(raw_score / total_possible * 40)
 
     return {
-        "score": min(normalized, 40),
-        "raw_score": raw_score,
-        "detail": detail,
-        "rsi": rsi_val,
-        "gain20": gain20_val,
-        "macd_score": macd_score,
+        "score":        min(normalized, 40),
+        "raw_score":    raw_score,
+        "detail":       detail,
+        "rsi":          rsi_val,
+        "gain20":       gain20_val,
+        "macd_score":   macd_score,
+        "volume_ratio": volume_ratio,
         "ma5":  round(float(ma5[last]),  3) if not np.isnan(ma5[last])  else None,
         "ma10": round(float(ma10[last]), 3) if not np.isnan(ma10[last]) else None,
         "ma20": round(float(ma20[last]), 3) if not np.isnan(ma20[last]) else None,
@@ -497,25 +507,57 @@ def _score_fund(lhb_row: pd.Series, fund_flow: dict, seat_df: pd.DataFrame) -> d
     mf_label = f"{main_net/1e8:+.2f}亿" if main_net is not None else "暂无"
     detail["③主力净流入(5日)"] = f"{mf_score}/8分（{mf_label}）"
 
-    # ── 净买入强度（%市值）：展示用，不影响评分 ──────────────────────
-    _net_buy  = lhb_row.get("龙虎榜净买额")
-    _circ_val = lhb_row.get("流通市值") or lhb_row.get("流通股本")
+    # ── 净买入强度（%市值）────────────────────────────────────────────
+    # 与 fetch_signal.py 评分逻辑统一：优先用流通市值归一化，降级用绝对额
+    _net_buy   = float(lhb_row.get("龙虎榜净买额") or 0)
+    _circ_val  = lhb_row.get("流通市值") or lhb_row.get("流通股本")
+    _strength_pct: float | None = None
     try:
-        _strength_pct = round(float(_net_buy) / float(_circ_val) * 100, 3) \
-            if (_net_buy is not None and _circ_val is not None
-                and pd.notna(_net_buy) and pd.notna(_circ_val)
-                and float(_circ_val) > 0) else None
+        if _circ_val is not None and pd.notna(_circ_val) and float(_circ_val) > 0:
+            _strength_pct = round(_net_buy / float(_circ_val) * 100, 3)
     except Exception:
-        _strength_pct = None
+        pass
+
+    # 净买强度补充评分（替换原①绝对额）：若流通市值可用则重算 detail
+    # 注意：页面评分历史用绝对额计算，这里已改为与机器人一致的归一化方式
+    if _strength_pct is not None:
+        # 重算①龙虎榜净买额评分（用净买强度替代绝对额，与 fetch_signal.py 一致）
+        if _strength_pct >= 2.0:   _nb_score2 = 15
+        elif _strength_pct >= 1.0: _nb_score2 = 12
+        elif _strength_pct >= 0.5: _nb_score2 = 8
+        elif _strength_pct >= 0.1: _nb_score2 = 4
+        elif _strength_pct > 0:    _nb_score2 = 1
+        else:                      _nb_score2 = 0
+        # 更新评分差值（新评分 - 旧绝对额评分）
+        _old_nb = next(
+            (int(v.split("/")[0]) for k, v in detail.items() if k.startswith("①")), 0
+        )
+        score = score - _old_nb + _nb_score2
+        detail["①净买入强度"] = (
+            f"{_nb_score2}/15分（{_strength_pct:.2f}% 流通市值，净买额{_net_buy/1e8:+.2f}亿）"
+        )
+        del detail["①龙虎榜净买额"]
+
+    # 对倒检测（与 fetch_signal.py 一致，基于解读字段文本）
+    _duodao_risk = False
+    _jieda = str(lhb_row.get("解读", "") or "")
+    if _net_buy < 0 and ("买" in _jieda):
+        _duodao_risk = True
+        score = max(score - 10, 0)
+        detail["⚠️对倒风险"] = f"-10分（净买额为负但解读含买方，疑似对倒：{_jieda[:30]}）"
+    elif has_jigou_sell and not _duodao_risk:
+        score = max(score - 5, 0)
+        detail["⚠️机构卖出"] = "-5分（机构只卖不买）"
 
     return {
-        "score": min(score, 35),
-        "detail": detail,
-        "seat_tags": seat_tags,
-        "jigou_buy": jigou_buy,
-        "famous_buy": famous_buy,
-        "has_jigou_sell": has_jigou_sell,
-        "net_buy_strength_pct": _strength_pct,  # 净买入强度（%市值），供页面展示
+        "score":               min(max(score, 0), 35),
+        "detail":              detail,
+        "seat_tags":           seat_tags,
+        "jigou_buy":           jigou_buy,
+        "famous_buy":          famous_buy,
+        "has_jigou_sell":      has_jigou_sell,
+        "net_buy_strength_pct": _strength_pct,
+        "duodao_risk":         _duodao_risk,
     }
 
 
@@ -657,8 +699,8 @@ def render():
 
 | 维度 | 权重 | 核心指标 |
 |------|------|----------|
-| 🔵 技术面 | 40 分 | 均线趋势（多头排列）、RSI(14)、MACD 金叉/死叉、近 20 日涨幅位置、量能放大 |
-| 🟢 资金面 | 35 分 | 龙虎榜净买入额（亿元）、机构买方席位数、知名游资上榜数、净买入占成交额比例 |
+| 🔵 技术面 | 40 分 | 均线趋势（多头排列）、RSI(14)、MACD 金叉/死叉、量比、近 20 日涨幅位置 |
+| 🟢 资金面 | 35 分 | 净买入强度（%流通市值）、机构买方席位数、知名游资上榜数、主力5日净流入 |
 | 🟡 历史胜率 | 25 分 | 该股历史上榜后 T+2 胜率、T+5 胜率、样本量（≥5次更可信） |
 
 ---
@@ -681,6 +723,9 @@ def render():
 - **T+1 日** = 上榜次日（实际买入日，集合竞价参与）
 - **T+2 日** = 上榜后第 2 个交易日（挂单卖出日）
 - **净买入额**：龙虎榜买方金额 - 卖方金额（正值表示主力净买入）
+- **净买入强度**：净买入额 / 流通市值 × 100%。归一化后可公平比较大小盘股票。≥ 1% 为强度信号；≥ 2% 为极强信号
+- **量比**：当日成交量 / 近 5 个交易日平均成交量（标准量比定义）。量比 > 3 为极度放量；> 2 为明显放量；≈ 1 为平量；< 1 为缩量
+- **对倒检测**：当龙虎榜净买额为负但解读含"买"字时，疑似对倒（一方卖出一方买入制造成交量假象），评分惩罚 -10 分
 - **市场情绪**：涨停家数 ≥ 30 且跌停 ≤ 5 为情绪良好，否则建议半仓
 
 > ⚠️ **免责声明**：以上评分与分析仅为量化辅助工具，不构成任何投资建议。股市有风险，投资需谨慎。
@@ -838,7 +883,7 @@ def _render_single(code: str, name: str, trade_date: str, lhb_row: pd.Series, mk
                 "• **均线多头排列**：价格 > MA5 > MA10 > MA20，说明短中长期趋势一致向上\n"
                 "• **RSI**（相对强弱指数）：衡量股票超买/超卖程度。45~70为健康强势区，>80超买（可能回调），<30超卖\n"
                 "• **MACD金叉**：短期均线上穿长期均线，是买入信号；红柱放大说明上涨动能增强\n"
-                "• **量能放大**：近5日平均成交量 > 近20日均量，说明资金积极入场\n"
+                "• **量比**：当日成交量 / 近5个交易日均成交量（标准量比定义）。>3极度放量，>2明显放量，≈1平量，<1缩量\n"
                 "• **近20日涨幅**：涨幅<10%为低位蓄力（高分），>30%为高位追涨（低分）\n"
                 "• **K线形态**：大阳线（实体占比>60%）得满分，长上影线（主力派发）扣分"
             ),
@@ -848,6 +893,15 @@ def _render_single(code: str, name: str, trade_date: str, lhb_row: pd.Series, mk
             f"{'MACD金叉✅' if macd_s>=10 else ('多头延续' if macd_s>=8 else ('弱多' if macd_s>=5 else 'MACD空头⚠️'))}"
             f"</div>", unsafe_allow_html=True
         )
+        # 量比展示
+        _vr = t_res.get("volume_ratio")
+        if _vr is not None:
+            if _vr >= 3.0:   _vr_icon, _vr_label = "🔴", f"量比 {_vr:.2f} 极度放量"
+            elif _vr >= 2.0: _vr_icon, _vr_label = "🟡", f"量比 {_vr:.2f} 明显放量"
+            elif _vr >= 1.5: _vr_icon, _vr_label = "🟢", f"量比 {_vr:.2f} 温和放量"
+            elif _vr >= 1.0: _vr_icon, _vr_label = "➖", f"量比 {_vr:.2f} 平量"
+            else:            _vr_icon, _vr_label = "🔵", f"量比 {_vr:.2f} 缩量"
+            st.caption(f"{_vr_icon} {_vr_label}")
 
     # 资金面卡
     with c3:
@@ -944,12 +998,16 @@ def _render_single(code: str, name: str, trade_date: str, lhb_row: pd.Series, mk
                 "①均线多头排列": "MA5/MA10/MA20 三条均线依次递减，价格在 MA5 之上，代表趋势向上",
                 "②RSI健康区间":  "RSI（相对强弱指数）衡量超买/超卖。45~70为强势健康区，>80超买，<30超卖",
                 "③MACD金叉/多头": "MACD 是趋势指标。金叉=买入信号，红柱放大=上涨动能增强",
-                "④量能放大":     "近5日均成交量 / 近20日均成交量，>1.5倍说明资金活跃度明显提升",
+                "④量比":         "量比 = 当日成交量 / 近5个交易日均成交量（标准量比定义）。>3极度放量，>2明显放量，≈1平量，<1缩量",
+                "④量能放大":     "量比 = 当日成交量 / 近5个交易日均量。>3极度放量，>2明显放量，≈1平量，<1缩量",
                 "⑤近20日涨幅":   "以当前价相对20个交易日前的涨幅，用于判断是否处于高位（>30%则高位风险大）",
                 "⑥K线形态":      "当日K线形态：大阳线=买力强；长上影线=高位有抛压（主力可能在出货）",
                 "①龙虎榜净买额": "龙虎榜上买入席位合计金额 - 卖出席位合计金额，正数越大说明主力买入越积极",
+                "①净买入强度":  "净买入强度 = 龙虎榜净买额 / 流通市值（%）。归一化后可公平比较大小盘。≥1%为强信号，≥2%为极强",
                 "②席位质量":     "识别买方席位是否有机构（基金/券商自营）或知名游资（知名短线操盘手的营业部）",
                 "③主力净流入(5日)": "近5日单笔≥50万元的大单净流入金额（买入大单 - 卖出大单），正数代表主力持续加仓",
+                "⚠️对倒风险":    "净买额为负但龙虎榜解读含'买'字时，疑似对倒（一方卖一方买制造成交量），惩罚-10分",
+                "⚠️机构卖出":    "机构只卖不买时惩罚-5分（出逃信号）",
             }
             all_d = {}
             all_d.update(t_res.get("detail", {}))
@@ -1335,6 +1393,7 @@ def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame
             "资金面":   f_r["score"],
             "历史胜率": h_r["score"],
             "净买强度":  _strength_str,
+            "量比":     f"{t_r.get('volume_ratio'):.2f}" if t_r.get("volume_ratio") is not None else "—",
             "近20日涨幅": f"{t_r.get('gain20', 0):+.1f}%" if t_r.get("gain20") is not None else "—",
             "席位亮点": seat_summary,
             "操作建议": adv["action"],

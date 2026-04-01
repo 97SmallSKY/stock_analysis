@@ -104,9 +104,18 @@ def get_today_kline(code: str, trade_date: str, days: int = 80) -> pd.DataFrame:
 # ── 评分引擎（无 Streamlit 依赖版本）────────────────────────────────
 
 def _score_tech(kline: pd.DataFrame, trade_date: str) -> dict:
-    """技术面评分（满分 60 → 归一化到 40）"""
+    """技术面评分（满分 60 → 归一化到 40）
+    
+    ① 均线多头（15分）
+    ② RSI（10分）
+    ③ MACD（10分）
+    ④ 量比/量能（10分）：优先使用当日量比（量比=当日成交量/近5日均量）
+    ⑤ 近20日涨幅（10分）
+    ⑥ K线形态（5分）
+    """
     if kline.empty or len(kline) < 20:
-        return {"score": 0, "detail": {"错误": "K线不足"}, "rsi": None, "gain20": None, "macd_score": 0}
+        return {"score": 0, "detail": {"错误": "K线不足"}, "rsi": None, "gain20": None,
+                "macd_score": 0, "volume_ratio": None}
 
     close  = kline["收盘"].astype(float).values
     volume = kline["成交量"].astype(float).values if "成交量" in kline.columns else None
@@ -158,15 +167,26 @@ def _score_tech(kline: pd.DataFrame, trade_date: str) -> dict:
             else:                                   macd_score = 2
     raw_score += macd_score
 
-    # ④ 量能（10分）
-    vol_score = 0
-    if volume is not None and len(volume) >= 20:
-        ratio = volume[-5:].mean() / (volume[-20:].mean() or 1.0)
-        if ratio >= 2.0:   vol_score = 10
-        elif ratio >= 1.5: vol_score = 8
-        elif ratio >= 1.2: vol_score = 6
-        elif ratio >= 1.0: vol_score = 4
-        else:              vol_score = 1
+    # ④ 量比/量能（10分）：当日成交量 / 近5日均量（标准量比定义）
+    vol_score    = 0
+    volume_ratio = None  # 量比
+    if volume is not None and len(volume) >= 6:
+        vol5_avg = volume[-6:-1].mean()  # 前5日均量（排除今日）
+        if vol5_avg > 0:
+            volume_ratio = round(float(volume[-1]) / float(vol5_avg), 2)
+            if volume_ratio >= 3.0:   vol_score = 10   # 极度放量
+            elif volume_ratio >= 2.0: vol_score = 8    # 明显放量
+            elif volume_ratio >= 1.5: vol_score = 6    # 温和放量
+            elif volume_ratio >= 1.0: vol_score = 4    # 平量
+            else:                     vol_score = 1    # 缩量
+        elif len(volume) >= 20:
+            # 前5日全为0（停牌复牌等情况），降级用20日均量
+            vol20 = volume[-20:].mean()
+            if vol20 > 0:
+                volume_ratio = round(float(volume[-1]) / float(vol20), 2)
+                if volume_ratio >= 2.0: vol_score = 8
+                elif volume_ratio >= 1.5: vol_score = 6
+                else: vol_score = 3
     raw_score += vol_score
 
     # ⑤ 近20日涨幅（10分）
@@ -204,13 +224,14 @@ def _score_tech(kline: pd.DataFrame, trade_date: str) -> dict:
     normalized = round(raw_score / total_possible * 40)
 
     return {
-        "score":       min(normalized, 40),
-        "rsi":         rsi_val,
-        "gain20":      gain20_val,
-        "macd_score":  macd_score,
-        "ma5":         round(float(ma5[last]),  3) if not np.isnan(ma5[last])  else None,
-        "ma10":        round(float(ma10[last]), 3) if not np.isnan(ma10[last]) else None,
-        "ma20":        round(float(ma20[last]), 3) if not np.isnan(ma20[last]) else None,
+        "score":        min(normalized, 40),
+        "rsi":          rsi_val,
+        "gain20":       gain20_val,
+        "macd_score":   macd_score,
+        "volume_ratio": volume_ratio,
+        "ma5":          round(float(ma5[last]),  3) if not np.isnan(ma5[last])  else None,
+        "ma10":         round(float(ma10[last]), 3) if not np.isnan(ma10[last]) else None,
+        "ma20":         round(float(ma20[last]), 3) if not np.isnan(ma20[last]) else None,
     }
 
 
@@ -471,6 +492,7 @@ def get_mainboard_signals(trade_date: str, top_n: int = 10) -> list[dict]:
             "ma5":                    t_res.get("ma5"),
             "ma10":                   t_res.get("ma10"),
             "ma20":                   t_res.get("ma20"),
+            "volume_ratio":           t_res.get("volume_ratio"),
             "seat_tags":              f_res["seat_tags"],
             "jigou_buy":              f_res["jigou_buy"],
             "famous_buy":             f_res["famous_buy"],

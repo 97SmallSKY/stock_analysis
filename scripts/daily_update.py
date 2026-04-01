@@ -21,6 +21,7 @@
   Step 5  拉取机构席位追踪（lhb_jigou，近5日/10日汇总）   ← 新增
   Step 6  拉取个股上榜统计（lhb_ggtj，近5日/10日汇总）   ← 新增
   Step 7  拉取今日龙虎榜席位明细（当日买卖方营业部）      ← 新增
+  Step 8  补全量比字段（lhb_top10_prices.volume_ratio）   ← 新增
 """
 import sys
 import time
@@ -395,6 +396,91 @@ def step7_fetch_seat_detail():
 
 
 # ============================================================
+# Step 8: 补全 lhb_top10_prices.volume_ratio（量比）
+# ============================================================
+def step8_fill_volume_ratio():
+    """
+    为 lhb_top10_prices 表补充量比字段（volume_ratio）。
+    量比 = 当日成交量 / 近5个交易日均量。
+    先检查列是否存在，不存在则自动 ALTER TABLE 添加。
+    """
+    logger.info("=== Step 8: 补全量比字段（volume_ratio）===")
+    try:
+        from sqlalchemy import text
+        engine = storage._get_engine()
+
+        # 1. 确保列存在
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE lhb_top10_prices "
+                "ADD COLUMN IF NOT EXISTS volume_ratio FLOAT"
+            ))
+
+        # 2. 找出还没有量比的记录
+        tp = storage.read("lhb_top10_prices")
+        if tp.empty:
+            logger.info("lhb_top10_prices 为空，跳过")
+            return
+
+        need_fill = tp[tp.get("volume_ratio", pd.Series(dtype=float)).isna()] if "volume_ratio" in tp.columns \
+            else tp.copy()
+        if need_fill.empty:
+            logger.info("所有记录已有量比，无需补全")
+            return
+
+        logger.info(f"需要补全量比的记录: {len(need_fill)} 条")
+        filled = 0
+
+        for _, row in need_fill.iterrows():
+            code      = str(row["代码"]).zfill(6)
+            trade_date_str = str(row["trade_date"])
+
+            try:
+                # 拉取上榜日前后 30 日 K 线（最少需要 6 根）
+                prefix  = "sh" if code.startswith(("6", "9")) else "sz"
+                start_d = (pd.Timestamp(trade_date_str) - pd.Timedelta(days=20)).strftime("%Y%m%d")
+                end_d   = (pd.Timestamp(trade_date_str) + pd.Timedelta(days=3)).strftime("%Y%m%d")
+                raw_k   = ak.stock_zh_a_daily(
+                    symbol=f"{prefix}{code}", adjust="qfq",
+                    start_date=start_d, end_date=end_d,
+                )
+                if raw_k is None or len(raw_k) < 6:
+                    continue
+
+                raw_k = raw_k.sort_values("date")
+                # 找上榜日对应行（<=trade_date 的最后一行）
+                mask = raw_k["date"].astype(str).str.replace("-", "") <= trade_date_str
+                if not mask.any():
+                    continue
+                idx_t = raw_k[mask].index[-1]
+                pos   = raw_k.index.get_loc(idx_t)
+                if pos < 5:
+                    continue
+
+                vols    = raw_k["volume"].values
+                vol_day = float(vols[pos])
+                vol5avg = float(vols[max(0, pos - 5):pos].mean())
+                if vol5avg > 0:
+                    vr = round(vol_day / vol5avg, 2)
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text('UPDATE lhb_top10_prices SET volume_ratio = :vr '
+                                 'WHERE "代码" = :code AND trade_date = :td'),
+                            {"vr": vr, "code": code, "td": trade_date_str},
+                        )
+                    filled += 1
+                    logger.debug(f"  {trade_date_str} {code} 量比={vr}")
+            except Exception as e:
+                logger.debug(f"  {code}@{trade_date_str} 量比补全失败: {e}")
+                continue
+            time.sleep(0.4)
+
+        logger.info(f"Step 8 完成，共补全量比 {filled} 条")
+    except Exception as e:
+        logger.error(f"Step 8 失败: {e}")
+
+
+# ============================================================
 # 主入口
 # ============================================================
 def main():
@@ -418,7 +504,7 @@ def main():
     if args.steps:
         want = set(args.steps.split(","))
     else:
-        want = {"1", "2", "3", "4", "5", "6", "7"}
+        want = {"1", "2", "3", "4", "5", "6", "7", "8"}
 
     step_map = {
         "1": step1_fetch_top10,
@@ -428,6 +514,7 @@ def main():
         "5": step5_fetch_jigou,
         "6": step6_fetch_ggtj,
         "7": step7_fetch_seat_detail,
+        "8": step8_fill_volume_ratio,
     }
     for k in sorted(want):
         fn = step_map.get(k)
