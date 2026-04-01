@@ -624,7 +624,57 @@ def run_phase_a(trade_date: str | None = None) -> dict:
             logger.warning(f"get_available_capital 失败，使用默认满额: {_ce}")
             capital_info = None
 
-        signals = get_mainboard_signals(today_str)
+        # ── 熔断检查 + AHS 计算（在选股前强制执行）──────────────────
+        _ahs  = 60  # 默认中性值
+        _cb   = {"allow_open": True, "reason": "", "level": "ok", "ahs": 60}
+        try:
+            from skills.stock_sim_robot.sim_trade_db import (
+                get_performance_stats, check_circuit_breaker
+            )
+            _perf = get_performance_stats()
+            _cb   = check_circuit_breaker(stats=_perf)
+            _ahs  = _cb.get("ahs", 60)
+            logger.info(
+                f"【健康度】AHS={_ahs} 级别={_cb['level']} "
+                f"近10笔胜率={_perf.get('recent_win_rate',0):.0f}% "
+                f"连亏={_perf.get('consecutive_losses',0)}笔 "
+                f"本周={_perf.get('week_pnl',0):+.1f}%"
+            )
+        except Exception as _cb_err:
+            logger.warning(f"熔断检查失败（非致命，继续执行）: {_cb_err}")
+
+        # 熔断触发 → 跳过开仓
+        if not _cb.get("allow_open", True):
+            _halt_reason = _cb.get("reason", "熔断触发")
+            logger.warning(f"🔴 熔断：{_halt_reason}")
+            result["skipped"]     = True
+            result["skip_reason"] = f"[熔断] {_halt_reason}"
+            try:
+                write_audit_log(
+                    event_type=AUDIT_PHASE_A_SKIP,
+                    summary=f"Phase A 熔断跳过（{today_str}）：{_halt_reason[:100]}",
+                    detail={
+                        "trade_date": today_str,
+                        "reason":     "circuit_breaker",
+                        "ahs":        _ahs,
+                        "cb_level":   _cb.get("level"),
+                        "cb_reason":  _halt_reason,
+                    },
+                    result="skipped",
+                )
+            except Exception:
+                pass
+
+        # 将 AHS 注入 capital_info，供 _default_invest_ratio 使用
+        if capital_info is not None:
+            capital_info["ahs"] = _ahs
+        elif _ahs != 60:
+            capital_info = {
+                "ahs": _ahs, "available": TOTAL_CAPITAL,
+                "open_count": 0, "total": TOTAL_CAPITAL, "invested": 0.0,
+            }
+
+        signals = get_mainboard_signals(today_str) if not result.get("skipped") else []
 
         if not signals:
             logger.warning("今日无主板信号，跳过开仓")

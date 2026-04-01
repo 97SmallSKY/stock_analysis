@@ -1660,6 +1660,312 @@ def get_trade_events(trade_id: int | None = None, event_date: str | None = None,
         return pd.DataFrame()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 反馈调节框架：绩效统计 / 账户健康评分 / 熔断检查
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_performance_stats(lookback_trades: int = 10) -> dict:
+    """
+    返回近期实战绩效统计，作为仓位决策和熔断检查的数据基础。
+
+    Returns:
+        {
+          "total_closed":       int,    # 历史总结算笔数
+          "recent_trades":      int,    # 近 N 笔数量（可能 < lookback）
+          "recent_win_rate":    float,  # 近 N 笔胜率（%）
+          "recent_avg_pnl":     float,  # 近 N 笔平均盈亏（%）
+          "recent_total_pnl":   float,  # 近 N 笔累计盈亏（%，基于 TOTAL_CAPITAL）
+          "today_pnl":          float,  # 今日已结算盈亏（%，相对 TOTAL_CAPITAL）
+          "week_pnl":           float,  # 本周累计盈亏（元→%，来自 sim_summary）
+          "month_pnl":          float,  # 本月累计盈亏（%）
+          "max_drawdown_pct":   float,  # 近 N 笔中峰谷最大回撤（%）
+          "consecutive_losses": int,    # 当前连续亏损笔数
+          "last_trade_pnl":     float,  # 最近一笔盈亏（%）
+        }
+    """
+    _empty = {
+        "total_closed": 0, "recent_trades": 0,
+        "recent_win_rate": 50.0, "recent_avg_pnl": 0.0,
+        "recent_total_pnl": 0.0, "today_pnl": 0.0,
+        "week_pnl": 0.0, "month_pnl": 0.0,
+        "max_drawdown_pct": 0.0, "consecutive_losses": 0,
+        "last_trade_pnl": 0.0,
+    }
+    try:
+        from sqlalchemy import text as _text
+        engine = _get_engine()
+        today_str = date.today().strftime("%Y%m%d")
+
+        # ── 历史总结算笔数 ──────────────────────────────────────────
+        total_row = pd.read_sql(
+            _text("SELECT count(*) AS cnt FROM sim_trades WHERE status='closed'"), engine
+        )
+        total_closed = int(total_row.iloc[0]["cnt"]) if not total_row.empty else 0
+
+        if total_closed == 0:
+            return _empty
+
+        # ── 近 N 笔已结算交易 ────────────────────────────────────────
+        recent_df = pd.read_sql(
+            _text("SELECT profit_pct, profit, sell_date, updated_at "
+                  "FROM sim_trades WHERE status='closed' "
+                  "ORDER BY updated_at DESC LIMIT :n"),
+            engine, params={"n": lookback_trades}
+        )
+        recent_trades = len(recent_df)
+        if recent_trades == 0:
+            return {**_empty, "total_closed": total_closed}
+
+        pnl_vals = recent_df["profit_pct"].fillna(0.0).astype(float).tolist()
+
+        recent_win_rate  = round(sum(1 for p in pnl_vals if p > 0) / recent_trades * 100, 1)
+        recent_avg_pnl   = round(sum(pnl_vals) / recent_trades, 2)
+        recent_total_pnl = round(sum(pnl_vals), 2)  # 各笔 pnl 之和（非复利）
+
+        last_trade_pnl   = round(pnl_vals[0], 2) if pnl_vals else 0.0
+
+        # ── 连续亏损笔数 ─────────────────────────────────────────────
+        consecutive_losses = 0
+        for p in pnl_vals:
+            if p < 0:
+                consecutive_losses += 1
+            else:
+                break
+
+        # ── 近 N 笔最大回撤（峰谷法，基于累计盈亏曲线）─────────────
+        cumulative = 0.0
+        peak = 0.0
+        max_dd = 0.0
+        for p in reversed(pnl_vals):  # 从最早到最近
+            cumulative += p
+            if cumulative > peak:
+                peak = cumulative
+            dd = peak - cumulative
+            if dd > max_dd:
+                max_dd = dd
+        max_drawdown_pct = round(-max_dd, 2)  # 负数表示回撤
+
+        # ── 今日盈亏（元→%） ─────────────────────────────────────────
+        today_df = pd.read_sql(
+            _text("SELECT sum(profit) AS total_profit "
+                  "FROM sim_trades WHERE status='closed' AND sell_date=:d"),
+            engine, params={"d": today_str}
+        )
+        today_profit = float(today_df.iloc[0]["total_profit"] or 0) if not today_df.empty else 0.0
+        today_pnl = round(today_profit / TOTAL_CAPITAL * 100, 2)
+
+        # ── 本周盈亏（来自 sim_summary，已有汇总）───────────────────
+        cur_week = _current_week_tag()
+        week_df  = pd.read_sql(
+            _text("SELECT total_profit FROM sim_summary WHERE week_tag=:wt"),
+            engine, params={"wt": cur_week}
+        )
+        week_profit = float(week_df.iloc[0]["total_profit"] or 0) if not week_df.empty else 0.0
+        week_pnl    = round(week_profit / TOTAL_CAPITAL * 100, 2)
+
+        # ── 本月盈亏 ─────────────────────────────────────────────────
+        month_prefix = today_str[:6]  # YYYYMM
+        month_df = pd.read_sql(
+            _text("SELECT sum(profit) AS mp FROM sim_trades "
+                  "WHERE status='closed' AND sell_date LIKE :prefix"),
+            engine, params={"prefix": f"{month_prefix}%"}
+        )
+        month_profit = float(month_df.iloc[0]["mp"] or 0) if not month_df.empty else 0.0
+        month_pnl    = round(month_profit / TOTAL_CAPITAL * 100, 2)
+
+        return {
+            "total_closed":       total_closed,
+            "recent_trades":      recent_trades,
+            "recent_win_rate":    recent_win_rate,
+            "recent_avg_pnl":     recent_avg_pnl,
+            "recent_total_pnl":   recent_total_pnl,
+            "today_pnl":          today_pnl,
+            "week_pnl":           week_pnl,
+            "month_pnl":          month_pnl,
+            "max_drawdown_pct":   max_drawdown_pct,
+            "consecutive_losses": consecutive_losses,
+            "last_trade_pnl":     last_trade_pnl,
+        }
+    except Exception as e:
+        logger.error(f"get_performance_stats 失败: {e}")
+        return _empty
+
+
+def calc_account_health_score(stats: dict | None = None) -> int:
+    """
+    基于近期绩效统计，计算账户健康评分 AHS（0~100）。
+
+    数据不足时（<5 笔）返回中性值 60，既不激进也不保守。
+
+    评分组成（基础 50 分）：
+      近10笔胜率（±25分）：≥70%→+25；60~70→+15；50~60→+5；40~50→-5；30~40→-15；<30→-25
+      近10笔平均盈亏（±15分）：>2%→+15；>1%→+10；>0%→+5；>-1%→-5；>-2%→-10；≤-2%→-15
+      连续亏损惩罚（最多-20分）：1笔→0；2笔→-5；3笔→-10；4+笔→-20
+      今日盈亏修正（±10分）：>+1%→+10；0~1%→+5；-1~0%→-5；<-1%→-10
+
+    Returns:
+        int，范围 0~100
+    """
+    if stats is None:
+        stats = get_performance_stats()
+
+    # 数据不足时返回中性值
+    if stats.get("total_closed", 0) < 5:
+        return 60
+
+    score = 50  # 基础分
+
+    # ── 近10笔胜率贡献 ──────────────────────────────────────────────
+    wr = stats.get("recent_win_rate", 50.0)
+    if wr >= 70:   score += 25
+    elif wr >= 60: score += 15
+    elif wr >= 50: score += 5
+    elif wr >= 40: score -= 5
+    elif wr >= 30: score -= 15
+    else:          score -= 25
+
+    # ── 近10笔平均盈亏贡献 ───────────────────────────────────────────
+    avg = stats.get("recent_avg_pnl", 0.0)
+    if avg > 2.0:   score += 15
+    elif avg > 1.0: score += 10
+    elif avg > 0.0: score += 5
+    elif avg > -1.0: score -= 5
+    elif avg > -2.0: score -= 10
+    else:            score -= 15
+
+    # ── 连续亏损惩罚 ────────────────────────────────────────────────
+    cl = stats.get("consecutive_losses", 0)
+    if cl >= 4:   score -= 20
+    elif cl == 3: score -= 10
+    elif cl == 2: score -= 5
+    # cl <= 1 → 0 分惩罚
+
+    # ── 今日盈亏紧急修正 ────────────────────────────────────────────
+    today = stats.get("today_pnl", 0.0)
+    if today > 1.0:    score += 10
+    elif today > 0.0:  score += 5
+    elif today > -1.0: score -= 5
+    else:              score -= 10
+
+    return max(0, min(100, score))
+
+
+def check_circuit_breaker(stats: dict | None = None) -> dict:
+    """
+    熔断检查：将总控 Prompt 中定义的风控规则落地到代码。
+
+    人工覆盖：设置环境变量 SKIP_CIRCUIT_BREAKER=1 可临时绕过所有熔断。
+
+    熔断规则：
+      单日亏损 > -3%   → 当日停止开仓（daily_halt）
+      连续亏损 3 笔     → 跳过下一个交易日（consecutive_halt）
+      周亏损 > -5%    → 本周剩余停止操作（week_halt）
+      月回撤 > -8%    → 本月剩余停止操作（month_halt）
+      近10笔最大回撤 > -15% → 建议清仓，暂停（max_drawdown_halt）
+
+    Returns:
+        {
+          "allow_open": bool,   # 是否允许开新仓
+          "reason":     str,    # 熔断原因（允许时为空）
+          "level":      str,    # "ok" / "warning" / "halt"
+          "ahs":        int,    # 同步计算的 AHS 值
+          "stats":      dict,   # 绩效统计快照（供调用方展示）
+        }
+    """
+    import os
+    # 人工覆盖开关
+    if os.getenv("SKIP_CIRCUIT_BREAKER") == "1":
+        logger.warning("⚠️  SKIP_CIRCUIT_BREAKER=1，熔断检查已跳过（人工覆盖）")
+        return {"allow_open": True, "reason": "", "level": "ok", "ahs": 60, "stats": {}}
+
+    if stats is None:
+        stats = get_performance_stats()
+
+    ahs = calc_account_health_score(stats)
+
+    today_pnl  = stats.get("today_pnl",  0.0)
+    week_pnl   = stats.get("week_pnl",   0.0)
+    month_pnl  = stats.get("month_pnl",  0.0)
+    cl         = stats.get("consecutive_losses", 0)
+    max_dd     = stats.get("max_drawdown_pct", 0.0)
+    total_closed = stats.get("total_closed", 0)
+
+    # ── 规则1：单日亏损 > -3% → 当日停止 ──────────────────────────
+    if today_pnl < -3.0:
+        reason = (
+            f"单日亏损熔断：今日已亏损 {today_pnl:.1f}%（阈值 -3%），"
+            f"当日停止开新仓，明日恢复。"
+        )
+        logger.warning(f"🔴 熔断触发 [daily_halt]: {reason}")
+        return {"allow_open": False, "reason": reason, "level": "halt",
+                "ahs": ahs, "stats": stats}
+
+    # ── 规则2：连续亏损 3 笔 → 跳过今日 ────────────────────────────
+    if cl >= 3:
+        reason = (
+            f"连续亏损熔断：已连续亏损 {cl} 笔（阈值 3 笔），"
+            f"跳过今日开仓，等待修复后恢复。"
+        )
+        logger.warning(f"🔴 熔断触发 [consecutive_halt]: {reason}")
+        return {"allow_open": False, "reason": reason, "level": "halt",
+                "ahs": ahs, "stats": stats}
+
+    # ── 规则3：周亏损 > -5% → 本周停止 ─────────────────────────────
+    if week_pnl < -5.0:
+        reason = (
+            f"周亏损熔断：本周已亏损 {week_pnl:.1f}%（阈值 -5%），"
+            f"本周剩余交易日停止开仓。"
+        )
+        logger.warning(f"🔴 熔断触发 [week_halt]: {reason}")
+        return {"allow_open": False, "reason": reason, "level": "halt",
+                "ahs": ahs, "stats": stats}
+
+    # ── 规则4：月回撤 > -8% → 本月停止 ─────────────────────────────
+    if month_pnl < -8.0:
+        reason = (
+            f"月度回撤熔断：本月已亏损 {month_pnl:.1f}%（阈值 -8%），"
+            f"本月剩余交易日停止开仓。"
+        )
+        logger.warning(f"🔴 熔断触发 [month_halt]: {reason}")
+        return {"allow_open": False, "reason": reason, "level": "halt",
+                "ahs": ahs, "stats": stats}
+
+    # ── 规则5：近N笔最大回撤 > -15% → 严重警告 ─────────────────────
+    if total_closed >= 5 and max_dd < -15.0:
+        reason = (
+            f"最大回撤熔断：近期最大回撤 {max_dd:.1f}%（阈值 -15%），"
+            f"建议清仓观望，暂停至少 1 个月。"
+        )
+        logger.warning(f"🔴 熔断触发 [max_drawdown_halt]: {reason}")
+        return {"allow_open": False, "reason": reason, "level": "halt",
+                "ahs": ahs, "stats": stats}
+
+    # ── AHS 过低预警（Warning 级别，不阻止开仓，但会压缩仓位） ──────
+    if ahs < 30:
+        reason = (
+            f"AHS 极低（{ahs}/100），账户处于严重修复期，"
+            f"仓位将被大幅压缩至最低档（≤10%），请关注风险。"
+        )
+        logger.warning(f"🟡 健康度预警 [low_ahs]: {reason}")
+        return {"allow_open": True, "reason": reason, "level": "warning",
+                "ahs": ahs, "stats": stats}
+
+    if ahs < 45:
+        reason = (
+            f"AHS 偏低（{ahs}/100），账户处于修复期，仓位已压缩至 50%。"
+        )
+        logger.info(f"🟡 健康度偏低 [ahs={ahs}]: {reason}")
+        return {"allow_open": True, "reason": reason, "level": "warning",
+                "ahs": ahs, "stats": stats}
+
+    logger.info(
+        f"✅ 熔断检查通过 AHS={ahs}，今日={today_pnl:+.1f}% "
+        f"本周={week_pnl:+.1f}% 本月={month_pnl:+.1f}% 连亏={cl}笔"
+    )
+    return {"allow_open": True, "reason": "", "level": "ok",
+            "ahs": ahs, "stats": stats}
+
+
 if __name__ == "__main__":
     # 测试：初始化建表
     logging_ok = create_tables()

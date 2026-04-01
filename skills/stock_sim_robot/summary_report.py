@@ -57,6 +57,51 @@ def _fen_str(amount: float | None) -> str:
     return f"{sign}{amount:.0f}元"
 
 
+# ── 0. 账户健康摘要（供 Phase A 报告调用）───────────────────────────────
+
+def _format_health_summary() -> str:
+    """
+    生成账户健康度摘要文本（嵌入到 Phase A 报告中）。
+    获取失败时静默返回空字符串，不影响主报告。
+    """
+    try:
+        from skills.stock_sim_robot.sim_trade_db import (
+            get_performance_stats, calc_account_health_score, check_circuit_breaker
+        )
+        stats = get_performance_stats()
+        ahs   = calc_account_health_score(stats)
+        cb    = check_circuit_breaker(stats=stats)
+
+        if stats.get("total_closed", 0) < 3:
+            return "⚪ **【账户健康度】** 数据积累中（不足3笔），AHS 参考意义有限"
+
+        # AHS 图标
+        if ahs >= 70:   ahs_icon = "🟢"
+        elif ahs >= 50: ahs_icon = "🟡"
+        elif ahs >= 30: ahs_icon = "🟠"
+        else:           ahs_icon = "🔴"
+
+        # 熔断图标
+        if cb["level"] == "ok":      cb_icon = "✅"
+        elif cb["level"] == "warning": cb_icon = "⚠️"
+        else:                          cb_icon = "🔴"
+
+        wr  = stats.get("recent_win_rate", 0)
+        cl  = stats.get("consecutive_losses", 0)
+        wpnl = stats.get("week_pnl", 0)
+        mpnl = stats.get("month_pnl", 0)
+
+        lines = [
+            f"\n{ahs_icon} **【账户健康度】** AHS = {ahs}/100",
+            f"  近10笔胜率: {wr:.0f}% | 连续亏损: {cl} 笔 | 本周: {wpnl:+.1f}% | 本月: {mpnl:+.1f}%",
+            f"  熔断状态: {cb_icon} {cb['reason'] if cb['reason'] else '正常，今日可开仓'}",
+        ]
+        return "\n".join(lines)
+    except Exception as e:
+        logger.debug(f"_format_health_summary 失败（非致命）: {e}")
+        return ""
+
+
 # ── 1. Phase A 报告（每日盘后自动推送）──────────────────────────────
 
 def format_phase_a_report(result: dict) -> str:
@@ -69,6 +114,12 @@ def format_phase_a_report(result: dict) -> str:
     today_str = result.get("trade_date", date.today().strftime("%Y%m%d"))
     d_fmt     = f"{today_str[:4]}/{today_str[4:6]}/{today_str[6:]}"
     lines     = [f"📊 **模拟炒股日报** — {d_fmt}\n"]
+
+    # ── 账户健康度摘要 ────────────────────────────────────────────────
+    health_summary = _format_health_summary()
+    if health_summary:
+        lines.append(health_summary)
+        lines.append("")
 
     # ── 结算结果 ──────────────────────────────────────────────────
     settled = result.get("settled_trades", [])

@@ -90,7 +90,7 @@ def _load_openclaw_llm_config() -> Optional[dict]:
 
 # ── 挂牌价计算规则 ────────────────────────────────────────────────────
 
-# 根据近20日涨幅位置设定目标涨幅
+# 根据近20日涨幅位置设定目标涨幅（基础规则，不依赖 AHS）
 _LIST_PRICE_RULES = [
     # (最低20日涨幅, 最高20日涨幅, 目标涨幅%)
     (None, 0,    8.0),   # 超跌 → 目标+8%
@@ -103,7 +103,22 @@ _LIST_PRICE_RULES = [
 STOP_LOSS_PCT = -5.0  # 止损线（-5%）
 
 
-def _calc_list_price(close_price: float, gain20: float | None) -> tuple[float, float]:
+def _get_list_price_multiplier(ahs: int) -> float:
+    """
+    根据账户健康评分（AHS）返回止盈目标倍率：
+      AHS >= 70（强势期）→ 1.0（正常目标）
+      AHS 50~69（正常期）→ 0.9（略保守，优先锁利）
+      AHS < 50 （修复期）→ 0.75（明显保守，首要任务是减少损失）
+    """
+    if ahs >= 70:
+        return 1.0
+    elif ahs >= 50:
+        return 0.9
+    else:
+        return 0.75
+
+
+def _calc_list_price(close_price: float, gain20: float | None, ahs: int = 60) -> tuple[float, float]:
     """
     计算挂牌卖出价
 
@@ -124,6 +139,14 @@ def _calc_list_price(close_price: float, gain20: float | None) -> tuple[float, f
         if low_ok and high_ok:
             target_pct = pct
             break
+
+    # AHS 动态调整：账户修复期时保守化止盈目标，优先锁利
+    multiplier = _get_list_price_multiplier(ahs)
+    if multiplier != 1.0:
+        logger.info(f"  AHS={ahs} → 止盈目标倍率={multiplier}x，原目标={target_pct}%")
+    target_pct = round(target_pct * multiplier, 1)
+    # 最低保障 2%（确保止盈有意义）
+    target_pct = max(target_pct, 2.0)
 
     # T+1 开盘价估算 = T 日收盘价（开盘价在真实交易时才能确认）
     # 挂牌价 = 买入价 × (1 + target_pct/100)，这里先以 close_price 估算
@@ -165,7 +188,9 @@ def _rule_based_select(signals: list[dict], capital_info: dict | None = None) ->
     candidates.sort(key=lambda x: (x["signal_score"], x["net_buy_amount"]), reverse=True)
     chosen = candidates[0]
 
-    list_price, target_pct = _calc_list_price(chosen["close_price"], chosen["gain20"])
+    # 获取 AHS 用于动态止盈目标
+    _ahs_for_price = capital_info.get("ahs", 60) if capital_info else 60
+    list_price, target_pct = _calc_list_price(chosen["close_price"], chosen["gain20"], ahs=_ahs_for_price)
     g20_str = f"{chosen['gain20']:+.1f}%" if chosen["gain20"] is not None else "N/A"
     t2_str  = f"{chosen['t2_win_rate']:.0f}%" if chosen["t2_win_rate"] is not None else "暂无"
     t5_str  = f"{chosen.get('t5_win_rate'):.0f}%" if chosen.get("t5_win_rate") is not None else "暂无"
@@ -223,16 +248,34 @@ def _rule_based_select(signals: list[dict], capital_info: dict | None = None) ->
     }
 
 
+def _ahs_to_position_factor(ahs: int) -> float:
+    """
+    将 AHS 账户健康评分映射为仓位系数：
+      AHS >= 75 → factor = 1.2  （强势期，适度加仓）
+      AHS 60~74 → factor = 1.0  （正常期）
+      AHS 45~59 → factor = 0.75 （疲弱期，主动收缩）
+      AHS 30~44 → factor = 0.5  （修复期，半仓以下）
+      AHS < 30  → factor = 0.0  （极度危险，上层 circuit_breaker 应已拦截）
+    """
+    if ahs >= 75:   return 1.2
+    elif ahs >= 60: return 1.0
+    elif ahs >= 45: return 0.75
+    elif ahs >= 30: return 0.5
+    else:           return 0.0
+
+
 def _default_invest_ratio(capital_info: dict | None, chosen: dict) -> float:
     """
-    规则引擎 fallback 时的默认仓位比例计算
+    动态仓位比例计算（v2：引入 AHS 反馈调节）
 
-    规则（保守估算）：
-      - 无持仓：0.6
-      - 1只持仓：0.4
-      - 2只及以上持仓：0.3
-      - 信号评分高（≥75）：+0.1
-      - 可用资金 < 20000：最多 0.2
+    仓位公式：
+      base_ratio = 基础仓位（按持仓数）
+      signal_bonus = 信号质量加成
+      ahs_factor = AHS 系数（账户健康度调节）
+      final_ratio = base_ratio × ahs_factor + signal_bonus
+      final_ratio = clamp(final_ratio, 0.1, 0.9)
+
+    兼容旧逻辑：capital_info 中若无 ahs 字段，则从 DB 实时获取。
     """
     from skills.stock_sim_robot.sim_trade_db import TOTAL_CAPITAL
     if capital_info is None:
@@ -241,17 +284,47 @@ def _default_invest_ratio(capital_info: dict | None, chosen: dict) -> float:
     open_count = capital_info.get("open_count", 0)
     score      = float(chosen.get("signal_score") or 0)
 
+    # 获取 AHS（优先从 capital_info 中取，避免重复查 DB）
+    ahs = capital_info.get("ahs", None)
+    if ahs is None:
+        try:
+            from skills.stock_sim_robot.sim_trade_db import (
+                get_performance_stats, calc_account_health_score
+            )
+            ahs = calc_account_health_score(get_performance_stats())
+        except Exception:
+            ahs = 60  # 获取失败时使用中性值
+
+    ahs_factor = _ahs_to_position_factor(int(ahs))
+    logger.info(f"  AHS={ahs} → 仓位系数={ahs_factor}")
+
+    # 若 AHS 已极低，ahs_factor=0.0 → 防御性极小仓位（circuit_breaker 未拦截时的最后防线）
+    if ahs_factor == 0.0:
+        logger.warning(f"  AHS={ahs} 极低，仓位降至最低档 0.1")
+        return 0.1
+
     if available < 20000:
         return 0.2
+
+    # 基础仓位（按持仓数）
     if open_count == 0:
         base = 0.6
     elif open_count == 1:
         base = 0.4
     else:
         base = 0.3
-    if score >= 75:
-        base = min(base + 0.1, 1.0)
-    return round(base, 2)
+
+    # 信号质量加成
+    signal_bonus = 0.1 if score >= 75 else 0.0
+
+    # AHS 调节
+    final = base * ahs_factor + signal_bonus
+    final = round(max(0.1, min(0.9, final)), 2)
+
+    logger.info(
+        f"  仓位计算: base={base} × ahs_factor={ahs_factor} + bonus={signal_bonus} → {final}"
+    )
+    return final
 
 
 TOTAL_CAPITAL = 100_000.0  # 与 sim_trade_db.TOTAL_CAPITAL 保持一致（本模块内部用）
