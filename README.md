@@ -106,7 +106,7 @@
 
 ---
 
-## 核心模块架构（v2.2 重构后）
+## 核心模块架构（v2.3 重构后）
 
 ```
 modules/
@@ -144,6 +144,14 @@ cd ~/stock_analysis
 ---
 
 ## 更新日志
+
+### v2.3（2026-04-01）— 缓存泄漏修复 + 连板字段全链路打通
+
+- **修复** `pages/sim_trading.py` / `pages/dashboard.py` / `pages/mainboard_strategy.py` 中 `@st.cache_data`
+  在 Python 3.13 下的 semaphore 泄漏风险，统一迁移为 `session_state + TTL` 缓存
+- **增强** `sim_trades` 与 `sim_selection_log`：新增 `lianban_count` / `lianban_score` 字段并完成迁移
+- **打通** 连板字段传递链路：`fetch_signal → llm_select → trade_runner → sim_trade_db → summary_report`
+- **优化** Phase A 飞书日报：新增连板信息（X板 / 技术加分）展示
 
 ### v2.2（2026-04-01）— 评分引擎统一 + 连板因子 + 行情层重构
 
