@@ -432,29 +432,48 @@ def _score_tech(kline: pd.DataFrame, trade_date: str) -> dict:
 def _score_fund(lhb_row: pd.Series, fund_flow: dict, seat_df: pd.DataFrame) -> dict:
     """
     资金面评分（满分 35 分）
-      ① 龙虎榜净买额（15分）
-      ② 席位质量：机构/知名游资（12分） ← 新增
+      ① 净买入强度（15分）：净买入额/流通市值归一化（与 fetch_signal.py 完全一致）
+                            流通市值不可用时降级为绝对额评分
+      ② 席位质量：机构/知名游资（12分）
       ③ 主力资金流向（8分）
+      对倒风险惩罚：净买额为负但解读含"买"(-10分)
+      机构仅卖不买：(-5分)
     """
     score  = 0
     detail = {}
     seat_tags = []  # 识别到的知名席位
 
-    # ── ① 龙虎榜净买额（15分）──────────────────────────────
+    # ── ① 净买入强度（15分）：优先归一化，降级绝对额 ──────────────
     net_buy = lhb_row.get("龙虎榜净买额", 0)
-    if pd.notna(net_buy):
-        net_buy = float(net_buy)
+    net_buy = float(net_buy) if pd.notna(net_buy) else 0.0
+
+    _circ_val  = lhb_row.get("流通市值") or lhb_row.get("流通股本")
+    _strength_pct: float | None = None
+    try:
+        if _circ_val is not None and pd.notna(_circ_val) and float(_circ_val) > 0:
+            _strength_pct = round(net_buy / float(_circ_val) * 100, 3)
+    except Exception:
+        pass
+
+    if _strength_pct is not None:
+        # 归一化评分（与 fetch_signal._score_fund 一致）
+        if _strength_pct >= 2.0:   nb_score = 15
+        elif _strength_pct >= 1.0: nb_score = 12
+        elif _strength_pct >= 0.5: nb_score = 8
+        elif _strength_pct >= 0.1: nb_score = 4
+        elif _strength_pct > 0:    nb_score = 1
+        else:                      nb_score = 0
+        detail["①净买入强度"] = f"{nb_score}/15分（{_strength_pct:.2f}% 流通市值，净买额{net_buy/1e8:+.2f}亿）"
+    else:
+        # 降级：绝对额评分（兼容无流通市值的旧数据）
         if net_buy >= 3e8:   nb_score = 15
         elif net_buy >= 1e8: nb_score = 12
         elif net_buy >= 5e7: nb_score = 8
         elif net_buy >= 1e7: nb_score = 4
         elif net_buy > 0:    nb_score = 1
         else:                nb_score = 0
-    else:
-        net_buy  = 0
-        nb_score = 0
+        detail["①龙虎榜净买额"] = f"{nb_score}/15分（{net_buy/1e8:+.2f}亿，无流通市值降级）"
     score += nb_score
-    detail["①龙虎榜净买额"] = f"{nb_score}/15分（{net_buy/1e8:+.2f}亿）"
 
     # ── ② 席位质量：机构/知名游资（12分）────────────────────
     seat_score = 0
@@ -507,41 +526,10 @@ def _score_fund(lhb_row: pd.Series, fund_flow: dict, seat_df: pd.DataFrame) -> d
     mf_label = f"{main_net/1e8:+.2f}亿" if main_net is not None else "暂无"
     detail["③主力净流入(5日)"] = f"{mf_score}/8分（{mf_label}）"
 
-    # ── 净买入强度（%市值）────────────────────────────────────────────
-    # 与 fetch_signal.py 评分逻辑统一：优先用流通市值归一化，降级用绝对额
-    _net_buy   = float(lhb_row.get("龙虎榜净买额") or 0)
-    _circ_val  = lhb_row.get("流通市值") or lhb_row.get("流通股本")
-    _strength_pct: float | None = None
-    try:
-        if _circ_val is not None and pd.notna(_circ_val) and float(_circ_val) > 0:
-            _strength_pct = round(_net_buy / float(_circ_val) * 100, 3)
-    except Exception:
-        pass
-
-    # 净买强度补充评分（替换原①绝对额）：若流通市值可用则重算 detail
-    # 注意：页面评分历史用绝对额计算，这里已改为与机器人一致的归一化方式
-    if _strength_pct is not None:
-        # 重算①龙虎榜净买额评分（用净买强度替代绝对额，与 fetch_signal.py 一致）
-        if _strength_pct >= 2.0:   _nb_score2 = 15
-        elif _strength_pct >= 1.0: _nb_score2 = 12
-        elif _strength_pct >= 0.5: _nb_score2 = 8
-        elif _strength_pct >= 0.1: _nb_score2 = 4
-        elif _strength_pct > 0:    _nb_score2 = 1
-        else:                      _nb_score2 = 0
-        # 更新评分差值（新评分 - 旧绝对额评分）
-        _old_nb = next(
-            (int(v.split("/")[0]) for k, v in detail.items() if k.startswith("①")), 0
-        )
-        score = score - _old_nb + _nb_score2
-        detail["①净买入强度"] = (
-            f"{_nb_score2}/15分（{_strength_pct:.2f}% 流通市值，净买额{_net_buy/1e8:+.2f}亿）"
-        )
-        del detail["①龙虎榜净买额"]
-
-    # 对倒检测（与 fetch_signal.py 一致，基于解读字段文本）
+    # ── 对倒检测（与 fetch_signal.py 一致，基于解读字段文本）────────
     _duodao_risk = False
     _jieda = str(lhb_row.get("解读", "") or "")
-    if _net_buy < 0 and ("买" in _jieda):
+    if net_buy < 0 and ("买" in _jieda):
         _duodao_risk = True
         score = max(score - 10, 0)
         detail["⚠️对倒风险"] = f"-10分（净买额为负但解读含买方，疑似对倒：{_jieda[:30]}）"
