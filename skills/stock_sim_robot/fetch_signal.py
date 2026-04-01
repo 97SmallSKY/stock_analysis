@@ -217,51 +217,105 @@ def _score_tech(kline: pd.DataFrame, trade_date: str) -> dict:
 def _score_fund(lhb_row: pd.Series) -> dict:
     """
     资金面评分（满分 35 分）
-    简化版：龙虎榜净买额（15分）+ 席位（12分，本 robot 只用净买额字段估算）
-    主力资金流向（8分）暂不拉取（避免频繁 API 调用）
+
+    评分组成：
+      净买入强度（15分）：用「净买入额 / 流通市值」归一化，不同市值股票可比
+                         流通市值字段缺失时降级为绝对额评分
+      席位质量  （12分）：机构买方 +5，知名游资席位每席 +3（上限 6）
+      对倒风险惩罚（-10分）：解读字段含"主买"+"卖"且净买额为负，疑似对倒
     """
     score  = 0
 
     net_buy = lhb_row.get("龙虎榜净买额", 0)
     if pd.notna(net_buy):
         net_buy = float(net_buy)
+    else:
+        net_buy = 0
+
+    # ── 净买入强度（归一化 vs 流通市值）────────────────────────────────
+    free_float_mv = lhb_row.get("流通市值", None)
+    net_buy_strength_pct: float | None = None
+
+    if free_float_mv is not None and pd.notna(free_float_mv):
+        mv = float(free_float_mv)
+        if mv > 0 and net_buy > 0:
+            net_buy_strength_pct = round(net_buy / mv * 100, 3)
+            # 归一化强度阈值（相对市值，更公平地比较大小市值股票）
+            if net_buy_strength_pct >= 2.0:   score += 15
+            elif net_buy_strength_pct >= 1.0: score += 12
+            elif net_buy_strength_pct >= 0.5: score += 8
+            elif net_buy_strength_pct >= 0.1: score += 4
+            else:                              score += 1
+        elif net_buy > 0:
+            # mv = 0（异常数据），降级为绝对额
+            if net_buy >= 3e8:   score += 15
+            elif net_buy >= 1e8: score += 12
+            elif net_buy >= 5e7: score += 8
+            elif net_buy >= 1e7: score += 4
+            elif net_buy > 0:    score += 1
+    else:
+        # 无流通市值字段，降级为原绝对额评分（兼容旧缓存数据）
+        logger.debug(f"_score_fund: 无流通市值字段，降级为绝对额评分（代码={lhb_row.get('代码','?')}）")
         if net_buy >= 3e8:   score += 15
         elif net_buy >= 1e8: score += 12
         elif net_buy >= 5e7: score += 8
         elif net_buy >= 1e7: score += 4
         elif net_buy > 0:    score += 1
-    else:
-        net_buy = 0
 
-    # 席位评分：从 lhb_row 中快速判断
+    # ── 席位评分：从 lhb_row 中快速判断 ────────────────────────────────
     seat_tags   = []
     jigou_buy   = 0
     famous_buy  = []
 
-    # 通过 lhb_row 中的文本字段尝试识别（东方财富接口不直接暴露席位名）
-    # 若有席位字段则使用，否则保守给中间分 4
     row_str = " ".join(str(v) for v in lhb_row.values)
     for seat_name, alias in FAMOUS_TRADERS.items():
         if seat_name in row_str and alias not in famous_buy:
             famous_buy.append(alias)
             seat_tags.append(alias)
-    if "机构" in row_str:
+
+    # 机构买方（解读字段含"机构买"/"机构"且净买额为正）
+    if ("机构" in row_str and net_buy > 0):
         jigou_buy = 1
+    # 机构只卖不买：净买额为负且含"机构卖"
+    jigou_sell_only = ("机构" in row_str and "卖" in row_str and net_buy < 0)
 
     seat_score = 0
-    if jigou_buy >= 1: seat_score += 5
+    if jigou_buy >= 1 and not jigou_sell_only:
+        seat_score += 5
     seat_score += min(len(famous_buy) * 3, 6)
     if not seat_tags and not jigou_buy:
         seat_score = 4  # 无席位信息时给保守中间分
 
     score += min(seat_score, 12)
 
+    # ── 对倒风险检测（基于解读字段文本分析）────────────────────────────
+    # 规则：净买额为负（主力出货）+ 解读含"主买"暗示对倒
+    # 或：机构只卖不买，疑似机构出逃拉高砸盘
+    duodao_risk = False
+    duodao_reason = ""
+
+    # 规则1：净买额为负（主力净卖出），但解读含"买"（对倒嫌疑）
+    jieda = str(lhb_row.get("解读", "") or "")
+    if net_buy < 0 and ("买" in jieda):
+        duodao_risk  = True
+        duodao_reason = f"净买额为负({net_buy/1e8:.2f}亿)但解读含买方，疑似对倒"
+        score -= 10
+        logger.debug(f"  ⚠️ 对倒风险({lhb_row.get('代码','?')})：{duodao_reason}")
+
+    # 规则2：机构只卖不买（出逃信号，不算对倒但同样危险）
+    if jigou_sell_only and not duodao_risk:
+        score -= 5  # 轻度惩罚
+        logger.debug(f"  ⚠️ 机构卖出信号({lhb_row.get('代码','?')})：{jieda[:40]}")
+
     return {
-        "score":       min(score, 35),
-        "net_buy":     net_buy,
-        "jigou_buy":   jigou_buy,
-        "famous_buy":  famous_buy,
-        "seat_tags":   seat_tags,
+        "score":                 min(max(score, 0), 35),
+        "net_buy":               net_buy,
+        "jigou_buy":             jigou_buy,
+        "famous_buy":            famous_buy,
+        "seat_tags":             seat_tags,
+        "net_buy_strength_pct":  net_buy_strength_pct,  # 净买入强度（%市值），None 表示无数据
+        "duodao_risk":           duodao_risk,
+        "duodao_reason":         duodao_reason,
     }
 
 
@@ -396,28 +450,31 @@ def get_mainboard_signals(trade_date: str, top_n: int = 10) -> list[dict]:
             close_price = float(kline["收盘"].iloc[-1])
 
         signals.append({
-            "code":           code,
-            "name":           name,
-            "rank":           int(row.get("排名", i + 1)),
-            "net_buy_amount": float(f_res["net_buy"]),
-            "net_buy_yi":     round(f_res["net_buy"] / 1e8, 2),  # 亿元
-            "signal_score":   total_score,
-            "tech_score":     t_res["score"],
-            "fund_score":     f_res["score"],
-            "hist_score":     h_res["score"],
-            "t2_win_rate":    h_res["t2_win"],
-            "t5_win_rate":    h_res["t5_win"],
-            "hist_count":     h_res["count"],
-            "rsi":            t_res.get("rsi"),
-            "gain20":         t_res.get("gain20"),
-            "macd_score":     t_res.get("macd_score", 0),
-            "ma5":            t_res.get("ma5"),
-            "ma10":           t_res.get("ma10"),
-            "ma20":           t_res.get("ma20"),
-            "seat_tags":      f_res["seat_tags"],
-            "jigou_buy":      f_res["jigou_buy"],
-            "famous_buy":     f_res["famous_buy"],
-            "close_price":    close_price,
+            "code":                   code,
+            "name":                   name,
+            "rank":                   int(row.get("排名", i + 1)),
+            "net_buy_amount":         float(f_res["net_buy"]),
+            "net_buy_yi":             round(f_res["net_buy"] / 1e8, 2),  # 亿元
+            "net_buy_strength_pct":   f_res.get("net_buy_strength_pct"),  # 净买入强度（%市值）
+            "duodao_risk":            f_res.get("duodao_risk", False),
+            "duodao_reason":          f_res.get("duodao_reason", ""),
+            "signal_score":           total_score,
+            "tech_score":             t_res["score"],
+            "fund_score":             f_res["score"],
+            "hist_score":             h_res["score"],
+            "t2_win_rate":            h_res["t2_win"],
+            "t5_win_rate":            h_res["t5_win"],
+            "hist_count":             h_res["count"],
+            "rsi":                    t_res.get("rsi"),
+            "gain20":                 t_res.get("gain20"),
+            "macd_score":             t_res.get("macd_score", 0),
+            "ma5":                    t_res.get("ma5"),
+            "ma10":                   t_res.get("ma10"),
+            "ma20":                   t_res.get("ma20"),
+            "seat_tags":              f_res["seat_tags"],
+            "jigou_buy":              f_res["jigou_buy"],
+            "famous_buy":             f_res["famous_buy"],
+            "close_price":            close_price,
         })
 
     # Step 4: 按综合评分降序
@@ -447,11 +504,14 @@ def format_signal_for_llm(signals: list[dict]) -> str:
         g20 = f"{s['gain20']:+.1f}%" if s["gain20"] is not None else "N/A"
         rsi = f"{s['rsi']:.0f}" if s["rsi"] is not None else "N/A"
         seats = "、".join(s["famous_buy"]) if s["famous_buy"] else ("机构买方" if s["jigou_buy"] else "无知名席位")
+        strength = s.get("net_buy_strength_pct")
+        strength_str = f"{strength:.2f}%市值" if strength is not None else "—"
+        duodao_tag = " ⚠️[疑似对倒]" if s.get("duodao_risk") else ""
         lines.append(
-            f"  [{s['rank']:2d}] {s['name']}（{s['code']}）"
+            f"  [{s['rank']:2d}] {s['name']}（{s['code']}）{duodao_tag}"
             f" 综合={s['signal_score']:3d}分"
             f"（技术{s['tech_score']}+资金{s['fund_score']}+历史{s['hist_score']}）"
-            f" | 净买入{s['net_buy_yi']:.2f}亿"
+            f" | 净买入{s['net_buy_yi']:.2f}亿（强度{strength_str}）"
             f" | T+2历史胜率={t2} T+5={t5}（{s['hist_count']}次）"
             f" | RSI={rsi} 20日涨幅={g20}"
             f" | 参考价={s['close_price']:.2f}"
