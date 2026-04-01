@@ -137,6 +137,8 @@ _ALTER_SIM_TRADES_NEW_COLS = [
     "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS invest_ratio       FLOAT",
     # 信号评分引擎新字段（v2.2 2026-04-01）
     "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS net_buy_strength_pct FLOAT",        # 净买入强度（%市值）
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS lianban_count        INT DEFAULT 0",  # 连板数
+    "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS lianban_score        FLOAT DEFAULT 0",# 连板加分
     "ALTER TABLE sim_trades ADD COLUMN IF NOT EXISTS duodao_risk          BOOLEAN DEFAULT FALSE",  # 对倒风险标记
 ]
 
@@ -1044,6 +1046,8 @@ CREATE TABLE IF NOT EXISTS sim_selection_log (
     reason_tech     TEXT,                  -- 技术面分析摘要
     reason_fund     TEXT,                  -- 资金面分析摘要
     reason_history  TEXT,                  -- 历史胜率分析摘要
+    lianban_count   INT DEFAULT 0,          -- 连板数
+    lianban_score   FLOAT DEFAULT 0,        -- 连板加分
     llm_rank_reason TEXT,                  -- LLM 对该股的排名理由（含与其他候选的对比分析）
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -1219,7 +1223,7 @@ def save_selection_log(entries: list[dict]) -> bool:
         entries: list of dict，每个 dict 包含：
             trade_date, trade_id(可选), rank, code, name, signal_score,
             t2_win_rate, close_price, reason_tech, reason_fund,
-            reason_history, llm_rank_reason
+            reason_history, lianban_count, lianban_score, llm_rank_reason
 
     Returns:
         True=全部成功, False=有失败
@@ -1235,11 +1239,11 @@ def save_selection_log(entries: list[dict]) -> bool:
                     INSERT INTO sim_selection_log
                         (trade_date, trade_id, rank, code, name, signal_score,
                          t2_win_rate, close_price, reason_tech, reason_fund,
-                         reason_history, llm_rank_reason)
+                         reason_history, lianban_count, lianban_score, llm_rank_reason)
                     VALUES
                         (:trade_date, :trade_id, :rank, :code, :name, :signal_score,
                          :t2_win_rate, :close_price, :reason_tech, :reason_fund,
-                         :reason_history, :llm_rank_reason)
+                         :reason_history, :lianban_count, :lianban_score, :llm_rank_reason)
                 """), {
                     "trade_date":      str(e.get("trade_date", "")),
                     "trade_id":        int(e["trade_id"]) if e.get("trade_id") else None,
@@ -1252,6 +1256,8 @@ def save_selection_log(entries: list[dict]) -> bool:
                     "reason_tech":     str(e["reason_tech"]) if e.get("reason_tech") else None,
                     "reason_fund":     str(e["reason_fund"]) if e.get("reason_fund") else None,
                     "reason_history":  str(e["reason_history"]) if e.get("reason_history") else None,
+                    "lianban_count":   int(e.get("lianban_count") or 0),
+                    "lianban_score":   float(e.get("lianban_score") or 0),
                     "llm_rank_reason": str(e["llm_rank_reason"]) if e.get("llm_rank_reason") else None,
                 })
         logger.info(f"save_selection_log: 写入 {len(entries)} 条选股记录 ✅")

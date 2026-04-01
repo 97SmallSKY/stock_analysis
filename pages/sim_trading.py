@@ -29,6 +29,102 @@ os.chdir(_ROOT)
 from utils.storage import storage
 
 
+# ─── session_state 缓存工具（替代 @st.cache_data，避免 Python 3.13 semaphore 泄漏）──
+
+import time as _time
+
+
+def _ss_get(key: str, ttl: int):
+    """从 session_state 取缓存，过期返回 None"""
+    val = st.session_state.get(f"__cache_{key}")
+    ts  = st.session_state.get(f"__cache_ts_{key}", 0)
+    if val is not None and (_time.time() - ts) < ttl:
+        return val
+    return None
+
+
+def _ss_set(key: str, val):
+    """写入 session_state 缓存"""
+    st.session_state[f"__cache_{key}"] = val
+    st.session_state[f"__cache_ts_{key}"] = _time.time()
+
+
+# ─── 数据加载（提升到模块顶层，避免在 render() 内重复定义）────────────────────────
+
+def _get_capital_info() -> dict:
+    """账户资金信息（session_state 缓存60s）"""
+    cached = _ss_get("sim_capital", 60)
+    if cached is not None:
+        return cached
+    try:
+        from skills.stock_sim_robot.sim_trade_db import get_available_capital
+        result = get_available_capital()
+    except Exception:
+        result = {"total": 100000.0, "invested": 0.0, "available": 100000.0, "open_count": 0}
+    _ss_set("sim_capital", result)
+    return result
+
+
+def _get_health_data() -> tuple:
+    """账户健康 + 熔断数据（session_state 缓存120s）"""
+    cached = _ss_get("sim_health", 120)
+    if cached is not None:
+        return cached
+    try:
+        from skills.stock_sim_robot.sim_trade_db import (
+            get_performance_stats, calc_account_health_score, check_circuit_breaker
+        )
+        stats = get_performance_stats()
+        ahs   = calc_account_health_score(stats)
+        cb    = check_circuit_breaker(stats=stats)
+        result = (stats, ahs, cb)
+    except Exception:
+        result = ({}, 60, {"allow_open": True, "level": "ok", "reason": "", "ahs": 60})
+    _ss_set("sim_health", result)
+    return result
+
+
+def _get_trade_events() -> "pd.DataFrame":
+    """交易流水（session_state 缓存60s）"""
+    cached = _ss_get("sim_trade_events", 60)
+    if cached is not None:
+        return cached
+    try:
+        from skills.stock_sim_robot.sim_trade_db import get_trade_events
+        result = get_trade_events(limit=200)
+    except Exception:
+        result = pd.DataFrame()
+    _ss_set("sim_trade_events", result)
+    return result
+
+
+def _get_selection_log_all() -> "pd.DataFrame":
+    """选股理由日志（session_state 缓存300s）"""
+    cached = _ss_get("sim_selection_log", 300)
+    if cached is not None:
+        return cached
+    try:
+        from skills.stock_sim_robot.sim_trade_db import get_selection_log
+        result = get_selection_log()
+    except Exception:
+        result = pd.DataFrame()
+    _ss_set("sim_selection_log", result)
+    return result
+
+
+def _get_lhb_top10_for_compare() -> "pd.DataFrame":
+    """龙虎榜完整数据（用于同期对比，缓存300s）"""
+    cached = _ss_get("sim_lhb_top10", 300)
+    if cached is not None:
+        return cached
+    try:
+        result = storage.read("lhb_top10")
+    except Exception:
+        result = pd.DataFrame()
+    _ss_set("sim_lhb_top10", result)
+    return result
+
+
 # ─── 策略加载 / 保存（复用 sim_trade_db 函数）──────────────────────────────
 
 def _load_strategy() -> dict:
@@ -139,15 +235,7 @@ def render():
     open_  = df[df["status"] == "open"].copy()
 
     # ── 账户资金卡片（总资金10万制）─────────────────────────────────────
-    @st.cache_data(ttl=60, show_spinner=False)
-    def _load_capital_info():
-        try:
-            from skills.stock_sim_robot.sim_trade_db import get_available_capital
-            return get_available_capital()
-        except Exception:
-            return {"total": 100000.0, "invested": 0.0, "available": 100000.0, "open_count": 0}
-
-    cap = _load_capital_info()
+    cap = _get_capital_info()
     total_profit = closed["profit"].sum() if not closed.empty else 0
     nav = 1.0 + total_profit / cap["total"] if cap["total"] > 0 else 1.0
 
@@ -196,20 +284,7 @@ def render():
     st.divider()
 
     # ── 账户健康仪表盘 + 熔断状态告警 ───────────────────────────────────
-    @st.cache_data(ttl=120, show_spinner=False)
-    def _load_health_data():
-        try:
-            from skills.stock_sim_robot.sim_trade_db import (
-                get_performance_stats, calc_account_health_score, check_circuit_breaker
-            )
-            stats = get_performance_stats()
-            ahs   = calc_account_health_score(stats)
-            cb    = check_circuit_breaker(stats=stats)
-            return stats, ahs, cb
-        except Exception as _e:
-            return {}, 60, {"allow_open": True, "level": "ok", "reason": "", "ahs": 60}
-
-    _stats, _ahs, _cb = _load_health_data()
+    _stats, _ahs, _cb = _get_health_data()
     _total_closed = _stats.get("total_closed", 0)
 
     # ── AHS 图标与颜色 ───────────────────────────────────────────────────
@@ -571,15 +646,7 @@ def render():
         st.markdown("#### 📜 交易流水（每次买卖各一条记录）")
         st.caption("每笔买入/分批卖出/止损/平仓单独显示一条流水记录（新交易自动记录，旧历史数据无流水）")
 
-        @st.cache_data(ttl=60, show_spinner=False)
-        def _load_trade_events():
-            try:
-                from skills.stock_sim_robot.sim_trade_db import get_trade_events
-                return get_trade_events(limit=200)
-            except Exception:
-                return pd.DataFrame()
-
-        events_df = _load_trade_events()
+        events_df = _get_trade_events()
 
         if events_df.empty:
             st.info("📭 暂无交易流水记录。流水记录从下次 Phase B 买入回填后开始自动生成。")
@@ -837,24 +904,9 @@ def render():
         st.caption("点击展开查看每笔交易的 AI 逻辑（技术面/资金面/历史胜率/席位分析）及同期候选对比")
 
         # ── 加载 sim_selection_log（候选对比数据）───────────────────────────
-        @st.cache_data(ttl=300, show_spinner=False)
-        def _load_selection_log_all():
-            try:
-                from skills.stock_sim_robot.sim_trade_db import get_selection_log
-                return get_selection_log()
-            except Exception:
-                return pd.DataFrame()
-
         # ── 加载 lhb_top10（同期龙虎榜完整数据）──────────────────────────────
-        @st.cache_data(ttl=300, show_spinner=False)
-        def _load_lhb_top10_for_compare():
-            try:
-                return storage.read("lhb_top10")
-            except Exception:
-                return pd.DataFrame()
-
-        sel_log_df = _load_selection_log_all()
-        lhb_top10_all = _load_lhb_top10_for_compare()
+        sel_log_df = _get_selection_log_all()
+        lhb_top10_all = _get_lhb_top10_for_compare()
 
         for _, row in df.sort_values("created_at", ascending=False).iterrows():
             is_open = row["status"] == "open"

@@ -247,6 +247,8 @@ def _rule_based_select(signals: list[dict], capital_info: dict | None = None) ->
         "invest_amount":          round(_invest_ratio * TOTAL_CAPITAL, 2),
         "invest_reason":          "规则引擎默认仓位",
         "net_buy_strength_pct":   chosen.get("net_buy_strength_pct"),
+        "lianban_count":          int(chosen.get("lianban_count") or 0),
+        "lianban_score":          float(chosen.get("lianban_score") or 0),
         "duodao_risk":            bool(chosen.get("duodao_risk", False)),
     }
 
@@ -560,6 +562,8 @@ def select_stock(signals: list[dict], capital_info: dict | None = None) -> dict:
             "reason_seat":            llm_result.get("reason_seat", ""),
             "t2_win_rate":            chosen["t2_win_rate"],
             "seat_tags":              chosen["seat_tags"],
+            "lianban_count":          int(chosen.get("lianban_count") or 0),
+            "lianban_score":          float(chosen.get("lianban_score") or 0),
             "from_llm":               True,
             "net_buy_strength_pct":   chosen.get("net_buy_strength_pct"),
             "duodao_risk":            bool(chosen.get("duodao_risk", False)),

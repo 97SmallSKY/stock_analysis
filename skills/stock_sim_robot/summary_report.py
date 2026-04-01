@@ -150,6 +150,10 @@ def format_phase_a_report(result: dict) -> str:
         lines.append("**【今日选股】**")
         lines.append(f"  **{new_trade['name']}（{new_trade['code']}）** {method_tag}")
         lines.append(f"  综合评分: {new_trade['signal_score']}/100 | T+2历史胜率: {t2_str}")
+        _lb_cnt = int(new_trade.get("lianban_count") or 0)
+        _lb_s   = float(new_trade.get("lianban_score") or 0)
+        if _lb_cnt > 0:
+            lines.append(f"  连板信息: {_lb_cnt}板（技术加分 +{_lb_s:.0f}）")
         lines.append(f"  T 日参考价: {new_trade.get('close_price', '—')}元")
         lines.append(f"  T+2 挂牌卖出价: **{new_trade.get('list_price', '—')}** "
                      f"(+{new_trade.get('list_price_pct', '—')}%)")

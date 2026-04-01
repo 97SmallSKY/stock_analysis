@@ -10,6 +10,21 @@ from datetime import datetime, timedelta
 from utils.storage import storage
 from modules.data_fetcher import fetch_market_sentiment, load_market_sentiment_history
 
+import time as _time
+
+
+def _ss_get(key: str, ttl: int):
+    val = st.session_state.get(f"__cache_{key}")
+    ts  = st.session_state.get(f"__cache_ts_{key}", 0)
+    if val is not None and (_time.time() - ts) < ttl:
+        return val
+    return None
+
+
+def _ss_set(key: str, val):
+    st.session_state[f"__cache_{key}"] = val
+    st.session_state[f"__cache_ts_{key}"] = _time.time()
+
 
 def _nav_to(page_name: str):
     """通过 session_state + query_params 实现页面跳转"""
@@ -93,20 +108,20 @@ def render():
             _nav_to("📈 龙虎榜盈亏分析")
 
     # ── 模拟账户 AHS 健康仪表盘（首页简版）──────────────────────────────
-    @st.cache_data(ttl=180, show_spinner=False)
-    def _dash_health():
+    _cached = _ss_get("dash_health", 180)
+    if _cached is None:
         try:
             from skills.stock_sim_robot.sim_trade_db import (
                 get_performance_stats, calc_account_health_score, check_circuit_breaker
             )
-            s   = get_performance_stats()
-            ahs = calc_account_health_score(s)
-            cb  = check_circuit_breaker(stats=s)
-            return s, ahs, cb
+            _s   = get_performance_stats()
+            _ahs = calc_account_health_score(_s)
+            _cb  = check_circuit_breaker(stats=_s)
+            _cached = (_s, _ahs, _cb)
         except Exception:
-            return {}, 60, {"allow_open": True, "level": "ok", "reason": "", "ahs": 60}
-
-    _ds, _dahs, _dcb = _dash_health()
+            _cached = ({}, 60, {"allow_open": True, "level": "ok", "reason": "", "ahs": 60})
+        _ss_set("dash_health", _cached)
+    _ds, _dahs, _dcb = _cached
 
     # 只在有数据时才展示（不足3笔不渲染，避免干扰首页洁净感）
     if _ds.get("total_closed", 0) >= 1:

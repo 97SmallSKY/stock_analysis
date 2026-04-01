@@ -746,6 +746,8 @@ def run_phase_a(trade_date: str | None = None) -> dict:
                     "buy_amount":             float(selection.get("invest_amount") or TOTAL_CAPITAL),
                     "invest_ratio":           selection.get("invest_ratio", 1.0),
                     "net_buy_strength_pct":   selection.get("net_buy_strength_pct"),   # 净买入强度（%市值）
+                    "lianban_count":          int(selection.get("lianban_count") or 0),
+                    "lianban_score":          float(selection.get("lianban_score") or 0),
                     "duodao_risk":            bool(selection.get("duodao_risk", False)),  # 对倒风险标记
                     "week_tag":               week_tag,
                     "status":                 "open",
@@ -762,6 +764,8 @@ def run_phase_a(trade_date: str | None = None) -> dict:
                     "reason":         selection.get("reason", ""),
                     "from_llm":       selection.get("from_llm", False),
                     "t2_win_rate":    selection["t2_win_rate"],
+                    "lianban_count":  int(selection.get("lianban_count") or 0),
+                    "lianban_score":  float(selection.get("lianban_score") or 0),
                 }
                 logger.info(
                     f"✅ 新开仓: {selection['name']}（{selection['code']}）"
@@ -1099,6 +1103,8 @@ def _save_selection_log(
         "reason_tech":     selection.get("reason_tech", ""),
         "reason_fund":     selection.get("reason_fund", ""),
         "reason_history":  selection.get("reason_history", ""),
+        "lianban_count":   int(selection.get("lianban_count") or 0),
+        "lianban_score":   float(selection.get("lianban_score") or 0),
         "llm_rank_reason": selection.get("reason", ""),  # 综合摘要作为排名理由
     })
 
@@ -1134,6 +1140,8 @@ def _save_selection_log(
             "reason_tech":     "",
             "reason_fund":     f"净买入={sig.get('net_buy_yi', 0):.2f}亿",
             "reason_history":  f"T+2胜率={t2_s}",
+            "lianban_count":   int(sig.get("lianban_count") or 0),
+            "lianban_score":   float(sig.get("lianban_score") or 0),
             "llm_rank_reason": reason,
         })
 

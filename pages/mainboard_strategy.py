@@ -26,11 +26,27 @@ from datetime import datetime, date, timedelta
 
 from utils.storage import storage
 
+import time as _time
+
 try:
     from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode, JsCode
     _HAS_AGGRID = True
 except ImportError:
     _HAS_AGGRID = False
+
+
+# ── session_state 缓存工具（替代 @st.cache_data，避免 Python 3.13 semaphore 泄漏）────
+def _ss_get(key: str, ttl: int):
+    val = st.session_state.get(f"__cache_{key}")
+    ts  = st.session_state.get(f"__cache_ts_{key}", 0)
+    if val is not None and (_time.time() - ts) < ttl:
+        return val
+    return None
+
+
+def _ss_set(key: str, val):
+    st.session_state[f"__cache_{key}"] = val
+    st.session_state[f"__cache_ts_{key}"] = _time.time()
 
 
 # ── 主板判断 ──────────────────────────────────────────────────────────
@@ -78,13 +94,17 @@ def _turnover_label(turnover_pct: float) -> str:
     return "高换手 (>7%)"
 
 
-# ── 数据加载（核心，带缓存）────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
+# ── 数据加载（核心，带 session_state 缓存）─────────────────────────────────
 def _load_raw_data() -> tuple:
     """原始数据加载（缓存5分钟）"""
+    cached = _ss_get("mainboard_raw", 300)
+    if cached is not None:
+        return cached
     top10  = storage.read("lhb_top10")
     prices = storage.read("lhb_top10_prices")
-    return top10, prices
+    result = (top10, prices)
+    _ss_set("mainboard_raw", result)
+    return result
 
 
 def _build_pool(top10: pd.DataFrame, top_n: int) -> pd.DataFrame:
