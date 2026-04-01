@@ -106,6 +106,27 @@
 
 ---
 
+## 核心模块架构（v2.2 重构后）
+
+```
+modules/
+├── scorer.py       ← 统一评分引擎（技术面/资金面/历史胜率，单一权威实现）
+├── market_data.py  ← 统一行情获取层（K线缓存/T+N日历/T+2价格）
+├── analyzer.py     ← 回测框架（委托 scorer + market_data）
+├── data_fetcher.py ← 龙虎榜/涨跌停/资金流数据拉取
+├── feature_engine.py
+├── ms_scorer.py
+└── realtime_fetcher.py
+
+pages/              ← Streamlit 页面（仅展示层，不含核心逻辑）
+skills/stock_sim_robot/
+├── fetch_signal.py ← 信号抓取（调用 scorer + market_data）
+├── trade_runner.py ← 模拟交易核心
+└── ...
+```
+
+---
+
 ## 本地开发
 
 ```bash
@@ -123,6 +144,16 @@ cd ~/stock_analysis
 ---
 
 ## 更新日志
+
+### v2.2（2026-04-01）— 评分引擎统一 + 连板因子 + 行情层重构
+
+- **新建** `modules/scorer.py` — 统一评分引擎，消除 3 处重复实现（~280 行代码精简）
+- **新增** 连板高度短线因子：`score_tech()` 的 `lianban_count` 参数（+0/+4/+7/+10 分）
+- **新建** `modules/market_data.py` — 统一行情获取层（K 线/T+2 价格/交易日历）
+- **改造** `pages/lhb_signal.py` — 评分函数改为调用 `scorer`，删除内置重复实现
+- **改造** `skills/stock_sim_robot/fetch_signal.py` — 同上；`get_mainboard_signals` 新增连板池接入
+- **改造** `modules/analyzer.py` — `_kline_get` 委托给 `market_data.get_kline`
+- **新增** `docs/重构进度_202604.md` — 技术重构工作进度文档
 
 ### v2.1（2026-04-01）— 反馈调节 + 动态仓位管理框架
 

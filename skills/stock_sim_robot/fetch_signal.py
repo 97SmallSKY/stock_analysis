@@ -29,6 +29,7 @@ from utils.storage import storage
 from utils.retry import safe_akshare_call
 from modules.data_fetcher import fetch_lhb_netbuy_by_date
 from config.settings import FAMOUS_TRADERS, STRATEGY_CONFIG
+from modules.scorer import score_tech as _score_tech_shared, score_fund as _score_fund_shared, score_history as _score_history_shared
 
 
 # ── 主板判断 ──────────────────────────────────────────────────────────
@@ -101,252 +102,36 @@ def get_today_kline(code: str, trade_date: str, days: int = 80) -> pd.DataFrame:
     return pd.DataFrame()
 
 
-# ── 评分引擎（无 Streamlit 依赖版本）────────────────────────────────
+# ── 评分引擎（委托给 modules/scorer.py 统一实现）────────────────────
+# 原始内置实现已迁移至 modules/scorer.py，此处保留同名包装以确保向后兼容
 
-def _score_tech(kline: pd.DataFrame, trade_date: str) -> dict:
-    """技术面评分（满分 60 → 归一化到 40）
+def _score_tech(kline: pd.DataFrame, trade_date: str, lianban_count: int = 0) -> dict:
+    """技术面评分 — 委托给 modules/scorer.score_tech()
     
-    ① 均线多头（15分）
-    ② RSI（10分）
-    ③ MACD（10分）
-    ④ 量比/量能（10分）：优先使用当日量比（量比=当日成交量/近5日均量）
-    ⑤ 近20日涨幅（10分）
-    ⑥ K线形态（5分）
+    Args:
+        kline:          日K DataFrame
+        trade_date:     信号日
+        lianban_count:  连板数（默认0）
     """
-    if kline.empty or len(kline) < 20:
-        return {"score": 0, "detail": {"错误": "K线不足"}, "rsi": None, "gain20": None,
-                "macd_score": 0, "volume_ratio": None}
-
-    close  = kline["收盘"].astype(float).values
-    volume = kline["成交量"].astype(float).values if "成交量" in kline.columns else None
-    last = -1
-    raw_score = 0
-
-    # ① 均线多头（15分）
-    ma5  = _sma(close, 5)
-    ma10 = _sma(close, 10)
-    ma20 = _sma(close, 20)
-    ma_score = 0
-    if not np.isnan(ma5[last]) and not np.isnan(ma10[last]) and not np.isnan(ma20[last]):
-        c = close[last]
-        if c > ma5[last]:           ma_score += 4
-        if ma5[last] > ma10[last]:  ma_score += 5
-        if ma10[last] > ma20[last]: ma_score += 6
-    raw_score += ma_score
-
-    # ② RSI（10分）
-    rsi_val = None
-    rsi_score = 0
-    period = 14
-    if len(close) >= period + 1:
-        deltas   = np.diff(close)
-        avg_gain = np.where(deltas > 0, deltas, 0.0)[-period:].mean()
-        avg_loss = np.where(deltas < 0, -deltas, 0.0)[-period:].mean()
-        rsi_val  = round(100 - 100 / (1 + avg_gain / avg_loss), 1) if avg_loss > 0 else 100.0
-        if 45 <= rsi_val <= 70:   rsi_score = 10
-        elif 35 <= rsi_val < 45:  rsi_score = 7
-        elif 70 < rsi_val <= 80:  rsi_score = 5
-        elif rsi_val > 80:        rsi_score = 1
-        else:                     rsi_score = 3
-    raw_score += rsi_score
-
-    # ③ MACD（10分）
-    macd_score = 0
-    if len(close) >= 35:
-        ema12    = _ema(close, 12)
-        ema26    = _ema(close, 26)
-        dif      = ema12 - ema26
-        dea      = _ema(dif, 9)
-        hist_arr = (dif - dea) * 2
-        valid_h  = hist_arr[~np.isnan(hist_arr)]
-        if len(valid_h) >= 2:
-            if valid_h[-2] < 0 <= valid_h[-1]:    macd_score = 10
-            elif valid_h[-1] > 0 and valid_h[-1] > valid_h[-2]: macd_score = 8
-            elif valid_h[-1] > 0:                  macd_score = 5
-            elif valid_h[-2] > 0 >= valid_h[-1]:   macd_score = 0
-            else:                                   macd_score = 2
-    raw_score += macd_score
-
-    # ④ 量比/量能（10分）：当日成交量 / 近5日均量（标准量比定义）
-    vol_score    = 0
-    volume_ratio = None  # 量比
-    if volume is not None and len(volume) >= 6:
-        vol5_avg = volume[-6:-1].mean()  # 前5日均量（排除今日）
-        if vol5_avg > 0:
-            volume_ratio = round(float(volume[-1]) / float(vol5_avg), 2)
-            if volume_ratio >= 3.0:   vol_score = 10   # 极度放量
-            elif volume_ratio >= 2.0: vol_score = 8    # 明显放量
-            elif volume_ratio >= 1.5: vol_score = 6    # 温和放量
-            elif volume_ratio >= 1.0: vol_score = 4    # 平量
-            else:                     vol_score = 1    # 缩量
-        elif len(volume) >= 20:
-            # 前5日全为0（停牌复牌等情况），降级用20日均量
-            vol20 = volume[-20:].mean()
-            if vol20 > 0:
-                volume_ratio = round(float(volume[-1]) / float(vol20), 2)
-                if volume_ratio >= 2.0: vol_score = 8
-                elif volume_ratio >= 1.5: vol_score = 6
-                else: vol_score = 3
-    raw_score += vol_score
-
-    # ⑤ 近20日涨幅（10分）
-    gain20_val   = None
-    gain20_score = 0
-    if len(close) >= 20:
-        base = close[-20]
-        if base > 0:
-            gain20_val = round((close[last] / base - 1) * 100, 2)
-            if gain20_val < 0:         gain20_score = 6
-            elif gain20_val <= 10:     gain20_score = 10
-            elif gain20_val <= 20:     gain20_score = 7
-            elif gain20_val <= 30:     gain20_score = 4
-            elif gain20_val <= 50:     gain20_score = 2
-    raw_score += gain20_score
-
-    # ⑥ K线形态（5分）
-    form_score = 0
-    if len(kline) >= 1:
-        row = kline.iloc[last]
-        h = float(row.get("最高", row["收盘"]))
-        l = float(row.get("最低",  row["收盘"]))
-        o = float(row["开盘"])
-        c_val = float(row["收盘"])
-        body  = abs(c_val - o)
-        upper_shadow = h - max(c_val, o)
-        total_range  = h - l if h > l else 1
-        if body / total_range >= 0.6 and c_val > o:     form_score = 5
-        elif body / total_range >= 0.4 and c_val > o:   form_score = 3
-        elif upper_shadow > body * 1.5:                  form_score = 1
-        else:                                            form_score = 2
-    raw_score += form_score
-
-    total_possible = 15 + 10 + 10 + 10 + 10 + 5  # = 60
-    normalized = round(raw_score / total_possible * 40)
-
-    return {
-        "score":        min(normalized, 40),
-        "rsi":          rsi_val,
-        "gain20":       gain20_val,
-        "macd_score":   macd_score,
-        "volume_ratio": volume_ratio,
-        "ma5":          round(float(ma5[last]),  3) if not np.isnan(ma5[last])  else None,
-        "ma10":         round(float(ma10[last]), 3) if not np.isnan(ma10[last]) else None,
-        "ma20":         round(float(ma20[last]), 3) if not np.isnan(ma20[last]) else None,
-    }
+    return _score_tech_shared(kline, trade_date, lianban_count=lianban_count)
 
 
 def _score_fund(lhb_row: pd.Series) -> dict:
-    """
-    资金面评分（满分 35 分）
-
-    评分组成：
-      净买入强度（15分）：用「净买入额 / 流通市值」归一化，不同市值股票可比
-                         流通市值字段缺失时降级为绝对额评分
-      席位质量  （12分）：机构买方 +5，知名游资席位每席 +3（上限 6）
-      对倒风险惩罚（-10分）：解读字段含"主买"+"卖"且净买额为负，疑似对倒
-    """
-    score  = 0
-
+    """资金面评分 — 委托给 modules/scorer.score_fund()（无席位明细路径）"""
+    res = _score_fund_shared(lhb_row, seat_df=None, fund_flow=None)
+    # 向后兼容：保留旧返回字段 net_buy / duodao_reason
     net_buy = lhb_row.get("龙虎榜净买额", 0)
-    if pd.notna(net_buy):
-        net_buy = float(net_buy)
-    else:
-        net_buy = 0
-
-    # ── 净买入强度（归一化 vs 流通市值）────────────────────────────────
-    free_float_mv = lhb_row.get("流通市值", None)
-    net_buy_strength_pct: float | None = None
-
-    if free_float_mv is not None and pd.notna(free_float_mv):
-        mv = float(free_float_mv)
-        if mv > 0 and net_buy > 0:
-            net_buy_strength_pct = round(net_buy / mv * 100, 3)
-            # 归一化强度阈值（相对市值，更公平地比较大小市值股票）
-            if net_buy_strength_pct >= 2.0:   score += 15
-            elif net_buy_strength_pct >= 1.0: score += 12
-            elif net_buy_strength_pct >= 0.5: score += 8
-            elif net_buy_strength_pct >= 0.1: score += 4
-            else:                              score += 1
-        elif net_buy > 0:
-            # mv = 0（异常数据），降级为绝对额
-            if net_buy >= 3e8:   score += 15
-            elif net_buy >= 1e8: score += 12
-            elif net_buy >= 5e7: score += 8
-            elif net_buy >= 1e7: score += 4
-            elif net_buy > 0:    score += 1
-    else:
-        # 无流通市值字段，降级为原绝对额评分（兼容旧缓存数据）
-        logger.debug(f"_score_fund: 无流通市值字段，降级为绝对额评分（代码={lhb_row.get('代码','?')}）")
-        if net_buy >= 3e8:   score += 15
-        elif net_buy >= 1e8: score += 12
-        elif net_buy >= 5e7: score += 8
-        elif net_buy >= 1e7: score += 4
-        elif net_buy > 0:    score += 1
-
-    # ── 席位评分：从 lhb_row 中快速判断 ────────────────────────────────
-    seat_tags   = []
-    jigou_buy   = 0
-    famous_buy  = []
-
-    row_str = " ".join(str(v) for v in lhb_row.values)
-    for seat_name, alias in FAMOUS_TRADERS.items():
-        if seat_name in row_str and alias not in famous_buy:
-            famous_buy.append(alias)
-            seat_tags.append(alias)
-
-    # 机构买方（解读字段含"机构买"/"机构"且净买额为正）
-    if ("机构" in row_str and net_buy > 0):
-        jigou_buy = 1
-    # 机构只卖不买：净买额为负且含"机构卖"
-    jigou_sell_only = ("机构" in row_str and "卖" in row_str and net_buy < 0)
-
-    seat_score = 0
-    if jigou_buy >= 1 and not jigou_sell_only:
-        seat_score += 5
-    seat_score += min(len(famous_buy) * 3, 6)
-    if not seat_tags and not jigou_buy:
-        seat_score = 4  # 无席位信息时给保守中间分
-
-    score += min(seat_score, 12)
-
-    # ── 对倒风险检测（基于解读字段文本分析）────────────────────────────
-    # 规则：净买额为负（主力出货）+ 解读含"主买"暗示对倒
-    # 或：机构只卖不买，疑似机构出逃拉高砸盘
-    duodao_risk = False
-    duodao_reason = ""
-
-    # 规则1：净买额为负（主力净卖出），但解读含"买"（对倒嫌疑）
-    jieda = str(lhb_row.get("解读", "") or "")
-    if net_buy < 0 and ("买" in jieda):
-        duodao_risk  = True
-        duodao_reason = f"净买额为负({net_buy/1e8:.2f}亿)但解读含买方，疑似对倒"
-        score -= 10
-        logger.debug(f"  ⚠️ 对倒风险({lhb_row.get('代码','?')})：{duodao_reason}")
-
-    # 规则2：机构只卖不买（出逃信号，不算对倒但同样危险）
-    if jigou_sell_only and not duodao_risk:
-        score -= 5  # 轻度惩罚
-        logger.debug(f"  ⚠️ 机构卖出信号({lhb_row.get('代码','?')})：{jieda[:40]}")
-
-    return {
-        "score":                 min(max(score, 0), 35),
-        "net_buy":               net_buy,
-        "jigou_buy":             jigou_buy,
-        "famous_buy":            famous_buy,
-        "seat_tags":             seat_tags,
-        "net_buy_strength_pct":  net_buy_strength_pct,  # 净买入强度（%市值），None 表示无数据
-        "duodao_risk":           duodao_risk,
-        "duodao_reason":         duodao_reason,
-    }
+    net_buy = float(net_buy) if pd.notna(net_buy) else 0.0
+    res.setdefault("net_buy", net_buy)
+    res.setdefault("duodao_reason", "")
+    return res
 
 
 def _score_history(code: str) -> dict:
-    """历史胜率评分（满分 25 分）"""
-    score  = 0
+    """历史胜率评分 — 从 lhb_top10_prices 读取后调用 scorer.score_history()"""
     t2_win = None
     t5_win = None
     count  = 0
-
     try:
         df = storage.read("lhb_top10_prices")
         if not df.empty:
@@ -354,7 +139,6 @@ def _score_history(code: str) -> dict:
             sub = df[df["代码"].astype(str).str.lstrip("0") == code_norm]
             sub = sub[sub["T+1买入价"].notna()]
             count = len(sub)
-
             for n, k_name in [(2, "t2"), (5, "t5")]:
                 col = f"T+{n}收盘收益%"
                 if col in sub.columns:
@@ -365,25 +149,14 @@ def _score_history(code: str) -> dict:
                             t2_win = win_rate
                         else:
                             t5_win = win_rate
-
-        if count == 0:
-            score = 12  # 无历史数据给中间分
-        else:
-            if t2_win is not None:
-                if t2_win >= 70:   score += 12
-                elif t2_win >= 60: score += 9
-                elif t2_win >= 50: score += 6
-                elif t2_win >= 40: score += 3
-            if t5_win is not None:
-                if t5_win >= 70:   score += 13
-                elif t5_win >= 60: score += 10
-                elif t5_win >= 50: score += 7
-                elif t5_win >= 40: score += 3
     except Exception as e:
         logger.warning(f"_score_history [{code}]: {e}")
-        score = 12
 
-    return {"score": min(score, 25), "t2_win": t2_win, "t5_win": t5_win, "count": count}
+    res = _score_history_shared({"count": count, "t2_win": t2_win, "t5_win": t5_win})
+    res["t2_win"] = t2_win
+    res["t5_win"] = t5_win
+    res["count"]  = count
+    return res
 
 
 # ── 获取集合竞价信号 ─────────────────────────────────────────────────
@@ -447,6 +220,29 @@ def get_mainboard_signals(trade_date: str, top_n: int = 10) -> list[dict]:
         logger.warning("当日龙虎榜中无主板股票")
         return []
 
+    # Step 2b: 获取当日连板数据（stock_zt_pool_strong_em），构建 code→连板数 映射
+    lianban_map: dict[str, int] = {}
+    try:
+        import akshare as ak
+        df_lb = safe_akshare_call(
+            ak.stock_zt_pool_strong_em, date=trade_date,
+            max_retries=2, base_delay=1.0, fallback=None,
+        )
+        if df_lb is not None and not df_lb.empty:
+            # 字段名：「代码」「连板数」（东财接口标准字段）
+            code_col  = next((c for c in df_lb.columns if "代码" in c), None)
+            lian_col  = next((c for c in df_lb.columns if "连板" in c), None)
+            if code_col and lian_col:
+                for _, lb_row in df_lb.iterrows():
+                    c_ = str(lb_row[code_col]).zfill(6)
+                    try:
+                        lianban_map[c_] = int(lb_row[lian_col])
+                    except (ValueError, TypeError):
+                        pass
+                logger.info(f"连板池数据: {len(lianban_map)} 只连板股")
+    except Exception as e:
+        logger.warning(f"连板池数据获取失败（不影响评分）: {e}")
+
     # Step 3: 逐只评分
     signals = []
     for i, (_, row) in enumerate(df.iterrows()):
@@ -458,8 +254,9 @@ def get_mainboard_signals(trade_date: str, top_n: int = 10) -> list[dict]:
         kline = get_today_kline(code, trade_date)
         time.sleep(0.3)  # 避免接口限流
 
-        # 三维评分
-        t_res = _score_tech(kline, trade_date)
+        # 三维评分（注入连板高度因子）
+        lianban_count = lianban_map.get(code, 0)
+        t_res = _score_tech(kline, trade_date, lianban_count=lianban_count)
         f_res = _score_fund(row)
         h_res = _score_history(code)
 
@@ -493,6 +290,8 @@ def get_mainboard_signals(trade_date: str, top_n: int = 10) -> list[dict]:
             "ma10":                   t_res.get("ma10"),
             "ma20":                   t_res.get("ma20"),
             "volume_ratio":           t_res.get("volume_ratio"),
+            "lianban_count":          lianban_count,
+            "lianban_score":          t_res.get("lianban_score", 0),
             "seat_tags":              f_res["seat_tags"],
             "jigou_buy":              f_res["jigou_buy"],
             "famous_buy":             f_res["famous_buy"],

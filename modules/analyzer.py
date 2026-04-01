@@ -29,17 +29,37 @@ _KLINE_CACHE: dict = {}
 def _kline_cache_clear():
     """清空进程级 K 线缓存（每次回测前调用）"""
     _KLINE_CACHE.clear()
+    # 同步清空 market_data 缓存（两处缓存共用进程内存）
+    try:
+        from modules.market_data import kline_cache_clear
+        kline_cache_clear()
+    except ImportError:
+        pass
     logger.info("K 线缓存已清空")
 
 
 def _kline_get(stock_code: str, start_dt: str, end_dt: str) -> pd.DataFrame:
     """
-    先查进程缓存，没有则拉 AKShare 后写入缓存。
-    返回 DataFrame(日期 as str, 收盘, 最高, 最低, 成交量)
+    K 线获取 — 委托给 modules/market_data.get_kline（统一数据层）
+    保留函数签名向后兼容，参数 start_dt/end_dt 用于计算 lookback。
     """
+    try:
+        from modules.market_data import get_kline
+        # 估算 lookback：(end_dt - start_dt) / 1.4 + 20 保留余量
+        try:
+            td = pd.Timestamp(end_dt) - pd.Timestamp(start_dt)
+            lookback = int(td.days / 1.4) + 20
+        except Exception:
+            lookback = 120
+        df = get_kline(stock_code, end_dt, lookback=lookback, adjust="qfq")
+        if not df.empty:
+            return df
+    except Exception as e:
+        logger.warning(f"_kline_get via market_data failed ({stock_code}): {e}, 降级旧路径")
+
+    # 旧路径 fallback（保留以防 market_data 初始化失败）
     if stock_code in _KLINE_CACHE:
         df = _KLINE_CACHE[stock_code]
-        # 按请求日期范围过滤
         if "日期" in df.columns:
             df = df[df["日期"].astype(str) <= end_dt]
         return df
@@ -47,17 +67,12 @@ def _kline_get(stock_code: str, start_dt: str, end_dt: str) -> pd.DataFrame:
     from utils.retry import safe_akshare_call
     raw = safe_akshare_call(
         ak.stock_zh_a_hist,
-        symbol=stock_code,
-        period="daily",
-        start_date=start_dt,
-        end_date=end_dt,
+        symbol=stock_code, period="daily",
+        start_date=start_dt, end_date=end_dt,
         adjust="qfq",
-        max_retries=3,
-        base_delay=2.0,
-        fallback=None,
+        max_retries=3, base_delay=2.0, fallback=None,
     )
     if raw is not None and len(raw) > 5:
-        # 统一列名
         raw = raw.rename(columns={"date": "日期", "open": "开盘", "high": "最高",
                                    "low": "最低", "close": "收盘", "volume": "成交量"})
         if "日期" not in raw.columns and raw.index.name == "日期":

@@ -187,6 +187,9 @@ def _days_since(trade_date_str: str) -> int:
 
 
 # ── 价格获取 ──────────────────────────────────────────────────────────
+# 注意：以下函数已在 modules/market_data.py 中有统一实现（get_kline_raw / get_t2_prices）
+# trade_runner 内保留私有副本以维持独立性和稳定性，两者行为完全一致。
+# 后续可通过 from modules.market_data import get_kline_raw as _fetch_kline 简化。
 
 def _fetch_kline(code: str, start_date: str, days: int = 5) -> pd.DataFrame | None:
     """拉取 start_date 起 days 根 K 线（不复权）"""
