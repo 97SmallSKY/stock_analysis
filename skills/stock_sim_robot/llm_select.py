@@ -261,25 +261,15 @@ TOTAL_CAPITAL = 100_000.0  # 与 sim_trade_db.TOTAL_CAPITAL 保持一致（本�
 
 _SYSTEM_PROMPT = """你是一位专业的量化交易助手，专注于 A 股主板短线交易（龙虎榜策略）。
 
-你的任务：从今日龙虎榜主板候选信号中，选出 1 只最值得操作的股票，并设定合理的 T+2 挂牌卖出价，同时决定本次仓位比例。
+你的任务：从今日龙虎榜主板候选信号中，选出 1 只最值得操作的股票，并设定合理的 T+2 挂牌卖出价。
+
+注意：仓位大小（买入金额）由系统风控规则独立决定，**你不需要决定仓位比例**，只负责「选哪只股」和「挂牌价目标」。
 
 策略背景：
 - T 日（今日）：龙虎榜上榜，分析信号
 - T+1 日（明日）：开盘集合竞价买入
 - T+2 日：设挂单卖出（冲高走人策略）
-- 账户总资金：10万元（TOTAL_CAPITAL=100000）
 - 止损线：-5%（T+2收盘价 < 买入价×95% 时自动止损）
-
-💵 仓位管理规则（重要）：
-- 用户消息中会提供当前账户资金状况（available_capital、invested、open_positions）
-- 你需要在 invest_ratio 字段给出本次仓位比例建议（0.0~1.0）
-- 仓位原则：
-  * 无持仓时：可建议 0.6~0.8（较积极）
-  * 有1只持仓时：可建议 0.3~0.5（分散风险）
-  * 可用资金不足 20000 元时：建议 SKIP 或 invest_ratio ≤ 0.2
-  * 信号质量很高（评分≥75且T+2胜率≥60%）时，可上调一档
-  * 信号质量较差（评分<55或涨幅>20%）时，应下调一档
-- invest_amount = TOTAL_CAPITAL × invest_ratio（系统自动计算实际买入金额）
 
 选股核心规则（按权重排序）：
 1. 综合评分越高越好（≥65 优先）
@@ -301,13 +291,11 @@ _SYSTEM_PROMPT = """你是一位专业的量化交易助手，专注于 A 股主
    - 如果历史教训提示某类股票（高位追涨/RSI>80/特定板块）容易亏损，请在选股时降低该类股票的优先级
    - 如果历史教训提示止损模式与某候选股高度相似，请在理由中明确说明规避原因
 
-请输出严格的 JSON 格式（不要包含其他文字），包含4个维度的选股理由和仓位建议：
+请输出严格的 JSON 格式（不要包含其他文字），包含4个维度的选股理由：
 {
   "code": "股票代码（6位）或 SKIP",
   "name": "股票名称",
   "list_price_pct": 目标涨幅（数字，如5.0表示+5%）,
-  "invest_ratio": 仓位比例（0.0~1.0，如0.5表示用50%资金=5万元）,
-  "invest_reason": "仓位决策理由（30字以内，说明为何选择该比例）",
   "reason": "综合选股摘要（60字以内，用于飞书通知）",
   "reason_tech": "技术面分析（包含RSI/均线/MACD/涨幅位置，50字以内）",
   "reason_fund": "资金面分析（包含净买入额/排名/席位质量，50字以内）",
@@ -386,31 +374,12 @@ def _call_llm(signals: list[dict], capital_info: dict | None = None) -> Optional
         except Exception as _e:
             logger.debug(f"读取亏损教训非致命: {_e}")
 
-        # ── 注入账户资金状况 ─────────────────────────────────────────────
-        capital_text = ""
-        if capital_info:
-            pos_list = capital_info.get("open_positions", [])
-            pos_desc = "无" if not pos_list else "、".join(
-                f"{p['name']}（{p['code']}）¥{p['cost']:,.0f}"
-                for p in pos_list
-            )
-            capital_text = (
-                f"\n\n【当前账户资金状况】\n"
-                f"- 总资金：¥{capital_info.get('total', 100000):,.0f}\n"
-                f"- 已投入：¥{capital_info.get('invested', 0):,.0f}\n"
-                f"- 可用余额：¥{capital_info.get('available', 100000):,.0f}\n"
-                f"- 当前持仓数：{capital_info.get('open_count', 0)} 只\n"
-                f"- 持仓明细：{pos_desc}\n"
-                f"请据此给出合理的 invest_ratio（仓位比例，0.0~1.0）。"
-            )
-            logger.info(
-                f"资金上下文注入 LLM: 可用={capital_info.get('available'):,.0f}元 "
-                f"持仓={capital_info.get('open_count')}只"
-            )
+        # 注意：capital_info 不再注入给 LLM，仓位由独立风控规则决定
+        # LLM 只负责「选哪只股」和「挂牌价目标」
 
         user_msg = (
-            f"{signal_text}{loss_context}{capital_text}\n\n"
-            f"请根据以上信号数据，选出 1 只最佳主板股票并设定挂牌价和仓位比例。\n"
+            f"{signal_text}{loss_context}\n\n"
+            f"请根据以上信号数据，选出 1 只最佳主板股票并设定挂牌价。\n"
             f"直接输出 JSON，不要包含其他说明文字。"
         )
 
@@ -447,10 +416,14 @@ def select_stock(signals: list[dict], capital_info: dict | None = None) -> dict:
     """
     主选股函数：尝试 LLM → 失败则 fallback 到规则引擎
 
+    职责划分（LLM军师 + 规则将军）：
+      - LLM  只负责：选哪只股（code）+ 挂牌价目标（list_price_pct）+ 4维度理由
+      - 规则引擎负责：仓位大小（invest_ratio/invest_amount），由 _default_invest_ratio() 决定
+
     Args:
         signals:      get_mainboard_signals() 的返回值
         capital_info: 账户资金状况（来自 get_available_capital()），
-                      用于让 LLM 决策仓位比例
+                      仅供风控规则计算仓位，**不传给 LLM**
 
     Returns:
         dict，包含：
@@ -485,11 +458,12 @@ def select_stock(signals: list[dict], capital_info: dict | None = None) -> dict:
 
         list_pct     = float(llm_result.get("list_price_pct", 5.0))
         list_price   = round(chosen["close_price"] * (1 + list_pct / 100), 2)
-        invest_ratio = float(llm_result.get("invest_ratio") or 0.6)
-        # 限制在合理范围
-        invest_ratio = max(0.1, min(1.0, invest_ratio))
+
+        # 仓位由独立风控规则决定，不依赖 LLM 输出
+        invest_ratio  = _default_invest_ratio(capital_info, chosen)
         invest_amount = round(total_capital * invest_ratio, 2)
-        logger.info(f"LLM 仓位决策: invest_ratio={invest_ratio} → invest_amount={invest_amount:,.0f}元")
+        logger.info(f"规则仓位决策: invest_ratio={invest_ratio} → invest_amount={invest_amount:,.0f}元 "
+                    f"（LLM仅负责选股+挂牌价）")
 
         return {
             "code":            chosen["code"],
@@ -501,7 +475,7 @@ def select_stock(signals: list[dict], capital_info: dict | None = None) -> dict:
             "stop_loss_pct":   STOP_LOSS_PCT,
             "invest_ratio":    invest_ratio,
             "invest_amount":   invest_amount,
-            "invest_reason":   llm_result.get("invest_reason", ""),
+            "invest_reason":   "规则风控",  # 仓位由规则引擎决定，非LLM
             "reason":          llm_result.get("reason", "LLM 选股"),
             "reason_tech":     llm_result.get("reason_tech", ""),
             "reason_fund":     llm_result.get("reason_fund", ""),
