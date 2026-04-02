@@ -217,8 +217,13 @@ def get_kline_raw(
         )
         if raw is not None and not raw.empty:
             raw = raw.rename(columns={
-                "date": "日期", "open": "开盘",
-                "high": "最高", "low": "最低", "close": "收盘",
+                "date":   "日期",
+                "open":   "开盘",
+                "high":   "最高",
+                "low":    "最低",
+                "close":  "收盘",
+                "volume": "成交量",
+                "amount": "成交额",
             })
             return raw.sort_values("日期").reset_index(drop=True)
     except Exception as e:

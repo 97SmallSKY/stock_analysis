@@ -198,15 +198,31 @@ def render_tab1():
         else:
             st.metric("买入 vs 最优差距", "待结算")
 
+    # ── 买入股详情卡 ───────────────────────────────────────────────────────────
+    if bought_code:
+        bought_rows = df[df["是否买入"]]
+        if not bought_rows.empty:
+            br = bought_rows.iloc[0]
+            st.info(
+                f"**本日买入股：{br['名称']}（{br['代码']}）** | "
+                f"上榜收盘价：¥{br['收盘价']:.2f} | "
+                f"当日涨跌：{_fmt_pct(br.get('涨跌幅'))} | "
+                f"T+1：{_fmt_pct(br.get('上榜后1日'))} | "
+                f"T+5：{_fmt_pct(br.get('上榜后5日'))} | "
+                f"上榜原因：{str(br.get('上榜原因') or '—')[:40]}"
+            )
+    else:
+        st.caption(f"📋 {selected_date} 无模拟买入记录（仅展示龙虎榜对比）")
+
     if not has_t1:
         st.info(f"⏳ {selected_date} 的 T+N 收益尚未到结算日，将在上榜后1~10个交易日内自动更新")
 
-    # ── 趋势折线图（多股叠加）─────────────────────────────────────────────────
+    # ── 趋势折线图（多股叠加，T+0 作起始锚点）────────────────────────────────
     st.subheader("上榜后涨跌幅趋势（多股叠加）")
 
-    # 构建 T+0/T+1/T+2/T+5/T+10 的涨幅序列
-    x_points = []
-    col_map   = {}
+    # T+0 用当天涨跌幅作起点（体现上榜当天表现），之后接 T+1/T+2/T+5/T+10
+    x_points = ["T+0"]
+    col_map  = {"T+0": "涨跌幅"}
     if has_t1:
         x_points.append("T+1"); col_map["T+1"] = "上榜后1日"
     if df["上榜后2日"].notna().any():
@@ -216,86 +232,94 @@ def render_tab1():
     if has_t10:
         x_points.append("T+10"); col_map["T+10"] = "上榜后10日"
 
-    if x_points:
-        fig_trend = go.Figure()
-        for _, row in df.iterrows():
-            ys = [row.get(col_map[x]) for x in x_points]
-            is_bought = row["是否买入"]
-            # 只画有至少一个数据点的股票
-            if not any(pd.notna(y) for y in ys):
-                continue
-            label = f"{row['名称']}({row['代码']})"
-            fig_trend.add_trace(go.Scatter(
-                x=x_points,
-                y=ys,
-                mode="lines+markers",
-                name=label,
-                line={
-                    "width": 3 if is_bought else 1.5,
-                    "color": _BLUE if is_bought else None,
-                    "dash":  "solid" if is_bought else "dot",
-                },
-                marker={"size": 8 if is_bought else 5},
-                opacity=1.0 if is_bought else 0.65,
-                hovertemplate=f"<b>{label}</b><br>%{{x}}: %{{y:+.2f}}%<extra></extra>",
-            ))
+    # 只要有 T+0 数据就渲染（T+0=涨跌幅字段始终有值）
+    fig_trend = go.Figure()
+    for _, row in df.iterrows():
+        ys = [row.get(col_map[x]) for x in x_points]
+        is_bought = row["是否买入"]
+        label = f"{row['名称']}({row['代码']})"
+        # 单点时用 markers+text，多点时用 lines+markers
+        mode = "markers+text" if len([y for y in ys if pd.notna(y)]) == 1 else "lines+markers"
+        fig_trend.add_trace(go.Scatter(
+            x=x_points,
+            y=ys,
+            mode=mode,
+            name=label,
+            text=[f"{_fmt_pct(y)}" if pd.notna(y) else "" for y in ys],
+            textposition="top center",
+            textfont={"size": 9, "color": _BLUE if is_bought else None},
+            line={
+                "width": 3 if is_bought else 1.5,
+                "color": _BLUE if is_bought else None,
+                "dash":  "solid" if is_bought else "dot",
+            },
+            marker={"size": 10 if is_bought else 6,
+                    "symbol": "star" if is_bought else "circle"},
+            opacity=1.0 if is_bought else 0.72,
+            hovertemplate=f"<b>{label}</b><br>%{{x}}: %{{y:+.2f}}%<extra></extra>",
+        ))
 
-        fig_trend.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
-        if bought_code:
-            fig_trend.add_annotation(
-                text=f"— 蓝色粗线 = 实际买入股 ({bought_code})",
-                xref="paper", yref="paper",
-                x=0.01, y=1.05, showarrow=False,
-                font={"color": _BLUE, "size": 12},
-            )
-        fig_trend.update_layout(
-            title=f"{selected_date} 龙虎榜股票上榜后涨跌幅趋势",
-            xaxis_title="上榜后第N个交易日",
-            yaxis_title="涨跌幅 %",
-            legend={"orientation": "v", "x": 1.02, "y": 1},
-            hovermode="x unified",
-            height=450,
+    fig_trend.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
+    if bought_code:
+        fig_trend.add_annotation(
+            text=f"★ 星形 = 实际买入股 ({bought_code})",
+            xref="paper", yref="paper",
+            x=0.01, y=1.06, showarrow=False,
+            font={"color": _BLUE, "size": 11},
         )
-        st.plotly_chart(fig_trend, use_container_width=True)
-    else:
-        st.info(f"⏳ 上榜后收益数据尚未填充，请等待下一次 daily_update（通常次日更新 T+1）")
+    if not has_t5:
+        fig_trend.add_annotation(
+            text="⏳ T+5/T+10 待结算",
+            xref="paper", yref="paper",
+            x=0.99, y=1.06, showarrow=False,
+            font={"color": _GRAY, "size": 10},
+        )
+    fig_trend.update_layout(
+        title=f"{selected_date} 龙虎榜股票上榜后涨跌幅走势",
+        xaxis_title="上榜后第N个交易日",
+        yaxis_title="涨跌幅 %",
+        legend={"orientation": "v", "x": 1.01, "y": 1},
+        hovermode="x unified",
+        height=500,
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
 
-    # ── T+5 横向对比柱状图 ─────────────────────────────────────────────────────
-    if has_t5:
-        st.subheader("T+5 收益横向对比")
-        df_sorted = df.sort_values("上榜后5日", ascending=False).copy()
-        colors = []
-        for _, row in df_sorted.iterrows():
+    # ── 横向对比柱状图（优先 T+5，降级用 T+1）────────────────────────────────
+    bar_col    = "上榜后5日" if has_t5 else ("上榜后1日" if has_t1 else None)
+    bar_label  = "T+5" if has_t5 else "T+1"
+
+    if bar_col:
+        st.subheader(f"{bar_label} 收益横向对比" + ("" if has_t5 else "（T+5 待结算，暂用 T+1 对比）"))
+        df_sorted = df.sort_values(bar_col, ascending=False).copy()
+
+        colors, text_labels = [], []
+        best_idx = df_sorted[bar_col].idxmax() if df_sorted[bar_col].notna().any() else None
+        for idx, row in df_sorted.iterrows():
             if row["是否买入"]:
                 colors.append(_BLUE)
-            elif pd.notna(row["上榜后5日"]) and row["上榜后5日"] > 0:
+            elif pd.notna(row[bar_col]) and row[bar_col] > 0:
                 colors.append(_GREEN)
             else:
                 colors.append(_RED)
-
-        # 最优股加星标
-        best_idx = df_sorted["上榜后5日"].idxmax()
-        text_labels = []
-        for idx, row in df_sorted.iterrows():
-            label = _fmt_pct(row["上榜后5日"])
+            lbl = _fmt_pct(row[bar_col])
             if idx == best_idx:
-                label = "★ " + label
+                lbl = "★ " + lbl
             if row["是否买入"]:
-                label = "▶ " + label
-            text_labels.append(label)
+                lbl = "▶ " + lbl
+            text_labels.append(lbl)
 
         fig_bar = go.Figure(go.Bar(
             x=df_sorted["名称"] + "<br>" + df_sorted["代码"],
-            y=df_sorted["上榜后5日"],
+            y=df_sorted[bar_col],
             marker_color=colors,
             text=text_labels,
             textposition="outside",
-            hovertemplate="<b>%{x}</b><br>T+5: %{y:+.2f}%<extra></extra>",
+            hovertemplate="<b>%{x}</b><br>" + bar_label + ": %{y:+.2f}%<extra></extra>",
         ))
         fig_bar.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
         fig_bar.update_layout(
-            title=f"{selected_date} T+5 收益横向对比（蓝=买入 ★=最优）",
-            yaxis_title="T+5 涨跌幅 %",
+            title=f"{selected_date} {bar_label} 收益横向对比（蓝=买入 ★=最优）",
+            yaxis_title=f"{bar_label} 涨跌幅 %",
             xaxis_tickangle=-30,
             height=420,
         )
@@ -413,7 +437,7 @@ def render_tab2():
     if kline_df is None or kline_df.empty:
         st.warning(f"未能拉取到 {name}({code}) 的 K 线数据（可能已退市或临时接口失败）")
     else:
-        _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, sell_price)
+        _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, sell_price, profit_pct)
 
     # ── 平仓后跟踪折线 ────────────────────────────────────────────────────────
     post_df = _get_post_tracking(trade_id)
@@ -479,36 +503,43 @@ def render_tab2():
 
 
 def _fetch_trade_kline(trade_row) -> pd.DataFrame | None:
-    """拉取该笔交易对应的 K 线（买入前5日 ~ 卖出后10日）"""
+    """
+    拉取该笔交易对应的 K 线。
+    范围：trade_date 前约 15 个自然日 ~ sell_date 后约 15 个自然日。
+    get_kline_raw(code, start_date, days) 中 start_date 是起始日，
+    end_date = start_date + days*2+5，因此需要从 trade_date 往前推。
+    """
+    import pandas as _pd_local
+    from datetime import timedelta
     from modules.market_data import get_kline_raw
-    code      = str(trade_row.get("code") or "")
+
+    code       = str(trade_row.get("code") or "")
     trade_date = str(trade_row.get("trade_date") or "")
     sell_date  = str(trade_row.get("sell_date") or "")
 
     if not code or not trade_date:
         return None
 
-    # 拉取足够长的 K 线（买入前10天 + 持仓 + 平仓后10天 ≈ 60天窗口）
-    anchor = sell_date if sell_date else trade_date
-    kline = get_kline_raw(code, anchor, days=60)
+    # 起点：trade_date 前 15 个自然日（确保买入前有足够走势）
+    try:
+        start_dt = (_pd_local.Timestamp(trade_date) - timedelta(days=15)).strftime("%Y%m%d")
+    except Exception:
+        start_dt = trade_date
+
+    # 结束点：sell_date 后 20 个自然日（看平仓后走势）
+    # days 参数 = (end - start) / 2（get_kline_raw 内部 end = start + days*2+5）
+    # 用大窗口 80 天确保覆盖整个区间
+    kline = get_kline_raw(code, start_dt, days=80)
     if kline is None or kline.empty:
         return None
 
-    # 统一日期格式
-    kline["日期"] = kline["日期"].astype(str).str.replace("-", "")
-    # 只保留 trade_date 前5个交易日起 ~ anchor 后10个交易日内
-    all_dates = sorted(kline["日期"].tolist())
-    try:
-        start_idx = max(0, all_dates.index(trade_date) - 5)
-    except ValueError:
-        # trade_date 不在 K 线里（停牌），就从最早有数据开始
-        start_idx = 0
-    kline = kline[kline["日期"] >= all_dates[start_idx]].reset_index(drop=True)
-    return kline
+    # 统一日期格式为 YYYYMMDD
+    kline["日期"] = kline["日期"].astype(str).str.replace("-", "").str[:8]
+    return kline.reset_index(drop=True)
 
 
-def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, sell_price):
-    """渲染蜡烛图主图 + 成交量子图，标注买入/卖出/最高点"""
+def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, sell_price, profit_pct=None):
+    """渲染蜡烛图主图 + 成交量子图，标注买入/卖出/最高点 + MA5/MA10/MA20"""
     df = kline_df.copy()
 
     # 统一日期格式（x 轴用 YYYY-MM-DD 格式更好看）
@@ -558,6 +589,20 @@ def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, se
             line={"color": _BLUE},
         ), row=1, col=1)
 
+    # MA 均线（基于收盘价）
+    if close_col:
+        for ma_n, ma_color in [(5, "#FFD700"), (10, "#00BFFF"), (20, "#FF69B4")]:
+            ma_vals = df[close_col].rolling(ma_n).mean()
+            if ma_vals.notna().any():
+                fig.add_trace(go.Scatter(
+                    x=df["date_fmt"], y=ma_vals,
+                    mode="lines",
+                    name=f"MA{ma_n}",
+                    line={"color": ma_color, "width": 1.2, "dash": "dot"},
+                    opacity=0.75,
+                    hovertemplate=f"MA{ma_n}: %{{y:.2f}}<extra></extra>",
+                ), row=1, col=1)
+
     # 成交量子图
     if vol_col:
         vol_colors = []
@@ -605,7 +650,7 @@ def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, se
             y0=0, y1=1, yref="paper",
             line={"color": _RED, "width": 2, "dash": "dash"},
         ))
-        pct_str = _fmt_pct(trade_row.get("profit_pct") if hasattr(trade_row, 'get') else None)
+        pct_str = _fmt_pct(profit_pct)
         annotations.append(dict(
             x=sell_date_fmt,
             y=sell_price,
