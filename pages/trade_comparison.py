@@ -280,40 +280,40 @@ def render_tab1():
 
         legend_note = f"蓝色粗线 = 买入股({bought_code})  |  其余为同天龙虎榜股票" if bought_code else "展示同天龙虎榜所有股票走势"
 
-        # T+0 竖线：用 Scatter 模拟，完全绕开 Plotly shapes 跨轴处理（字符串 x 报 TypeError）
-        # 计算所有股票 y 范围来确定竖线高度
+        # T+0 竖线：用 Scatter trace 模拟（避免 Plotly shapes/annotations yref=paper 触发跨轴计算 TypeError）
         all_y = []
         for trace in fig_kline.data:
             if hasattr(trace, "y") and trace.y is not None:
                 all_y.extend([v for v in trace.y if v is not None and str(v) != "nan"])
-        y_min = min(all_y) * 1.1 if all_y else -15
-        y_max = max(all_y) * 1.1 if all_y else 30
+        y_min = min(all_y) * 1.15 if all_y else -15
+        y_max = max(all_y) * 1.15 if all_y else 30
         fig_kline.add_trace(go.Scatter(
             x=[t0_fmt, t0_fmt],
             y=[y_min, y_max],
             mode="lines+text",
             line=dict(color=_GOLD, width=2, dash="dash"),
-            text=["", "上榜日"],
+            text=["", "▲ 上榜日"],
             textposition="top center",
-            textfont=dict(color=_GOLD, size=12),
+            textfont=dict(color=_GOLD, size=11),
             name="上榜日",
             showlegend=False,
             hoverinfo="skip",
         ))
 
         fig_kline.update_layout(
-            title=f"{selected_date} 龙虎榜股票近1个月走势（以上榜日收盘价归一化）",
+            title={
+                "text": (
+                    f"{selected_date} 龙虎榜近1个月走势（以上榜日收盘价归一化）"
+                    f"<br><sup>{legend_note}</sup>"
+                ),
+                "x": 0.01,
+                "xanchor": "left",
+            },
             xaxis_title="日期",
             yaxis_title="相对上榜日收盘价涨跌幅 %",
             legend={"orientation": "v", "x": 1.01, "y": 1},
             hovermode="x unified",
             height=580,
-            annotations=[dict(
-                text=legend_note,
-                xref="paper", yref="paper",
-                x=0.01, y=1.04, showarrow=False,
-                font={"size": 11, "color": _BLUE if bought_code else _GRAY},
-            )],
         )
         st.plotly_chart(fig_kline, use_container_width=True)
     else:
@@ -698,17 +698,22 @@ def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, se
     shapes = []
     annotations = []
 
-    # 买入线（蓝色虚线）
+    # 价格范围（用于竖线 y 范围）
+    _price_vals = df[close_col].dropna().tolist() if close_col else []
+    _p_min = min(_price_vals) * 0.97 if _price_vals else 0
+    _p_max = max(_price_vals) * 1.03 if _price_vals else 1
+
+    # 买入线（蓝色 Scatter 竖线，避免 yref=paper 触发跨轴 TypeError）
     if buy_date and buy_date_fmt in df["date_fmt"].values:
-        shapes.append(dict(
-            type="line", x0=buy_date_fmt, x1=buy_date_fmt,
-            y0=0, y1=1, yref="paper",
-            line={"color": _BLUE, "width": 2, "dash": "dash"},
-        ))
+        fig.add_trace(go.Scatter(
+            x=[buy_date_fmt, buy_date_fmt], y=[_p_min, _p_max],
+            mode="lines", line=dict(color=_BLUE, width=2, dash="dash"),
+            name="买入日", showlegend=False, hoverinfo="skip",
+        ), row=1, col=1)
         annotations.append(dict(
             x=buy_date_fmt,
-            y=buy_price if buy_price and close_col else 0,
-            yref="y" if buy_price and close_col else "paper",
+            y=buy_price if buy_price else _p_max * 0.95,
+            yref="y",
             text=f"买入 ¥{buy_price:.2f}" if buy_price else "买入",
             showarrow=True, arrowhead=2, arrowcolor=_BLUE,
             font={"color": _BLUE, "size": 11},
@@ -716,13 +721,13 @@ def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, se
             bordercolor=_BLUE,
         ))
 
-    # 卖出线（红色虚线）
+    # 卖出线（红色 Scatter 竖线）
     if sell_date and sell_price and sell_date_fmt in df["date_fmt"].values:
-        shapes.append(dict(
-            type="line", x0=sell_date_fmt, x1=sell_date_fmt,
-            y0=0, y1=1, yref="paper",
-            line={"color": _RED, "width": 2, "dash": "dash"},
-        ))
+        fig.add_trace(go.Scatter(
+            x=[sell_date_fmt, sell_date_fmt], y=[_p_min, _p_max],
+            mode="lines", line=dict(color=_RED, width=2, dash="dash"),
+            name="卖出日", showlegend=False, hoverinfo="skip",
+        ), row=1, col=1)
         pct_str = _fmt_pct(profit_pct)
         annotations.append(dict(
             x=sell_date_fmt,
@@ -755,7 +760,6 @@ def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, se
 
     fig.update_layout(
         title=f"{name}({code}) 复盘 K 线",
-        shapes=shapes,
         annotations=annotations,
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
