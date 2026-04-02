@@ -278,13 +278,22 @@ def render_tab1():
                 hovertemplate=f"<b>{label}</b><br>%{{x}}<br>相对T+0: %{{y:+.2f}}%<extra></extra>",
             ))
 
-        # T+0 竖线标注
-        fig_kline.add_vline(
-            x=t0_fmt,
-            line_dash="dash", line_color=_GOLD, line_width=2,
-            annotation_text="上榜日",
-            annotation_position="top right",
-            annotation_font_color=_GOLD,
+        # T+0 竖线标注（用 add_shape 替代 add_vline，避免 Plotly 对字符串 x 值报 TypeError）
+        fig_kline.add_shape(
+            type="line",
+            x0=t0_fmt, x1=t0_fmt,
+            y0=0, y1=1,
+            xref="x", yref="paper",
+            line={"color": _GOLD, "width": 2, "dash": "dash"},
+        )
+        fig_kline.add_annotation(
+            x=t0_fmt, y=1,
+            xref="x", yref="paper",
+            text="上榜日",
+            showarrow=False,
+            font={"color": _GOLD, "size": 12},
+            xanchor="left",
+            yanchor="top",
         )
         fig_kline.add_hline(y=0, line_dash="dot", line_color=_GRAY, opacity=0.4)
 
