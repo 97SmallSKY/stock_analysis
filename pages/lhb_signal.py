@@ -32,6 +32,20 @@ _BLUE  = "#4488FF"
 
 
 # ============================================================
+# 辅助计算函数
+# ============================================================
+
+def _sma(arr, n: int):
+    """简单移动平均（SMA），返回与 arr 等长的 numpy array，前 n-1 个位置为 NaN。"""
+    import numpy as np
+    arr = np.asarray(arr, dtype=float)
+    result = np.full(len(arr), np.nan)
+    for i in range(n - 1, len(arr)):
+        result[i] = arr[i - n + 1 : i + 1].mean()
+    return result
+
+
+# ============================================================
 # Session State 缓存
 # ============================================================
 
