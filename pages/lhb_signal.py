@@ -45,25 +45,6 @@ def _sma(arr, n: int):
     return result
 
 
-def _ema(arr, n: int):
-    """指数移动平均（EMA），返回与 arr 等长的 numpy array，前 n-1 个位置为 NaN。"""
-    import numpy as np
-    arr = np.asarray(arr, dtype=float)
-    result = np.full(len(arr), np.nan)
-    k = 2.0 / (n + 1)
-    # 找第一个非 NaN 起始点
-    start = 0
-    while start < len(arr) and np.isnan(arr[start]):
-        start += 1
-    if start + n - 1 >= len(arr):
-        return result
-    # 以前 n 个均值作为初始 EMA
-    result[start + n - 1] = np.mean(arr[start: start + n])
-    for i in range(start + n, len(arr)):
-        result[i] = arr[i] * k + result[i - 1] * (1 - k)
-    return result
-
-
 # ============================================================
 # Session State 缓存
 # ============================================================
