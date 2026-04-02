@@ -489,13 +489,14 @@ def get_market_max_position(ma5: float, ma20: float, ma60: float) -> float:
 
 | 代码函数 | 文档章节 | 当前状态 |
 |---------|---------|---------|
-| `sim_trade_db.get_performance_stats()` | §四.1 | ✅ 已实现 |
+| `sim_trade_db.get_performance_stats()` | §四.1 | ✅ 已实现（新增 consecutive_wins 字段） |
 | `sim_trade_db.calc_account_health_score()` | §四.1~§四.2 | ✅ 已实现 |
-| `sim_trade_db.check_circuit_breaker()` | §一.1、§二 | ✅ 已实现（待升级为4档） |
-| `sim_trade_db.calc_position_size()` | §四.3 | ❌ 待实现 |
+| `sim_trade_db.check_circuit_breaker()` | §一.1、§二 | ✅ 已升级为4档分级降速（cab5473） |
+| `sim_trade_db.calc_position_size()` | §四.3 | ✅ 已实现（cab5473） |
+| `sim_trade_db.get_trading_mode()` / `set_trading_mode()` | §二.1 | ✅ 已实现跨日持久化（cab5473） |
 | `sim_trade_db.log_price_ticks_batch()` | — | ✅ 已实现（D2-1） |
 | `modules/data_fetcher.py` 市场温度计 | §五.1 | ✅ 已实现 |
 | `pages/lhb_signal._apply_market_filter()` | §五.1 | ✅ 已实现 |
-| `pages/sim_trading.py` AHS 仪表盘 | §四 | ✅ 已实现 |
+| `pages/sim_trading.py` 运行模式仪表盘 | §二.1、§四 | ✅ 已升级为4档颜色仪表盘（cab5473） |
 | `sim_trade_db.sim_lesson_log` 表 | §六 | ❌ 待实现（P2） |
 | `trade_runner.py` 亏损原因自动归类 | §三.2 | ❌ 待实现（P1） |
