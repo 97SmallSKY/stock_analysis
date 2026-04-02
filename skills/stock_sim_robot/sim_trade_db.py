@@ -1187,6 +1187,7 @@ def create_extended_tables():
     try:
         from sqlalchemy import text
         engine = _get_engine()
+        # 第一个事务：建表（CREATE IF NOT EXISTS 均幂等）
         with engine.begin() as conn:
             conn.execute(text(_CREATE_SIM_PRICE_LOG))
             conn.execute(text(_CREATE_SIM_SELECTION_LOG))
@@ -1195,14 +1196,28 @@ def create_extended_tables():
             conn.execute(text(_CREATE_SIM_CANDIDATE_RESULTS))
             conn.execute(text(_CREATE_SIM_POST_TRACKING))
             conn.execute(text(_CREATE_SIM_NEWS_EVENTS))
-            # Bug 1 修复：为已存在的表补加 UNIQUE 约束（幂等）
-            try:
+
+        # 第二个独立事务：补加 UNIQUE 约束（Bug1修复）
+        # 注意：PG 遇到语法错误会使整个事务 abort，必须在独立事务中处理
+        # 使用 DO $$ 匿名块检查约束是否已存在再加，兼容所有 PG 版本
+        try:
+            with engine.begin() as conn:
                 conn.execute(text("""
-                    ALTER TABLE sim_candidate_results
-                    ADD CONSTRAINT IF NOT EXISTS uq_cand_sel UNIQUE (selection_id)
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint
+                            WHERE conrelid = 'sim_candidate_results'::regclass
+                              AND conname  = 'uq_cand_sel'
+                        ) THEN
+                            ALTER TABLE sim_candidate_results
+                            ADD CONSTRAINT uq_cand_sel UNIQUE (selection_id);
+                        END IF;
+                    END $$;
                 """))
-            except Exception:
-                pass  # 约束已存在或数据库不支持 IF NOT EXISTS，忽略
+        except Exception as e_alter:
+            logger.warning(f"补加 UNIQUE 约束失败（可忽略，表已可用）: {e_alter}")
+
         logger.info(
             "扩展表已就绪 ✅ "
             "sim_price_log / sim_selection_log / sim_nl_strategy / sim_audit_log / "
