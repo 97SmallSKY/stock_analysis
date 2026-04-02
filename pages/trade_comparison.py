@@ -40,6 +40,20 @@ def _get_engine():
     return _eng()
 
 
+def _get_selection_dates() -> list[str]:
+    """从 sim_selection_log 取有候选股记录的 trade_date 列表"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        df = pd.read_sql(
+            text("SELECT DISTINCT trade_date FROM sim_selection_log ORDER BY trade_date DESC LIMIT 90"),
+            engine,
+        )
+        return df["trade_date"].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+
 def _get_lhb_dates() -> list[str]:
     """从 lhb_top10 取最近有数据的 trade_date 列表"""
     try:
@@ -120,212 +134,182 @@ def _get_post_tracking(trade_id: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-# ── Tab1：同天候选对比（基于 lhb_top10）────────────────────────────────────────
+# ── Tab1：同天候选对比（基于 sim_selection_log + sim_candidate_results）─────────
 
 def render_tab1():
-    st.subheader("同天龙虎榜候选股对比")
-    st.caption("数据来源：龙虎榜 Top10 历史收益（东方财富 `上榜后N日`）")
+    st.subheader("同天候选对比")
+    st.caption("数据来源：模拟选股评分系统（`sim_selection_log + sim_candidate_results`）")
 
-    dates = _get_lhb_dates()
+    dates = _get_selection_dates()
     if not dates:
-        st.warning("暂无龙虎榜数据，请先运行 daily_update step1")
+        st.warning("暂无选股记录，请先运行 daily_update step2")
         return
 
     col1, col2 = st.columns([3, 1])
     with col1:
-        selected_date = st.selectbox("选择龙虎榜日期", dates, key="tab1_date")
+        selected_date = st.selectbox("选择选股日期", dates, key="tab1_date")
     with col2:
         st.write("")
         refresh = st.button("刷新", key="tab1_refresh")
 
-    cache_key = f"tab1_{selected_date}"
+    cache_key = f"tab1_sel_{selected_date}"
     if refresh or cache_key not in st.session_state:
-        df = _get_lhb_stocks(selected_date)
-        bought_code = _get_bought_code(selected_date)
-        st.session_state[cache_key] = (df, bought_code)
+        from skills.stock_sim_robot.sim_trade_db import get_candidate_results
+        raw = get_candidate_results(selected_date)
+        st.session_state[cache_key] = raw
     else:
-        df, bought_code = st.session_state[cache_key]
+        raw = st.session_state[cache_key]
 
-    if df.empty:
-        st.warning(f"{selected_date} 无龙虎榜数据")
+    if raw.empty:
+        st.warning(f"{selected_date} 无候选股数据")
         return
 
-    # 标记是否买入
-    df["是否买入"] = df["代码"].astype(str) == str(bought_code or "")
+    # ── 构建展示 DataFrame ─────────────────────────────────────────────────────
+    df = raw[["code", "name", "signal_score", "rank",
+              "t1_ret", "t3_ret", "t5_ret", "t10_ret", "trade_id"]].copy()
+    df["是否买入"] = df["trade_id"].notna()
+    df = df.rename(columns={
+        "code":         "代码",
+        "name":         "名称",
+        "signal_score": "评分",
+        "rank":         "选股排名",
+        "t1_ret":       "T+1%",
+        "t3_ret":       "T+3%",
+        "t5_ret":       "T+5%",
+        "t10_ret":      "T+10%",
+    })
+    # 各股在 T+1/T+3/T+5 范围内的最优涨幅
+    ret_cols = ["T+1%", "T+3%", "T+5%"]
+    df["最优涨幅"] = df[ret_cols].max(axis=1)
 
-    # 检查 T+N 数据是否填充
-    has_t1  = df["上榜后1日"].notna().any()
-    has_t5  = df["上榜后5日"].notna().any()
-    has_t10 = df["上榜后10日"].notna().any()
+    bought_rows = df[df["是否买入"]]
+    bought_code = str(bought_rows.iloc[0]["代码"]) if not bought_rows.empty else None
+    has_t5 = df["T+5%"].notna().any()
 
-    # ── 指标卡 ────────────────────────────────────────────────────────────────
-    c1, c2, c3, c4 = st.columns(4)
+    # ── 指标卡 ─────────────────────────────────────────────────────────────────
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        st.metric("龙虎榜股票数", len(df))
+        st.metric("候选股数", len(df))
     with c2:
         if has_t5:
-            avg_t5 = df["上榜后5日"].mean()
-            st.metric("T+5 平均涨幅", _fmt_pct(avg_t5))
+            st.metric("T+5 平均涨幅", _fmt_pct(df["T+5%"].mean()))
         else:
             st.metric("T+5 平均涨幅", "待结算")
     with c3:
         if has_t5:
-            best_row = df.loc[df["上榜后5日"].idxmax()]
-            st.metric(
-                "最优股 T+5",
-                _fmt_pct(best_row["上榜后5日"]),
-                delta=f"{best_row['名称']}({best_row['代码']})",
-            )
+            best = df.loc[df["T+5%"].idxmax()]
+            st.metric("最优股 T+5", _fmt_pct(best["T+5%"]),
+                      delta=f"{best['名称']}({best['代码']})")
         else:
             st.metric("最优股 T+5", "待结算")
     with c4:
-        if bought_code and has_t5:
-            bought_rows = df[df["是否买入"]]
-            if not bought_rows.empty:
-                bought_t5 = bought_rows.iloc[0]["上榜后5日"]
-                best_t5 = df["上榜后5日"].max()
-                diff = (best_t5 - bought_t5) if pd.notna(bought_t5) else None
-                st.metric(
-                    "买入 vs 最优差距",
-                    _fmt_pct(diff),
-                    delta=f"买入:{_fmt_pct(bought_t5)}",
-                    delta_color="inverse" if (diff or 0) > 0 else "normal",
-                )
-            else:
-                st.metric("买入 vs 最优差距", "—")
+        if bought_code and has_t5 and not bought_rows.empty:
+            b_t5 = bought_rows.iloc[0]["T+5%"]
+            best_t5 = df["T+5%"].max()
+            diff = (best_t5 - b_t5) if pd.notna(b_t5) else None
+            st.metric("买入 vs 最优差距", _fmt_pct(diff),
+                      delta=f"买入:{_fmt_pct(b_t5)}",
+                      delta_color="inverse" if (diff or 0) > 0 else "normal")
         elif not bought_code:
             st.metric("买入股", "本日未买入")
         else:
             st.metric("买入 vs 最优差距", "待结算")
+    with c5:
+        valid = df[df["T+5%"].notna() & df["评分"].notna()]
+        if len(valid) >= 3:
+            corr = valid["评分"].corr(valid["T+5%"], method="spearman")
+            color = "normal" if corr >= 0 else "inverse"
+            st.metric("评分↔T+5收益相关性", f"{corr:+.2f}",
+                      delta="评分体系有效" if corr > 0.3 else ("无效" if corr < -0.1 else "弱相关"),
+                      delta_color=color)
+        else:
+            st.metric("评分↔T+5收益相关性", "数据不足")
 
-    # ── 买入股详情卡 ───────────────────────────────────────────────────────────
-    if bought_code:
-        bought_rows = df[df["是否买入"]]
-        if not bought_rows.empty:
-            br = bought_rows.iloc[0]
-            st.info(
-                f"**本日买入股：{br['名称']}（{br['代码']}）** | "
-                f"上榜收盘价：¥{br['收盘价']:.2f} | "
-                f"当日涨跌：{_fmt_pct(br.get('涨跌幅'))} | "
-                f"T+1：{_fmt_pct(br.get('上榜后1日'))} | "
-                f"T+5：{_fmt_pct(br.get('上榜后5日'))} | "
-                f"上榜原因：{str(br.get('上榜原因') or '—')[:40]}"
-            )
+    # ── 买入股详情 ─────────────────────────────────────────────────────────────
+    if bought_code and not bought_rows.empty:
+        br = bought_rows.iloc[0]
+        rank_num = int(br["选股排名"])
+        total = len(df)
+        ret_best = df["最优涨幅"].max()
+        held_best = br["最优涨幅"]
+        msg = (f"**本日买入：{br['名称']}（{br['代码']}）** | 评分：{br['评分']:.0f} "
+               f"| 选股排名：#{rank_num}/{total} "
+               f"| T+1：{_fmt_pct(br['T+1%'])} T+3：{_fmt_pct(br['T+3%'])} T+5：{_fmt_pct(br['T+5%'])} "
+               f"| 最优涨幅：{_fmt_pct(held_best)}")
+        if pd.notna(ret_best) and pd.notna(held_best) and ret_best - held_best > 5:
+            st.warning(msg + f" ⚠️ 同天最优股比买入股多赚 {ret_best - held_best:+.1f}%")
+        else:
+            st.info(msg)
     else:
-        st.caption(f"📋 {selected_date} 无模拟买入记录（仅展示龙虎榜对比）")
+        st.caption(f"📋 {selected_date} 无模拟买入记录（仅展示候选对比）")
 
-    if not has_t1:
-        st.info(f"⏳ {selected_date} 的 T+N 收益尚未到结算日，将在上榜后1~10个交易日内自动更新")
+    if not has_t5:
+        st.info(f"⏳ {selected_date} 的 T+5 收益尚未到结算日，将由 daily_update step10 自动填充")
 
-    # ── 归一化 K 线多股对比图（前1个月 ~ 上榜后~15交易日）─────────────────────
-    st.subheader("近1个月走势对比（以上榜日收盘价归一化）")
-    st.caption("所有股票以上榜当天（T+0）收盘价为基准（=0%），展示前后走势；蓝色粗线 = 本次买入股")
+    # ── 散点图：评分 vs T+5 收益（核心：检验评分体系有效性）──────────────────
+    if has_t5:
+        st.subheader("评分 vs T+5收益 散点图")
+        st.caption("好的评分体系：买入股（蓝色大圆）应接近右上角；右下角=高分低收益（评分高估），左上角=低分高收益（错失机会）")
 
-    kline_cache_key = f"tab1_klines_{selected_date}"
-    if refresh or kline_cache_key not in st.session_state:
-        kline_dict = _fetch_lhb_klines(df, selected_date)
-        st.session_state[kline_cache_key] = kline_dict
-    else:
-        kline_dict = st.session_state[kline_cache_key]
+        plot_df = df[df["T+5%"].notna()].copy()
+        plot_df["角色"] = plot_df["是否买入"].map({True: "✅ 买入", False: "候选未买入"})
+        plot_df["标注"] = plot_df["名称"] + "(" + plot_df["代码"] + ")<br>评分:" + plot_df["评分"].apply(lambda x: f"{x:.0f}") + " T+5:" + plot_df["T+5%"].apply(lambda x: f"{x:+.1f}%")
 
-    if kline_dict:
-        # T+0 日期格式化为 YYYY-MM-DD（用于 X 轴标注）
-        t0_fmt = f"{selected_date[:4]}-{selected_date[4:6]}-{selected_date[6:]}"
-
-        fig_kline = go.Figure()
-        for _, row in df.iterrows():
-            code_str  = str(row["代码"])
-            name_str  = str(row["名称"])
-            is_bought = bool(row["是否买入"])
-            kl = kline_dict.get(code_str)
-            if kl is None or kl.empty or "收盘" not in kl.columns:
+        fig_scatter = go.Figure()
+        for role, color, size, opacity in [
+            ("候选未买入", _GRAY, 10, 0.7),
+            ("✅ 买入", _BLUE, 18, 1.0),
+        ]:
+            sub = plot_df[plot_df["角色"] == role]
+            if sub.empty:
                 continue
-
-            # 找到 T+0 当天的收盘价作为基准
-            t0_rows = kl[kl["日期"] == selected_date]
-            if t0_rows.empty:
-                # T+0 停牌，取最近一个交易日
-                before = kl[kl["日期"] <= selected_date]
-                if before.empty:
-                    continue
-                base_price = float(before.iloc[-1]["收盘"])
-            else:
-                base_price = float(t0_rows.iloc[0]["收盘"])
-
-            if base_price <= 0:
-                continue
-
-            # 归一化：相对 T+0 收盘价的涨跌幅 %
-            kl = kl.copy()
-            kl["归一化%"] = (kl["收盘"] / base_price - 1) * 100
-            # X 轴：YYYY-MM-DD 格式
-            kl["date_fmt"] = kl["日期"].apply(
-                lambda d: f"{str(d)[:4]}-{str(d)[4:6]}-{str(d)[6:]}" if len(str(d)) == 8 else str(d)
-            )
-
-            label = f"{name_str}({code_str})"
-            fig_kline.add_trace(go.Scatter(
-                x=kl["date_fmt"],
-                y=kl["归一化%"],
-                mode="lines",
-                name=label,
-                line={
-                    "width": 3   if is_bought else 1.2,
-                    "color": _BLUE if is_bought else None,
-                    "dash":  "solid" if is_bought else "solid",
-                },
-                opacity=1.0 if is_bought else 0.55,
-                hovertemplate=f"<b>{label}</b><br>%{{x}}<br>相对T+0: %{{y:+.2f}}%<extra></extra>",
+            fig_scatter.add_trace(go.Scatter(
+                x=sub["评分"],
+                y=sub["T+5%"],
+                mode="markers+text",
+                name=role,
+                text=sub["名称"],
+                textposition="top center",
+                textfont=dict(size=9),
+                marker=dict(size=size, color=color, opacity=opacity,
+                            line=dict(width=1, color="white")),
+                hovertext=sub["标注"],
+                hoverinfo="text",
             ))
 
-        legend_note = f"蓝色粗线 = 买入股({bought_code})  |  其余为同天龙虎榜股票" if bought_code else "展示同天龙虎榜所有股票走势"
+        # 零线
+        fig_scatter.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.4)
+        # 趋势线（仅参考）
+        if len(plot_df) >= 3:
+            import numpy as np
+            valid = plot_df[["评分", "T+5%"]].dropna()
+            if len(valid) >= 3:
+                z = np.polyfit(valid["评分"], valid["T+5%"], 1)
+                x_range = [valid["评分"].min(), valid["评分"].max()]
+                y_range = [z[0] * x + z[1] for x in x_range]
+                fig_scatter.add_trace(go.Scatter(
+                    x=x_range, y=y_range,
+                    mode="lines", name="趋势线",
+                    line=dict(color=_GOLD, dash="dot", width=1.5),
+                    hoverinfo="skip",
+                ))
 
-        # T+0 竖线：用 Scatter 模拟，完全绕开 Plotly shapes 跨轴处理（字符串 x 报 TypeError）
-        # 计算所有股票 y 范围来确定竖线高度
-        all_y = []
-        for trace in fig_kline.data:
-            if hasattr(trace, "y") and trace.y is not None:
-                all_y.extend([v for v in trace.y if v is not None and str(v) != "nan"])
-        y_min = min(all_y) * 1.1 if all_y else -15
-        y_max = max(all_y) * 1.1 if all_y else 30
-        fig_kline.add_trace(go.Scatter(
-            x=[t0_fmt, t0_fmt],
-            y=[y_min, y_max],
-            mode="lines+text",
-            line=dict(color=_GOLD, width=2, dash="dash"),
-            text=["", "上榜日"],
-            textposition="top center",
-            textfont=dict(color=_GOLD, size=12),
-            name="上榜日",
-            showlegend=False,
-            hoverinfo="skip",
-        ))
-
-        fig_kline.update_layout(
-            title=f"{selected_date} 龙虎榜股票近1个月走势（以上榜日收盘价归一化）",
-            xaxis_title="日期",
-            yaxis_title="相对上榜日收盘价涨跌幅 %",
-            legend={"orientation": "v", "x": 1.01, "y": 1},
-            hovermode="x unified",
-            height=580,
-            annotations=[dict(
-                text=legend_note,
-                xref="paper", yref="paper",
-                x=0.01, y=1.04, showarrow=False,
-                font={"size": 11, "color": _BLUE if bought_code else _GRAY},
-            )],
+        fig_scatter.update_layout(
+            title=f"{selected_date} 评分 vs T+5 收益（检验评分体系有效性）",
+            xaxis_title="综合评分",
+            yaxis_title="T+5 收益 %",
+            height=420,
+            legend=dict(orientation="h", y=-0.15),
         )
-        st.plotly_chart(fig_kline, use_container_width=True)
-    else:
-        st.warning("K 线数据获取失败，请检查网络或稍后刷新")
+        st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # ── 横向对比柱状图（优先 T+5，降级用 T+1）────────────────────────────────
-    bar_col    = "上榜后5日" if has_t5 else ("上榜后1日" if has_t1 else None)
-    bar_label  = "T+5" if has_t5 else "T+1"
+    # ── 各节点收益对比柱状图 ────────────────────────────────────────────────────
+    bar_col   = "T+5%" if has_t5 else ("T+1%" if df["T+1%"].notna().any() else None)
+    bar_label = "T+5" if has_t5 else "T+1"
 
     if bar_col:
-        st.subheader(f"{bar_label} 收益横向对比" + ("" if has_t5 else "（T+5 待结算，暂用 T+1 对比）"))
-        df_sorted = df.sort_values(bar_col, ascending=False).copy()
+        st.subheader(f"{bar_label} 收益横向对比")
+        df_sorted = df.sort_values(bar_col, ascending=False, na_position="last").copy()
 
         colors, text_labels = [], []
         best_idx = df_sorted[bar_col].idxmax() if df_sorted[bar_col].notna().any() else None
@@ -344,7 +328,7 @@ def render_tab1():
             text_labels.append(lbl)
 
         fig_bar = go.Figure(go.Bar(
-            x=df_sorted["名称"] + "<br>" + df_sorted["代码"],
+            x=df_sorted["名称"] + "<br>" + df_sorted["代码"].astype(str),
             y=df_sorted[bar_col],
             marker_color=colors,
             text=text_labels,
@@ -356,32 +340,14 @@ def render_tab1():
             title=f"{selected_date} {bar_label} 收益横向对比（蓝=买入 ★=最优）",
             yaxis_title=f"{bar_label} 涨跌幅 %",
             xaxis_tickangle=-30,
-            height=420,
+            height=400,
         )
         st.plotly_chart(fig_bar, use_container_width=True)
 
-    # ── 详细数据表 ─────────────────────────────────────────────────────────────
+    # ── 详细对比表 ─────────────────────────────────────────────────────────────
     st.subheader("详细数据")
-    display_df = df[[
-        "代码", "名称", "收盘价", "涨跌幅",
-        "上榜后1日", "上榜后2日", "上榜后5日", "上榜后10日",
-        "龙虎榜净买额", "换手率", "上榜原因", "是否买入",
-    ]].copy()
-
-    # 净买额换算成万元
-    if "龙虎榜净买额" in display_df.columns:
-        display_df["净买额(万)"] = (display_df["龙虎榜净买额"] / 1e4).round(0)
-        display_df = display_df.drop(columns=["龙虎榜净买额"])
-
-    # 重命名
-    display_df = display_df.rename(columns={
-        "涨跌幅":    "T+0涨跌%",
-        "上榜后1日": "T+1%",
-        "上榜后2日": "T+2%",
-        "上榜后5日": "T+5%",
-        "上榜后10日":"T+10%",
-        "换手率":    "换手%",
-    })
+    display_cols = ["代码", "名称", "评分", "选股排名", "T+1%", "T+3%", "T+5%", "T+10%", "最优涨幅", "是否买入"]
+    display_df = df[display_cols].copy()
 
     def _style_row(row):
         if row.get("是否买入"):
@@ -392,6 +358,14 @@ def render_tab1():
         display_df.style.apply(_style_row, axis=1),
         use_container_width=True,
         hide_index=True,
+        column_config={
+            "T+1%":   st.column_config.NumberColumn(format="%.1f%%"),
+            "T+3%":   st.column_config.NumberColumn(format="%.1f%%"),
+            "T+5%":   st.column_config.NumberColumn(format="%.1f%%"),
+            "T+10%":  st.column_config.NumberColumn(format="%.1f%%"),
+            "最优涨幅": st.column_config.NumberColumn(format="%.1f%%"),
+            "评分":   st.column_config.NumberColumn(format="%.0f"),
+        },
     )
 
 

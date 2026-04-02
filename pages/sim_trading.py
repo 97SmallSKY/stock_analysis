@@ -213,16 +213,24 @@ def _source_label(src: str) -> str:
 
 # ─── 同天竞品实时对比组件 ────────────────────────────────────────────────
 
+def _fmt_ret(v) -> str:
+    """格式化收益率，None 显示 —"""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    return f"{v:+.1f}%"
+
+
 def _render_same_day_competitor_widget(open_df: "pd.DataFrame") -> None:
     """
     在持仓列表下方显示「同天竞品」实时对比组件。
-    展示当前持仓股 vs 同天未选股票的今日涨幅对比。
-    若未选股票涨幅领先持仓股 >3%，橙色高亮提示。
+    展示持仓股 vs 同天所有候选股在 T+1/T+3/T+5/T+10 各节点的收益对比，
+    标注各节点最优股和整体最优盈利时机。
+    若其他候选股最优涨幅领先持仓股最优涨幅 >3%，橙色高亮提示。
     """
     try:
-        from modules.comparison_analyzer import build_comparison_table
+        from skills.stock_sim_robot.sim_trade_db import get_candidate_results
 
-        with st.expander("🔍 同天候选股对比（当前持仓 vs 同天未买入股票）", expanded=False):
+        with st.expander("🔍 同天竞品对比（T+1~T+10 各节点最优）", expanded=True):
             any_data = False
             for _, pos_row in open_df.iterrows():
                 trade_date = str(pos_row.get("trade_date", ""))
@@ -231,52 +239,99 @@ def _render_same_day_competitor_widget(open_df: "pd.DataFrame") -> None:
                 if not trade_date:
                     continue
 
-                cache_key = f"sim_competitor_{trade_date}"
+                cache_key = f"sim_competitor_v2_{trade_date}"
                 if cache_key not in st.session_state:
-                    table = build_comparison_table(trade_date)
-                    st.session_state[cache_key] = table
+                    raw = get_candidate_results(trade_date)
+                    st.session_state[cache_key] = raw
                 else:
-                    table = st.session_state[cache_key]
+                    raw = st.session_state[cache_key]
 
-                if table.empty:
+                if raw.empty:
                     continue
 
                 any_data = True
-                st.markdown(f"**{trade_date} — 持仓股: {held_name}({held_code})**")
 
-                # 获取已持仓股的 T+5 收益
-                held_row = table[table["代码"] == held_code]
-                held_t5  = float(held_row.iloc[0]["T+5收益%"]) if not held_row.empty and pd.notna(held_row.iloc[0].get("T+5收益%")) else None
+                # ── 构建展示表 ────────────────────────────────────────────
+                df = raw[["code", "name", "signal_score", "rank",
+                           "t1_ret", "t3_ret", "t5_ret", "t10_ret"]].copy()
+                df = df.rename(columns={
+                    "code":         "代码",
+                    "name":         "名称",
+                    "signal_score": "评分",
+                    "rank":         "选股排名",
+                    "t1_ret":       "T+1",
+                    "t3_ret":       "T+3",
+                    "t5_ret":       "T+5",
+                    "t10_ret":      "T+10",
+                })
 
-                others = table[table["代码"] != held_code].copy()
-                if others.empty:
-                    st.caption("无其他候选股数据")
-                    continue
+                # 各股最优涨幅 = T+1/T+3/T+5 中最大值（短平快，不含T+10）
+                ret_cols = ["T+1", "T+3", "T+5"]
+                df["最优涨幅"] = df[ret_cols].max(axis=1)
+                df["最优节点"] = df[ret_cols].idxmax(axis=1).where(df[ret_cols].notna().any(axis=1))
 
-                display_cols = [c for c in ["代码", "名称", "评分", "T+1收益%", "T+5收益%", "未选主因"] if c in others.columns]
-                others_display = others[display_cols].copy()
+                # 标记持仓股 vs 未买入
+                df["角色"] = df["代码"].apply(lambda c: "✅ 持仓" if str(c) == held_code else "候选")
 
-                # 检查是否有候选股 T+5 收益明显领先（>3%）
-                if held_t5 is not None and "T+5收益%" in others_display.columns:
-                    leading = others_display[
-                        others_display["T+5收益%"].fillna(-999) > held_t5 + 3
-                    ]
+                # 找整体最优股（T+1~T+5 范围）
+                best_idx = df["最优涨幅"].idxmax() if df["最优涨幅"].notna().any() else None
+                if best_idx is not None:
+                    df.loc[best_idx, "角色"] = df.loc[best_idx, "角色"].replace("候选", "⭐ 最优") \
+                        if df.loc[best_idx, "角色"] == "候选" \
+                        else df.loc[best_idx, "角色"] + " ⭐"
+
+                # ── 持仓股状态行 ─────────────────────────────────────────
+                held_rows = df[df["代码"] == held_code]
+                held_best = float(held_rows.iloc[0]["最优涨幅"]) if not held_rows.empty and pd.notna(held_rows.iloc[0]["最优涨幅"]) else None
+                held_t1   = held_rows.iloc[0]["T+1"] if not held_rows.empty else None
+                held_t3   = held_rows.iloc[0]["T+3"] if not held_rows.empty else None
+                held_t5   = held_rows.iloc[0]["T+5"] if not held_rows.empty else None
+
+                st.markdown(
+                    f"**{trade_date} 持仓: {held_name}({held_code})** — "
+                    f"T+1 `{_fmt_ret(held_t1)}` · T+3 `{_fmt_ret(held_t3)}` · T+5 `{_fmt_ret(held_t5)}` · "
+                    f"**最优 `{_fmt_ret(held_best)}`**"
+                )
+
+                # ── 警告：有其他股明显跑赢 ───────────────────────────────
+                others = df[df["代码"] != held_code]
+                if held_best is not None and others["最优涨幅"].notna().any():
+                    leading = others[others["最优涨幅"].fillna(-999) > held_best + 3]
                     if not leading.empty:
-                        st.warning(
-                            f"⚠️ {len(leading)} 只同天候选股 T+5 收益领先持仓股 >3%："
-                            f" {', '.join(leading['代码'].tolist())}"
+                        codes_str = "、".join(
+                            f"{r['名称']}({r['代码']}) {_fmt_ret(r['最优涨幅'])}@{r['最优节点']}"
+                            for _, r in leading.iterrows()
                         )
+                        st.warning(f"⚠️ 错过更优机会：{codes_str}")
+                elif held_best is None:
+                    st.caption("T+1~T+5 数据待 daily_update step10 填充")
 
-                st.dataframe(others_display, use_container_width=True, hide_index=True)
-                st.caption(f"持仓股 {held_code} T+5收益: {held_t5:+.2f}%" if held_t5 is not None else f"持仓股 {held_code} T+5收益: 尚未填充")
+                # ── 展示完整对比表（按最优涨幅降序） ────────────────────
+                display = df[["角色", "代码", "名称", "评分", "选股排名",
+                              "T+1", "T+3", "T+5", "T+10", "最优涨幅", "最优节点"]].copy()
+                display = display.sort_values("最优涨幅", ascending=False, na_position="last")
+
+                st.dataframe(
+                    display,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "T+1":    st.column_config.NumberColumn(format="%.1f%%"),
+                        "T+3":    st.column_config.NumberColumn(format="%.1f%%"),
+                        "T+5":    st.column_config.NumberColumn(format="%.1f%%"),
+                        "T+10":   st.column_config.NumberColumn(format="%.1f%%"),
+                        "最优涨幅": st.column_config.NumberColumn(format="%.1f%%"),
+                        "评分":   st.column_config.NumberColumn(format="%.0f"),
+                    },
+                )
+                st.divider()
 
             if not any_data:
-                st.info("暂无同天候选对比数据（等待 daily_update step10 填充 T+5 收益）")
-                if st.button("快速跳转到「选股决策复盘」页面"):
+                st.info("暂无同天候选对比数据（等待 daily_update step10 填充）")
+                if st.button("跳转到「选股决策复盘」页面"):
                     st.switch_page("pages/trade_comparison.py")
 
     except Exception as e:
-        # 不阻断主页面渲染
         import logging
         logging.getLogger(__name__).debug(f"_render_same_day_competitor_widget 非致命: {e}")
 
