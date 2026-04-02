@@ -278,25 +278,6 @@ def render_tab1():
                 hovertemplate=f"<b>{label}</b><br>%{{x}}<br>相对T+0: %{{y:+.2f}}%<extra></extra>",
             ))
 
-        # T+0 竖线标注（用 add_shape 替代 add_vline，避免 Plotly 对字符串 x 值报 TypeError）
-        fig_kline.add_shape(
-            type="line",
-            x0=t0_fmt, x1=t0_fmt,
-            y0=0, y1=1,
-            xref="x", yref="paper",
-            line={"color": _GOLD, "width": 2, "dash": "dash"},
-        )
-        fig_kline.add_annotation(
-            x=t0_fmt, y=1,
-            xref="x", yref="paper",
-            text="上榜日",
-            showarrow=False,
-            font={"color": _GOLD, "size": 12},
-            xanchor="left",
-            yanchor="top",
-        )
-        fig_kline.add_hline(y=0, line_dash="dot", line_color=_GRAY, opacity=0.4)
-
         legend_note = f"蓝色粗线 = 买入股({bought_code})  |  其余为同天龙虎榜股票" if bought_code else "展示同天龙虎榜所有股票走势"
         fig_kline.update_layout(
             title=f"{selected_date} 龙虎榜股票近1个月走势（以上榜日收盘价归一化）",
@@ -305,12 +286,40 @@ def render_tab1():
             legend={"orientation": "v", "x": 1.01, "y": 1},
             hovermode="x unified",
             height=580,
-            annotations=[dict(
-                text=legend_note,
-                xref="paper", yref="paper",
-                x=0.01, y=1.04, showarrow=False,
-                font={"size": 11, "color": _BLUE if bought_code else _GRAY},
-            )],
+            # T+0 竖线 + 基准线直接写进 shapes，避免 add_shape/add_vline 对字符串 x 触发跨轴计算
+            shapes=[
+                dict(
+                    type="line",
+                    x0=t0_fmt, x1=t0_fmt,
+                    y0=0,      y1=1,
+                    xref="x",  yref="paper",
+                    line=dict(color=_GOLD, width=2, dash="dash"),
+                ),
+                dict(
+                    type="line",
+                    x0=0,    x1=1,
+                    y0=0,    y1=0,
+                    xref="paper", yref="y",
+                    line=dict(color=_GRAY, width=1, dash="dot"),
+                    opacity=0.4,
+                ),
+            ],
+            annotations=[
+                dict(
+                    text="上榜日",
+                    x=t0_fmt, y=0.97,
+                    xref="x", yref="paper",
+                    showarrow=False,
+                    font=dict(color=_GOLD, size=12),
+                    xanchor="left",
+                ),
+                dict(
+                    text=legend_note,
+                    xref="paper", yref="paper",
+                    x=0.01, y=1.04, showarrow=False,
+                    font={"size": 11, "color": _BLUE if bought_code else _GRAY},
+                ),
+            ],
         )
         st.plotly_chart(fig_kline, use_container_width=True)
     else:
