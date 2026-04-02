@@ -638,9 +638,13 @@ def run_phase_a(trade_date: str | None = None) -> dict:
             logger.warning(f"get_available_capital 失败，使用默认满额: {_ce}")
             capital_info = None
 
-        # ── 熔断检查 + AHS 计算（在选股前强制执行）──────────────────
+        # ── 熔断检查 + 分级模式计算（在选股前强制执行）──────────────
         _ahs  = 60  # 默认中性值
-        _cb   = {"allow_open": True, "reason": "", "level": "ok", "ahs": 60}
+        _cb   = {
+            "allow_open": True, "reason": "", "level": "ok", "ahs": 60,
+            "mode": "normal", "mode_label": "🟢 正常",
+            "position_coef": 1.0, "min_score": 50, "max_daily_open": 5,
+        }
         try:
             from skills.stock_sim_robot.sim_trade_db import (
                 get_performance_stats, check_circuit_breaker
@@ -649,43 +653,54 @@ def run_phase_a(trade_date: str | None = None) -> dict:
             _cb   = check_circuit_breaker(stats=_perf)
             _ahs  = _cb.get("ahs", 60)
             logger.info(
-                f"【健康度】AHS={_ahs} 级别={_cb['level']} "
+                f"【运行模式】{_cb.get('mode_label', '—')} "
+                f"AHS={_ahs} 仓位={_cb.get('position_coef',1.0)*100:.0f}% "
+                f"门槛={_cb.get('min_score',50)}分 "
                 f"近10笔胜率={_perf.get('recent_win_rate',0):.0f}% "
-                f"连亏={_perf.get('consecutive_losses',0)}笔 "
+                f"连亏={_perf.get('consecutive_losses',0)}笔 连赢={_perf.get('consecutive_wins',0)}笔 "
                 f"本周={_perf.get('week_pnl',0):+.1f}%"
             )
         except Exception as _cb_err:
-            logger.warning(f"熔断检查失败（非致命，继续执行）: {_cb_err}")
+            logger.warning(f"分级模式检查失败（非致命，继续执行）: {_cb_err}")
 
-        # 熔断触发 → 跳过开仓
-        if not _cb.get("allow_open", True):
-            _halt_reason = _cb.get("reason", "熔断触发")
-            logger.warning(f"🔴 熔断：{_halt_reason}")
-            result["skipped"]     = True
-            result["skip_reason"] = f"[熔断] {_halt_reason}"
+        # 4档模式下 allow_open 始终 True，不再硬停车
+        # 仅记录模式信息（由 select_stock 内部根据 min_score 过滤低质量信号）
+        _cb_mode     = _cb.get("mode", "normal")
+        _cb_reason   = _cb.get("reason", "")
+        if _cb_mode != "normal" and _cb_reason:
+            logger.warning(f"⚡ 当前运行模式 [{_cb_mode}]：{_cb_reason}")
             try:
                 write_audit_log(
                     event_type=AUDIT_PHASE_A_SKIP,
-                    summary=f"Phase A 熔断跳过（{today_str}）：{_halt_reason[:100]}",
+                    summary=f"Phase A 降速模式（{today_str}）：{_cb_reason[:100]}",
                     detail={
-                        "trade_date": today_str,
-                        "reason":     "circuit_breaker",
-                        "ahs":        _ahs,
-                        "cb_level":   _cb.get("level"),
-                        "cb_reason":  _halt_reason,
+                        "trade_date":    today_str,
+                        "reason":        "degraded_mode",
+                        "ahs":           _ahs,
+                        "cb_level":      _cb.get("level"),
+                        "cb_mode":       _cb_mode,
+                        "position_coef": _cb.get("position_coef"),
+                        "min_score":     _cb.get("min_score"),
+                        "cb_reason":     _cb_reason,
                     },
-                    result="skipped",
+                    result="degraded",
                 )
             except Exception:
                 pass
 
-        # 将 AHS 注入 capital_info，供 _default_invest_ratio 使用
+        # 将 AHS + 模式信息注入 capital_info，供 _default_invest_ratio 使用
         if capital_info is not None:
-            capital_info["ahs"] = _ahs
-        elif _ahs != 60:
+            capital_info["ahs"]         = _ahs
+            capital_info["mode"]        = _cb_mode
+            capital_info["min_score"]   = _cb.get("min_score", 50)
+            capital_info["position_coef"] = _cb.get("position_coef", 1.0)
+        elif _ahs != 60 or _cb_mode != "normal":
             capital_info = {
                 "ahs": _ahs, "available": TOTAL_CAPITAL,
                 "open_count": 0, "total": TOTAL_CAPITAL, "invested": 0.0,
+                "mode": _cb_mode,
+                "min_score": _cb.get("min_score", 50),
+                "position_coef": _cb.get("position_coef", 1.0),
             }
 
         signals = get_mainboard_signals(today_str) if not result.get("skipped") else []

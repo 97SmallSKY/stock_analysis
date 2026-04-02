@@ -127,17 +127,24 @@ def render():
     if _ds.get("total_closed", 0) >= 1:
         st.markdown("#### 🤖 模拟账户健康状态")
 
-        # 熔断告警横幅（首页版，精简）
-        if _dcb["level"] == "halt":
+        # 模式告警横幅（首页版，精简）
+        _dcb_mode = _dcb.get("mode", "normal")
+        if _dcb_mode == "crisis":
             st.error(
-                f"🔴 **熔断触发 — Phase A 今日暂停开仓** ｜ {_dcb.get('reason','')}\n\n"
+                f"🔴 **危机模式 — 仓位20%，门槛80分** ｜ {_dcb.get('reason','')}\n\n"
                 "前往 [🤖 模拟炒股](?page=sim_trading) 页面可查看详情并手动覆盖。",
                 icon="🔴",
             )
-        elif _dcb["level"] == "warning":
+        elif _dcb_mode == "alert":
             st.warning(
-                f"⚠️ **账户健康预警** ｜ {_dcb.get('reason','')}\n\n"
-                "AHS 偏低，仓位已自动压缩。",
+                f"🟠 **警戒模式 — 仓位40%，门槛70分** ｜ {_dcb.get('reason','')}\n\n"
+                "策略已降速，只做高质量信号。",
+                icon="⚠️",
+            )
+        elif _dcb_mode == "cautious":
+            st.warning(
+                f"🟡 **谨慎模式 — 仓位70%，门槛60分** ｜ {_dcb.get('reason','')}\n\n"
+                "账户进入修复期，仓位已压缩。",
                 icon="⚠️",
             )
 
@@ -162,8 +169,8 @@ def render():
             delta="接近熔断" if _cl_d == 2 else None,
             delta_color="inverse",
         )
-        _cb_txt = "🔴 熔断中" if _dcb["level"] == "halt" else ("🟡 预警" if _dcb["level"] == "warning" else "🟢 正常")
-        _dc4.metric("🛡️ 熔断状态", _cb_txt)
+        _cb_txt = _dcb.get("mode_label", "🟢 正常") if _dcb.get("mode") else ("🔴 熔断中" if _dcb["level"] == "halt" else ("🟡 预警" if _dcb["level"] == "warning" else "🟢 正常"))
+        _dc4.metric("⚡ 运行模式", _cb_txt)
 
         st.divider()
 

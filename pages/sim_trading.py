@@ -314,29 +314,40 @@ def render():
     else:
         _ahs_icon, _ahs_color, _ahs_label = "🔴", "#E84040", "危险期"
 
-    # ── 熔断告警横幅（顶置，最显眼位置）───────────────────────────────
+    # ── 运行模式横幅（顶置，最显眼位置）─────────────────────────────
     # 判断是否已人工开启 SKIP_CIRCUIT_BREAKER
     import os as _os
     _skip_env = _os.getenv("SKIP_CIRCUIT_BREAKER", "0") == "1"
     # 也支持 session_state 内的临时覆盖（页面开关）
     _skip_session = st.session_state.get("_skip_cb", False)
     _cb_skipped   = _skip_env or _skip_session
+    _cb_mode      = _cb.get("mode", "normal")
+    _cb_mode_label = _cb.get("mode_label", "🟢 正常")
 
-    if _cb["level"] == "halt" and not _cb_skipped:
+    if _cb_mode == "crisis" and not _cb_skipped:
         st.markdown(
             "<div style='padding:14px 18px;background:#2d0000;border-left:6px solid #E84040;"
             "border-radius:8px;margin-bottom:12px;'>"
-            "<span style='font-size:1.3em;font-weight:bold;color:#E84040;'>🔴 熔断触发 — 今日 Phase A 已暂停开仓</span><br>"
+            "<span style='font-size:1.3em;font-weight:bold;color:#E84040;'>🔴 危机模式 — 仓位已降至20%，门槛80分</span><br>"
             f"<span style='color:#ffaaaa;'>{_cb.get('reason','')}</span><br>"
-            "<span style='color:#888;font-size:0.9em;'>如需人工覆盖，请在下方点击「手动开启开仓」按钮（本次 Session 有效）</span>"
+            "<span style='color:#888;font-size:0.9em;'>80分+信号仍可参与；连赢2笔自动恢复警戒模式。如需手动覆盖请在下方操作。</span>"
             "</div>",
             unsafe_allow_html=True,
         )
-    elif _cb["level"] == "warning" and not _cb_skipped:
+    elif _cb_mode == "alert" and not _cb_skipped:
         st.markdown(
-            "<div style='padding:12px 18px;background:#2b2000;border-left:6px solid #FFA500;"
+            "<div style='padding:12px 18px;background:#2b1200;border-left:6px solid #FFA500;"
             "border-radius:8px;margin-bottom:12px;'>"
-            "<span style='font-size:1.1em;font-weight:bold;color:#FFA500;'>⚠️ 健康度预警</span><br>"
+            "<span style='font-size:1.2em;font-weight:bold;color:#FFA500;'>🟠 警戒模式 — 仓位40%，门槛70分</span><br>"
+            f"<span style='color:#ffd580;'>{_cb.get('reason','')}</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    elif _cb_mode == "cautious" and not _cb_skipped:
+        st.markdown(
+            "<div style='padding:12px 18px;background:#2b2000;border-left:6px solid #FFCC00;"
+            "border-radius:8px;margin-bottom:12px;'>"
+            "<span style='font-size:1.1em;font-weight:bold;color:#FFCC00;'>🟡 谨慎模式 — 仓位70%，门槛60分</span><br>"
             f"<span style='color:#ffd580;'>{_cb.get('reason','')}</span>"
             "</div>",
             unsafe_allow_html=True,
@@ -345,7 +356,7 @@ def render():
         st.markdown(
             "<div style='padding:10px 18px;background:#002b1a;border-left:6px solid #33CC66;"
             "border-radius:8px;margin-bottom:12px;'>"
-            "✅ <b style='color:#33CC66;'>熔断已人工覆盖</b> — Phase A 将正常执行开仓逻辑"
+            "✅ <b style='color:#33CC66;'>风控已人工覆盖</b> — Phase A 将以正常模式开仓"
             "</div>",
             unsafe_allow_html=True,
         )
@@ -388,53 +399,66 @@ def render():
         delta_color="inverse" if _wpnl < -3 else "off",
         help="本周已结算盈亏 / 总资金10万。超过 -5% 触发周熔断。",
     )
-    # 熔断状态指示器
-    if _cb["level"] == "halt" and not _cb_skipped:
-        _cb_display = "🔴 熔断中"
-        _cb_delta   = "今日暂停开仓"
-    elif _cb["level"] == "warning":
-        _cb_display = "🟡 预警"
-        _cb_delta   = "仓位已压缩"
-    else:
+    # 运行模式指示器（4档）
+    _cb_mode      = _cb.get("mode", "normal")
+    _cb_mode_label = _cb.get("mode_label", "🟢 正常")
+    _coef         = _cb.get("position_coef", 1.0)
+    _min_sc       = _cb.get("min_score", 50)
+    if _cb_mode == "normal":
         _cb_display = "🟢 正常"
-        _cb_delta   = "可正常开仓"
+        _cb_delta   = "仓位100% 门槛50分"
+    elif _cb_mode == "cautious":
+        _cb_display = "🟡 谨慎"
+        _cb_delta   = "仓位70% 门槛60分"
+    elif _cb_mode == "alert":
+        _cb_display = "🟠 警戒"
+        _cb_delta   = "仓位40% 门槛70分"
+    else:  # crisis
+        _cb_display = "🔴 危机"
+        _cb_delta   = "仓位20% 门槛80分"
     _h5.metric(
-        "🛡️ 熔断状态",
+        "⚡ 运行模式",
         _cb_display,
         delta=_cb_delta,
         delta_color="off",
         help=(
-            "熔断规则：单日亏损>-3% / 连续亏损≥3笔 / 周亏损>-5% / 月亏损>-8% / 近期最大回撤>-15%\n\n"
-            "触发时 Phase A 自动跳过开仓，可在下方手动覆盖（本次Session有效）。"
+            "分级降速模式（取代原二元熔断）：\n\n"
+            "🟢 正常：仓位100%，门槛50分，每日最多5只\n"
+            "🟡 谨慎：仓位70%，门槛60分，每日最多3只（连亏3笔/日亏>2%/周亏>3%）\n"
+            "🟠 警戒：仓位40%，门槛70分，每日最多1只（连亏5笔/周亏>5%/AHS<45）\n"
+            "🔴 危机：仓位20%，门槛80分，每日最多1只（连亏7笔/月亏>8%/回撤>12%）\n\n"
+            "自动恢复：连赢2笔自动升一级。危机模式下80分+信号仍可参与。"
         ),
     )
 
     # ── 手动覆盖开关区 ───────────────────────────────────────────────────
-    with st.expander("🔧 风控手动干预（谨慎操作）", expanded=(_cb["level"] == "halt" and not _cb_skipped)):
+    with st.expander("🔧 风控手动干预（谨慎操作）", expanded=(_cb_mode in ("crisis", "alert") and not _cb_skipped)):
         _sw_col1, _sw_col2 = st.columns([3, 2])
         with _sw_col1:
             if _cb_skipped:
-                st.success("✅ 熔断当前已被人工覆盖，Phase A 将正常开仓。")
-                if st.button("🔒 重新启用熔断保护", type="secondary"):
+                st.success("✅ 风控已被人工覆盖，Phase A 将以正常模式运行。")
+                if st.button("🔒 重新启用风控保护", type="secondary"):
                     st.session_state["_skip_cb"] = False
                     _load_health_data.clear()
                     st.rerun()
             else:
                 st.warning(
-                    "⚠️ 以下操作将绕过熔断保护，允许 Phase A 强制开仓。\n\n"
-                    "**适用场景：** 你已手动评估风险，确认当前市场适合操作（如今日大盘超跌反弹机会）。\n\n"
+                    "⚠️ 以下操作将覆盖当前分级降速模式，允许 Phase A 以正常模式执行。\n\n"
+                    "**适用场景：** 你已手动评估风险，确认当前市场适合操作（如大盘超跌后反弹机会）。\n\n"
                     "**范围：** 仅本次浏览器 Session 有效，关闭页面后自动失效。"
                 )
-                if st.button("🔓 手动开启开仓（覆盖熔断）", type="primary",
-                             disabled=not (_cb["level"] in ("halt", "warning"))):
+                if st.button("🔓 手动覆盖风控（按正常模式执行）", type="primary",
+                             disabled=(_cb_mode == "normal")):
                     st.session_state["_skip_cb"] = True
                     _load_health_data.clear()
                     st.rerun()
         with _sw_col2:
-            st.caption("**熔断原因**")
-            st.caption(_cb.get("reason") or "当前无熔断，系统运行正常。")
+            st.caption("**当前模式说明**")
+            st.caption(_cb.get("reason") or f"当前运行模式：{_cb_mode_label}，无需特殊处理。")
             if _total_closed >= 3:
                 st.caption(
+                    f"仓位系数：{_coef*100:.0f}%\n\n"
+                    f"入场门槛：≥{_min_sc}分\n\n"
                     f"近10笔均盈亏：{_stats.get('recent_avg_pnl',0):+.2f}%\n\n"
                     f"本月盈亏：{_stats.get('month_pnl',0):+.1f}%\n\n"
                     f"最大回撤：{_stats.get('max_drawdown_pct',0):.1f}%"

@@ -271,23 +271,20 @@ def _ahs_to_position_factor(ahs: int) -> float:
 
 def _default_invest_ratio(capital_info: dict | None, chosen: dict) -> float:
     """
-    动态仓位比例计算（v2：引入 AHS 反馈调节）
+    动态仓位比例计算（v3：接入4档运行模式，替代旧 AHS 系数法）
 
     仓位公式：
-      base_ratio = 基础仓位（按持仓数）
-      signal_bonus = 信号质量加成
-      ahs_factor = AHS 系数（账户健康度调节）
-      final_ratio = base_ratio × ahs_factor + signal_bonus
-      final_ratio = clamp(final_ratio, 0.1, 0.9)
+      calc_position_size(score, ahs, mode) → 建仓金额
+      final_ratio = 建仓金额 / TOTAL_CAPITAL
+      clamp(final_ratio, 0.05, 0.90)
 
-    兼容旧逻辑：capital_info 中若无 ahs 字段，则从 DB 实时获取。
+    兼容旧逻辑：capital_info 中若无 mode 字段，则使用 AHS 系数法（降级路径）。
     """
-    from skills.stock_sim_robot.sim_trade_db import TOTAL_CAPITAL
+    from skills.stock_sim_robot.sim_trade_db import TOTAL_CAPITAL, calc_position_size
     if capital_info is None:
         return 0.6
     available  = capital_info.get("available", TOTAL_CAPITAL)
-    open_count = capital_info.get("open_count", 0)
-    score      = float(chosen.get("signal_score") or 0)
+    score      = int(float(chosen.get("signal_score") or 0))
 
     # 获取 AHS（优先从 capital_info 中取，避免重复查 DB）
     ahs = capital_info.get("ahs", None)
@@ -299,37 +296,37 @@ def _default_invest_ratio(capital_info: dict | None, chosen: dict) -> float:
             ahs = calc_account_health_score(get_performance_stats())
         except Exception:
             ahs = 60  # 获取失败时使用中性值
+    ahs = int(ahs)
 
-    ahs_factor = _ahs_to_position_factor(int(ahs))
-    logger.info(f"  AHS={ahs} → 仓位系数={ahs_factor}")
+    # 优先使用注入的 mode（4档模式）；若无则降级到旧 AHS 系数法
+    mode = capital_info.get("mode", None)
+    if mode is None:
+        # 降级兼容：旧代码路径，用 AHS 系数法
+        ahs_factor = _ahs_to_position_factor(ahs)
+        logger.info(f"  [降级仓位] AHS={ahs} → 系数={ahs_factor}（无 mode 注入）")
+        if ahs_factor == 0.0:
+            return 0.1
+        if available < 20000:
+            return 0.2
+        open_count = capital_info.get("open_count", 0)
+        base       = 0.6 if open_count == 0 else (0.4 if open_count == 1 else 0.3)
+        signal_bonus = 0.1 if score >= 75 else 0.0
+        final = base * ahs_factor + signal_bonus
+        return round(max(0.1, min(0.9, final)), 2)
 
-    # 若 AHS 已极低，ahs_factor=0.0 → 防御性极小仓位（circuit_breaker 未拦截时的最后防线）
-    if ahs_factor == 0.0:
-        logger.warning(f"  AHS={ahs} 极低，仓位降至最低档 0.1")
+    # 4档模式路径：用 calc_position_size 统一计算
+    if available < 20000:
+        logger.info("  可用资金不足 2 万，仓位降至最低档 0.1")
         return 0.1
 
-    if available < 20000:
-        return 0.2
-
-    # 基础仓位（按持仓数）
-    if open_count == 0:
-        base = 0.6
-    elif open_count == 1:
-        base = 0.4
-    else:
-        base = 0.3
-
-    # 信号质量加成
-    signal_bonus = 0.1 if score >= 75 else 0.0
-
-    # AHS 调节
-    final = base * ahs_factor + signal_bonus
-    final = round(max(0.1, min(0.9, final)), 2)
-
+    invest_amount = calc_position_size(score, ahs, mode, TOTAL_CAPITAL)
+    final_ratio   = round(invest_amount / TOTAL_CAPITAL, 2)
+    final_ratio   = max(0.05, min(0.90, final_ratio))
     logger.info(
-        f"  仓位计算: base={base} × ahs_factor={ahs_factor} + bonus={signal_bonus} → {final}"
+        f"  [4档仓位] mode={mode} score={score} ahs={ahs} "
+        f"→ {invest_amount:.0f}元 ({final_ratio*100:.0f}%)"
     )
-    return final
+    return final_ratio
 
 
 TOTAL_CAPITAL = 100_000.0  # 与 sim_trade_db.TOTAL_CAPITAL 保持一致（本模块内部用）
@@ -499,6 +496,10 @@ def select_stock(signals: list[dict], capital_info: dict | None = None) -> dict:
       - LLM  只负责：选哪只股（code）+ 挂牌价目标（list_price_pct）+ 4维度理由
       - 规则引擎负责：仓位大小（invest_ratio/invest_amount），由 _default_invest_ratio() 决定
 
+    4档模式过滤：
+      capital_info["min_score"] 由 trade_runner 注入，过滤低于门槛的信号。
+      危机模式(min_score=80)下只有80+信号才能进入候选池。
+
     Args:
         signals:      get_mainboard_signals() 的返回值
         capital_info: 账户资金状况（来自 get_available_capital()），
@@ -515,9 +516,25 @@ def select_stock(signals: list[dict], capital_info: dict | None = None) -> dict:
     from skills.stock_sim_robot.sim_trade_db import TOTAL_CAPITAL
     total_capital = TOTAL_CAPITAL
 
+    # ── 4档模式评分门槛过滤 ─────────────────────────────────────────────
+    min_score = int(capital_info.get("min_score", 50)) if capital_info else 50
+    cb_mode   = capital_info.get("mode", "normal") if capital_info else "normal"
+    if min_score > 50:
+        original_count = len(signals)
+        signals = [s for s in signals if (s.get("signal_score") or 0) >= min_score]
+        filtered_count = len(signals)
+        if filtered_count < original_count:
+            logger.info(
+                f"📊 [{cb_mode}模式] 评分门槛过滤：{original_count}只 → {filtered_count}只"
+                f"（要求≥{min_score}分）"
+            )
     if not signals:
+        skip_reason = (
+            f"今日无主板候选信号" if min_score <= 50
+            else f"今日无满足{min_score}分以上的主板信号（{cb_mode}模式门槛过滤）"
+        )
         return {
-            "code": "SKIP", "name": "无候选", "reason": "今日无主板候选信号",
+            "code": "SKIP", "name": "无候选", "reason": skip_reason,
             "reason_tech": "", "reason_fund": "", "reason_history": "", "reason_seat": "",
             "list_price": 0, "list_price_pct": 0, "stop_loss_pct": STOP_LOSS_PCT,
             "close_price": 0, "signal_score": 0, "from_llm": False,

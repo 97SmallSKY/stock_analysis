@@ -71,6 +71,14 @@ CREATE TABLE IF NOT EXISTS sim_summary (
 );
 """
 
+_CREATE_SIM_CONFIG = """
+CREATE TABLE IF NOT EXISTS sim_config (
+    config_key   VARCHAR(64) PRIMARY KEY,
+    config_value TEXT,
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
 _CREATE_SIM_STRATEGY = """
 CREATE TABLE IF NOT EXISTS sim_strategy (
     strategy_key    VARCHAR(32) PRIMARY KEY,    -- 策略名称，目前只用 'default'
@@ -152,6 +160,7 @@ def create_tables():
             conn.execute(text(_CREATE_SIM_TRADES))
             conn.execute(text(_CREATE_SIM_SUMMARY))
             conn.execute(text(_CREATE_SIM_STRATEGY))
+            conn.execute(text(_CREATE_SIM_CONFIG))
             # 写入默认策略（仅在表为空时）
             existing = conn.execute(
                 text("SELECT count(*) FROM sim_strategy WHERE strategy_key='default'")
@@ -1780,6 +1789,7 @@ def get_performance_stats(lookback_trades: int = 10) -> dict:
           "month_pnl":          float,  # 本月累计盈亏（%）
           "max_drawdown_pct":   float,  # 近 N 笔中峰谷最大回撤（%）
           "consecutive_losses": int,    # 当前连续亏损笔数
+          "consecutive_wins":   int,    # 当前连续盈利笔数
           "last_trade_pnl":     float,  # 最近一笔盈亏（%）
         }
     """
@@ -1789,6 +1799,7 @@ def get_performance_stats(lookback_trades: int = 10) -> dict:
         "recent_total_pnl": 0.0, "today_pnl": 0.0,
         "week_pnl": 0.0, "month_pnl": 0.0,
         "max_drawdown_pct": 0.0, "consecutive_losses": 0,
+        "consecutive_wins": 0,
         "last_trade_pnl": 0.0,
     }
     try:
@@ -1829,6 +1840,14 @@ def get_performance_stats(lookback_trades: int = 10) -> dict:
         for p in pnl_vals:
             if p < 0:
                 consecutive_losses += 1
+            else:
+                break
+
+        # ── 连续盈利笔数 ─────────────────────────────────────────────
+        consecutive_wins = 0
+        for p in pnl_vals:
+            if p > 0:
+                consecutive_wins += 1
             else:
                 break
 
@@ -1884,6 +1903,7 @@ def get_performance_stats(lookback_trades: int = 10) -> dict:
             "month_pnl":          month_pnl,
             "max_drawdown_pct":   max_drawdown_pct,
             "consecutive_losses": consecutive_losses,
+            "consecutive_wins":   consecutive_wins,
             "last_trade_pnl":     last_trade_pnl,
         }
     except Exception as e:
@@ -1950,33 +1970,183 @@ def calc_account_health_score(stats: dict | None = None) -> int:
     return max(0, min(100, score))
 
 
+# ── 运行模式常量 ────────────────────────────────────────────────────────────
+_TRADING_MODES = ("normal", "cautious", "alert", "crisis")
+
+# 四档模式对应的仓位系数/入场门槛/每日建仓上限
+_MODE_CONFIG: dict[str, dict] = {
+    "normal":   {"position_coef": 1.0, "min_score": 50, "max_daily_open": 5, "allow_add": True,  "color": "green",  "label": "🟢 正常"},
+    "cautious": {"position_coef": 0.7, "min_score": 60, "max_daily_open": 3, "allow_add": True,  "color": "yellow", "label": "🟡 谨慎"},
+    "alert":    {"position_coef": 0.4, "min_score": 70, "max_daily_open": 1, "allow_add": False, "color": "orange", "label": "🟠 警戒"},
+    "crisis":   {"position_coef": 0.2, "min_score": 80, "max_daily_open": 1, "allow_add": False, "color": "red",    "label": "🔴 危机"},
+}
+
+_CONFIG_KEY_MODE = "trading_mode"
+
+
+def get_trading_mode() -> str:
+    """
+    从 sim_config 表读取当前运行模式。
+    读取失败或无记录时返回 'normal'。
+    """
+    try:
+        from sqlalchemy import text as _text
+        engine = _get_engine()
+        row = pd.read_sql(
+            _text("SELECT config_value FROM sim_config WHERE config_key=:k"),
+            engine, params={"k": _CONFIG_KEY_MODE}
+        )
+        if not row.empty:
+            val = str(row.iloc[0]["config_value"]).strip()
+            if val in _TRADING_MODES:
+                return val
+    except Exception as e:
+        logger.debug(f"get_trading_mode 读取失败（使用 normal 默认值）: {e}")
+    return "normal"
+
+
+def set_trading_mode(mode: str, reason: str = "") -> bool:
+    """
+    持久化写入运行模式到 sim_config 表（UPSERT）。
+
+    Args:
+        mode:   "normal" / "cautious" / "alert" / "crisis"
+        reason: 变更原因（仅写日志，不入库）
+
+    Returns:
+        True 写入成功，False 失败
+    """
+    if mode not in _TRADING_MODES:
+        logger.error(f"set_trading_mode: 无效模式 '{mode}'，允许值: {_TRADING_MODES}")
+        return False
+    try:
+        from sqlalchemy import text as _text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(_text("""
+                INSERT INTO sim_config (config_key, config_value, updated_at)
+                VALUES (:k, :v, NOW())
+                ON CONFLICT (config_key)
+                DO UPDATE SET config_value=EXCLUDED.config_value, updated_at=NOW()
+            """), {"k": _CONFIG_KEY_MODE, "v": mode})
+        label = _MODE_CONFIG[mode]["label"]
+        logger.info(f"✅ 运行模式已切换 → {label}（{reason}）")
+        return True
+    except Exception as e:
+        logger.error(f"set_trading_mode 写入失败: {e}")
+        return False
+
+
+def _ahs_to_mode(ahs: int) -> str:
+    """
+    基于 AHS 单独决定模式（当无法从 stats 做升降级判断时使用）。
+      80~100 → normal
+      65~79  → normal（轻微保守，但不切换模式）
+      50~64  → cautious
+      35~49  → alert
+      0~34   → crisis
+    """
+    if ahs >= 50:   return "normal"
+    elif ahs >= 35: return "cautious"
+    elif ahs >= 20: return "alert"
+    else:           return "crisis"
+
+
+def calc_position_size(
+    score: int,
+    ahs: int,
+    mode: str,
+    total_capital: float = 100_000,
+) -> float:
+    """
+    按 4档模式 + 信号评分计算本次建仓金额（元）。
+
+    公式：
+      base          = total_capital × 10%（单笔基准）
+      score_mult    = 1.5 若 score >= 85；1.2 若 score >= 75；1.0 否则
+      mode_coef     = {normal:1.0, cautious:0.7, alert:0.4, crisis:0.2}
+      result        = base × score_mult × mode_coef
+      上限约束       = min(result, total_capital × 12%)
+
+    危机模式 + 85分+信号 → 特殊：允许 coef × 1.5（最多不超过 alert 系数）
+
+    Args:
+        score:         信号评分 0~100
+        ahs:           账户健康评分 0~100
+        mode:          运行模式 "normal"/"cautious"/"alert"/"crisis"
+        total_capital: 总资金（默认10万）
+
+    Returns:
+        建仓金额（元），已按上限截断
+    """
+    base = total_capital * 0.10
+    score_mult = 1.5 if score >= 85 else (1.2 if score >= 75 else 1.0)
+    cfg   = _MODE_CONFIG.get(mode, _MODE_CONFIG["normal"])
+    coef  = cfg["position_coef"]
+
+    # 危机/警戒模式下 85分+信号享受 ×1.5 弹性（不超过 alert 上限 0.4）
+    if mode == "crisis" and score >= 85:
+        coef = min(coef * 1.5, _MODE_CONFIG["alert"]["position_coef"])
+
+    result = base * score_mult * coef
+    capped = min(result, total_capital * 0.12)
+    logger.info(
+        f"calc_position_size: score={score} ahs={ahs} mode={mode} "
+        f"→ base={base:.0f}×{score_mult}×{coef}={result:.0f} (上限={capped:.0f}元)"
+    )
+    return round(capped, 2)
+
+
 def check_circuit_breaker(stats: dict | None = None) -> dict:
     """
-    熔断检查：将总控 Prompt 中定义的风控规则落地到代码。
+    分级降速熔断检查（v2：4档运行模式，替代原二元停车逻辑）。
 
     人工覆盖：设置环境变量 SKIP_CIRCUIT_BREAKER=1 可临时绕过所有熔断。
 
-    熔断规则：
-      单日亏损 > -3%   → 当日停止开仓（daily_halt）
-      连续亏损 3 笔     → 跳过下一个交易日（consecutive_halt）
-      周亏损 > -5%    → 本周剩余停止操作（week_halt）
-      月回撤 > -8%    → 本月剩余停止操作（month_halt）
-      近10笔最大回撤 > -15% → 建议清仓，暂停（max_drawdown_halt）
+    四档模式（从宽到严）：
+      normal  → 正常：仓位100%，门槛50分，每日最多5只
+      cautious→ 谨慎：仓位70%，门槛60分，每日最多3只
+      alert   → 警戒：仓位40%，门槛70分，每日最多1只
+      crisis  → 危机：仓位20%，门槛80分，每日最多1只（但80+信号仍可参与）
+
+    升级触发条件（变严）：
+      normal  → cautious: 连亏3笔 OR 单日亏>-2% OR 周亏>-3%
+      cautious→ alert:    连亏5笔 OR 周亏>-5% OR AHS<45
+      alert   → crisis:   连亏7笔 OR 月亏>-8% OR 近10笔最大回撤>-12%
+
+    自动恢复条件（变宽）：
+      连赢2笔  → 自动升一级（变宽松）
+
+    向后兼容：
+      allow_open = True  （4档模式下始终允许开仓，由 min_score 过滤替代）
+      旧代码判断 if not cb["allow_open"] 不会触发（保留向后兼容）
 
     Returns:
         {
-          "allow_open": bool,   # 是否允许开新仓
-          "reason":     str,    # 熔断原因（允许时为空）
-          "level":      str,    # "ok" / "warning" / "halt"
-          "ahs":        int,    # 同步计算的 AHS 值
-          "stats":      dict,   # 绩效统计快照（供调用方展示）
+          "allow_open":    bool,   # 向后兼容，4档模式下始终 True
+          "mode":          str,    # "normal"/"cautious"/"alert"/"crisis"
+          "mode_label":    str,    # "🟢 正常" 等带颜色的显示文本
+          "position_coef": float,  # 仓位系数 1.0/0.7/0.4/0.2
+          "min_score":     int,    # 最低入场评分门槛
+          "max_daily_open":int,    # 每日最多开仓只数
+          "allow_add":     bool,   # 是否允许加仓
+          "reason":        str,    # 说明文本（模式变化原因）
+          "level":         str,    # "ok"/"warning"/"halt"（向后兼容）
+          "ahs":           int,    # 同步计算的 AHS 值
+          "stats":         dict,   # 绩效统计快照
         }
     """
     import os
     # 人工覆盖开关
     if os.getenv("SKIP_CIRCUIT_BREAKER") == "1":
         logger.warning("⚠️  SKIP_CIRCUIT_BREAKER=1，熔断检查已跳过（人工覆盖）")
-        return {"allow_open": True, "reason": "", "level": "ok", "ahs": 60, "stats": {}}
+        cfg = _MODE_CONFIG["normal"]
+        return {
+            "allow_open": True, "mode": "normal", "mode_label": cfg["label"],
+            "position_coef": cfg["position_coef"], "min_score": cfg["min_score"],
+            "max_daily_open": cfg["max_daily_open"], "allow_add": cfg["allow_add"],
+            "reason": "", "level": "ok", "ahs": 60, "stats": {},
+        }
 
     if stats is None:
         stats = get_performance_stats()
@@ -1987,83 +2157,107 @@ def check_circuit_breaker(stats: dict | None = None) -> dict:
     week_pnl   = stats.get("week_pnl",   0.0)
     month_pnl  = stats.get("month_pnl",  0.0)
     cl         = stats.get("consecutive_losses", 0)
+    cw         = stats.get("consecutive_wins", 0)
     max_dd     = stats.get("max_drawdown_pct", 0.0)
     total_closed = stats.get("total_closed", 0)
 
-    # ── 规则1：单日亏损 > -3% → 当日停止 ──────────────────────────
-    if today_pnl < -3.0:
-        reason = (
-            f"单日亏损熔断：今日已亏损 {today_pnl:.1f}%（阈值 -3%），"
-            f"当日停止开新仓，明日恢复。"
-        )
-        logger.warning(f"🔴 熔断触发 [daily_halt]: {reason}")
-        return {"allow_open": False, "reason": reason, "level": "halt",
-                "ahs": ahs, "stats": stats}
+    # ── 读取当前持久化模式 ──────────────────────────────────────────────
+    current_mode = get_trading_mode()
 
-    # ── 规则2：连续亏损 3 笔 → 跳过今日 ────────────────────────────
-    if cl >= 3:
-        reason = (
-            f"连续亏损熔断：已连续亏损 {cl} 笔（阈值 3 笔），"
-            f"跳过今日开仓，等待修复后恢复。"
-        )
-        logger.warning(f"🔴 熔断触发 [consecutive_halt]: {reason}")
-        return {"allow_open": False, "reason": reason, "level": "halt",
-                "ahs": ahs, "stats": stats}
+    # ── 自动恢复：连赢2笔 → 升一级（变宽松）─────────────────────────────
+    if cw >= 2 and current_mode != "normal":
+        mode_list = list(_TRADING_MODES)
+        cur_idx   = mode_list.index(current_mode)
+        new_mode  = mode_list[max(0, cur_idx - 1)]
+        if new_mode != current_mode:
+            set_trading_mode(new_mode, f"连赢{cw}笔自动恢复")
+            current_mode = new_mode
+            logger.info(f"🔼 模式自动恢复：→ {current_mode}（连赢{cw}笔）")
 
-    # ── 规则3：周亏损 > -5% → 本周停止 ─────────────────────────────
-    if week_pnl < -5.0:
-        reason = (
-            f"周亏损熔断：本周已亏损 {week_pnl:.1f}%（阈值 -5%），"
-            f"本周剩余交易日停止开仓。"
-        )
-        logger.warning(f"🔴 熔断触发 [week_halt]: {reason}")
-        return {"allow_open": False, "reason": reason, "level": "halt",
-                "ahs": ahs, "stats": stats}
+    # ── 升级判断（变严），只向严格方向移动 ────────────────────────────────
+    target_mode = current_mode
 
-    # ── 规则4：月回撤 > -8% → 本月停止 ─────────────────────────────
-    if month_pnl < -8.0:
-        reason = (
-            f"月度回撤熔断：本月已亏损 {month_pnl:.1f}%（阈值 -8%），"
-            f"本月剩余交易日停止开仓。"
-        )
-        logger.warning(f"🔴 熔断触发 [month_halt]: {reason}")
-        return {"allow_open": False, "reason": reason, "level": "halt",
-                "ahs": ahs, "stats": stats}
+    # normal → cautious
+    if current_mode == "normal":
+        if cl >= 3 or today_pnl < -2.0 or week_pnl < -3.0:
+            target_mode = "cautious"
 
-    # ── 规则5：近N笔最大回撤 > -15% → 严重警告 ─────────────────────
-    if total_closed >= 5 and max_dd < -15.0:
-        reason = (
-            f"最大回撤熔断：近期最大回撤 {max_dd:.1f}%（阈值 -15%），"
-            f"建议清仓观望，暂停至少 1 个月。"
-        )
-        logger.warning(f"🔴 熔断触发 [max_drawdown_halt]: {reason}")
-        return {"allow_open": False, "reason": reason, "level": "halt",
-                "ahs": ahs, "stats": stats}
+    # → alert（从 normal/cautious 都可触发）
+    if current_mode in ("normal", "cautious") and target_mode in ("normal", "cautious"):
+        if cl >= 5 or week_pnl < -5.0 or ahs < 45:
+            target_mode = "alert"
 
-    # ── AHS 过低预警（Warning 级别，不阻止开仓，但会压缩仓位） ──────
-    if ahs < 30:
-        reason = (
-            f"AHS 极低（{ahs}/100），账户处于严重修复期，"
-            f"仓位将被大幅压缩至最低档（≤10%），请关注风险。"
-        )
-        logger.warning(f"🟡 健康度预警 [low_ahs]: {reason}")
-        return {"allow_open": True, "reason": reason, "level": "warning",
-                "ahs": ahs, "stats": stats}
+    # → crisis（从任何模式都可触发）
+    if target_mode != "crisis":
+        if cl >= 7 or month_pnl < -8.0 or (total_closed >= 5 and max_dd < -12.0):
+            target_mode = "crisis"
 
-    if ahs < 45:
-        reason = (
-            f"AHS 偏低（{ahs}/100），账户处于修复期，仓位已压缩至 50%。"
-        )
-        logger.info(f"🟡 健康度偏低 [ahs={ahs}]: {reason}")
-        return {"allow_open": True, "reason": reason, "level": "warning",
-                "ahs": ahs, "stats": stats}
+    # 写入模式变化
+    if target_mode != current_mode:
+        reason_parts = []
+        if cl >= 7:              reason_parts.append(f"连亏{cl}笔")
+        elif cl >= 5:            reason_parts.append(f"连亏{cl}笔")
+        elif cl >= 3:            reason_parts.append(f"连亏{cl}笔")
+        if today_pnl < -2.0:    reason_parts.append(f"单日亏{today_pnl:.1f}%")
+        if week_pnl  < -3.0:    reason_parts.append(f"周亏{week_pnl:.1f}%")
+        if month_pnl < -8.0:    reason_parts.append(f"月亏{month_pnl:.1f}%")
+        if ahs < 45:             reason_parts.append(f"AHS={ahs}")
+        if max_dd < -12.0:       reason_parts.append(f"最大回撤{max_dd:.1f}%")
+        trigger_reason = "、".join(reason_parts) or "自动降档"
+        set_trading_mode(target_mode, trigger_reason)
+        current_mode = target_mode
 
-    logger.info(
-        f"✅ 熔断检查通过 AHS={ahs}，今日={today_pnl:+.1f}% "
-        f"本周={week_pnl:+.1f}% 本月={month_pnl:+.1f}% 连亏={cl}笔"
-    )
-    return {"allow_open": True, "reason": "", "level": "ok",
-            "ahs": ahs, "stats": stats}
+    cfg = _MODE_CONFIG[current_mode]
+
+    # ── 构建说明文本 ────────────────────────────────────────────────────
+    if current_mode == "normal":
+        reason = ""
+        level  = "ok"
+    elif current_mode == "cautious":
+        reason = (
+            f"谨慎模式（仓位70%，门槛60分）— "
+            f"连亏{cl}笔 / 今日{today_pnl:+.1f}% / 周{week_pnl:+.1f}%"
+        )
+        level = "warning"
+    elif current_mode == "alert":
+        reason = (
+            f"警戒模式（仓位40%，门槛70分）— "
+            f"连亏{cl}笔 / AHS={ahs} / 周{week_pnl:+.1f}%"
+        )
+        level = "warning"
+    else:  # crisis
+        reason = (
+            f"危机模式（仓位20%，门槛80分）— "
+            f"连亏{cl}笔 / 月{month_pnl:+.1f}% / 最大回撤{max_dd:.1f}%；"
+            f"80分+信号仍可参与"
+        )
+        level = "halt"
+
+    if current_mode == "normal":
+        logger.info(
+            f"✅ 分级检查通过 mode=normal AHS={ahs} "
+            f"今日={today_pnl:+.1f}% 本周={week_pnl:+.1f}% 本月={month_pnl:+.1f}% "
+            f"连亏={cl}笔 连赢={cw}笔"
+        )
+    else:
+        logger.warning(
+            f"⚡ 运行模式 [{current_mode}] {cfg['label']} | "
+            f"AHS={ahs} 仓位={cfg['position_coef']*100:.0f}% 门槛={cfg['min_score']}分 | {reason}"
+        )
+
+    return {
+        "allow_open":    True,
+        "mode":          current_mode,
+        "mode_label":    cfg["label"],
+        "position_coef": cfg["position_coef"],
+        "min_score":     cfg["min_score"],
+        "max_daily_open":cfg["max_daily_open"],
+        "allow_add":     cfg["allow_add"],
+        "reason":        reason,
+        "level":         level,
+        "ahs":           ahs,
+        "stats":         stats,
+    }
 
 
 if __name__ == "__main__":

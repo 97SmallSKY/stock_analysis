@@ -81,10 +81,14 @@ def _format_health_summary() -> str:
         elif ahs >= 30: ahs_icon = "🟠"
         else:           ahs_icon = "🔴"
 
-        # 熔断图标
-        if cb["level"] == "ok":      cb_icon = "✅"
-        elif cb["level"] == "warning": cb_icon = "⚠️"
-        else:                          cb_icon = "🔴"
+        # 模式图标
+        cb_mode = cb.get("mode", "normal")
+        if cb_mode == "normal":  cb_icon = "✅"
+        elif cb_mode in ("cautious", "alert"): cb_icon = "⚠️"
+        else:                    cb_icon = "🔴"
+
+        mode_label = cb.get("mode_label", "🟢 正常")
+        mode_desc  = cb["reason"] if cb["reason"] else f"正常运行（{mode_label}）"
 
         wr  = stats.get("recent_win_rate", 0)
         cl  = stats.get("consecutive_losses", 0)
@@ -94,7 +98,7 @@ def _format_health_summary() -> str:
         lines = [
             f"\n{ahs_icon} **【账户健康度】** AHS = {ahs}/100",
             f"  近10笔胜率: {wr:.0f}% | 连续亏损: {cl} 笔 | 本周: {wpnl:+.1f}% | 本月: {mpnl:+.1f}%",
-            f"  熔断状态: {cb_icon} {cb['reason'] if cb['reason'] else '正常，今日可开仓'}",
+            f"  运行模式: {cb_icon} {mode_label}｜{mode_desc}",
         ]
         return "\n".join(lines)
     except Exception as e:
