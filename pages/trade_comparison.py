@@ -244,7 +244,7 @@ def render_tab1():
         if has_scores and has_best:
             valid = df[df["最优涨幅"].notna() & df["评分"].notna()]
             if len(valid) >= 3:
-                corr = valid["评分"].corr(valid["最优涨幅"], method="spearman")
+                corr = valid["评分"].rank().corr(valid["最优涨幅"].rank())
                 st.metric("评分↔最优涨幅相关性", f"{corr:+.2f}",
                           delta="有效" if corr > 0.3 else ("无效" if corr < -0.1 else "弱"),
                           delta_color="normal" if corr >= 0 else "inverse")
