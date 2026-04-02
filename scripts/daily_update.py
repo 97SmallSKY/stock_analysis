@@ -13,15 +13,21 @@
   # 【盘中情绪】14:55 — 收盘前拉一次最新涨跌停数（可选）
   55 14 * * 1-5  cd ~/stock_analysis && /root/miniconda3/bin/python scripts/daily_update.py --sentiment-only >> logs/daily_update.log 2>&1
 
+  # 【每小时刷新上榜后N日】当日龙虎榜股票的 T+1/T+2/T+5/T+10 收益会随时间陆续填充
+  0 * * * 1-5  cd ~/stock_analysis && /root/miniconda3/bin/python scripts/daily_update.py --steps 11,9 >> logs/hourly_fill.log 2>&1
+
 步骤说明：
-  Step 1  拉取今日龙虎榜 Top10（lhb_top10）
-  Step 2  拉取今日市场情绪（涨跌停家数/大盘指数）
-  Step 3  补全 lhb_top10_prices 中已到期但仍为 NULL 的 T+N 价格列
-  Step 4  拉取今日龙虎榜明细（lhb_detail，席位详情，供选股/回测）
-  Step 5  拉取机构席位追踪（lhb_jigou，近5日/10日汇总）   ← 新增
-  Step 6  拉取个股上榜统计（lhb_ggtj，近5日/10日汇总）   ← 新增
-  Step 7  拉取今日龙虎榜席位明细（当日买卖方营业部）      ← 新增
-  Step 8  补全量比字段（lhb_top10_prices.volume_ratio）   ← 新增
+  Step 1   拉取今日龙虎榜 Top10（lhb_top10）
+  Step 2   拉取今日市场情绪（涨跌停家数/大盘指数）
+  Step 3   补全 lhb_top10_prices 中已到期但仍为 NULL 的 T+N 价格列
+  Step 4   拉取今日龙虎榜明细（lhb_detail，席位详情，供选股/回测）
+  Step 5   拉取机构席位追踪（lhb_jigou，近5日/10日汇总）
+  Step 6   拉取个股上榜统计（lhb_ggtj，近5日/10日汇总）
+  Step 7   拉取今日龙虎榜席位明细（当日买卖方营业部）
+  Step 8   补全量比字段（lhb_top10_prices.volume_ratio）
+  Step 9   平仓后价格跟踪（sim_post_tracking T+1/T+3/T+5...）
+  Step 10  候选股 T+N 收益填充（sim_candidate_results）
+  Step 11  刷新 lhb_top10 中上榜后N日为空的记录（每小时补全）  ← 新增
 """
 import sys
 import time
@@ -511,6 +517,112 @@ def step10_fill_candidate_returns():
         logger.error(f"Step 10 失败: {e}")
 
 
+# ============================================================
+# Step 11: 刷新 lhb_top10 中上榜后N日为空的记录
+# ============================================================
+def step11_refresh_lhb_returns():
+    """
+    Step 11: 刷新 lhb_top10 表中 `上榜后N日` 为空的历史记录。
+    东方财富接口会随时间补充 T+1/T+2/T+5/T+10 收益数据，每小时触发一次此步骤
+    可确保页面数据及时呈现，无需等待次日主更新。
+
+    逻辑：
+    1. 找出 lhb_top10 中 `上榜后1日` 为空且 trade_date 距今 >= 1 个交易日的日期
+    2. 对每个日期，强制重拉接口（绕过缓存），更新 `上榜后1日/2日/5日/10日`
+    3. 最多处理最近 30 天内的数据
+    """
+    logger.info("=== Step 11: 刷新 lhb_top10 上榜后N日收益 ===")
+    try:
+        from sqlalchemy import text
+        from utils.storage import storage as _storage
+
+        engine = _storage._engine  # type: ignore[attr-defined]
+        if engine is None:
+            logger.warning("Step 11 仅支持 PostgreSQL 模式，跳过")
+            return
+
+        # 找出近30天内上榜后1日为空的日期
+        cutoff = (TODAY - timedelta(days=1)).strftime("%Y%m%d")
+        cutoff_30 = (TODAY - timedelta(days=30)).strftime("%Y%m%d")
+        sql_dates = text("""
+            SELECT DISTINCT trade_date
+            FROM lhb_top10
+            WHERE ("上榜后1日" IS NULL OR "上榜后2日" IS NULL)
+              AND trade_date <= :cutoff
+              AND trade_date >= :cutoff_30
+            ORDER BY trade_date DESC
+        """)
+        with engine.connect() as conn:
+            dates_df = pd.read_sql(sql_dates, conn, params={"cutoff": cutoff, "cutoff_30": cutoff_30})
+
+        if dates_df.empty:
+            logger.info("Step 11: 所有近期 lhb_top10 记录已有收益数据，无需刷新")
+            return
+
+        dates_to_refresh = dates_df["trade_date"].tolist()
+        logger.info(f"Step 11: 需刷新日期 {len(dates_to_refresh)} 个: {dates_to_refresh}")
+
+        updated_total = 0
+        for trade_date in dates_to_refresh:
+            try:
+                # 强制从接口重拉（top_n=50 覆盖所有记录）
+                df_fresh = safe_akshare_call(
+                    ak.stock_lhb_detail_em,
+                    start_date=trade_date,
+                    end_date=trade_date,
+                    max_retries=3,
+                    base_delay=3.0,
+                    fallback=None,
+                )
+                if df_fresh is None or df_fresh.empty:
+                    logger.warning(f"Step 11: {trade_date} 接口无数据，跳过")
+                    continue
+
+                # 标准化代码列名
+                col_map = {}
+                for c in df_fresh.columns:
+                    if c in ("股票代码", "代码"):
+                        col_map[c] = "代码"
+                df_fresh = df_fresh.rename(columns=col_map)
+                if "代码" not in df_fresh.columns:
+                    continue
+
+                updated = 0
+                with engine.begin() as conn:
+                    for _, row in df_fresh.iterrows():
+                        code = str(row.get("代码", ""))
+                        if not code:
+                            continue
+                        set_parts = []
+                        params = {"code": code, "td": trade_date}
+                        for col in ["上榜后1日", "上榜后2日", "上榜后5日", "上榜后10日"]:
+                            val = row.get(col)
+                            if val is not None and pd.notna(val):
+                                param_key = col.replace("+", "p").replace(" ", "")
+                                set_parts.append(f'"{ col }" = :{param_key}')
+                                params[param_key] = float(val)
+                        if set_parts:
+                            upd_sql = text(
+                                f'UPDATE lhb_top10 SET {", ".join(set_parts)} '
+                                f'WHERE "代码" = :code AND trade_date = :td'
+                            )
+                            result = conn.execute(upd_sql, params)
+                            updated += result.rowcount
+
+                updated_total += updated
+                logger.info(f"Step 11: {trade_date} 更新 {updated} 条")
+                time.sleep(1)  # 接口限流
+
+            except Exception as e:
+                logger.warning(f"Step 11: {trade_date} 刷新失败: {e}")
+                continue
+
+        logger.info(f"Step 11 完成：共更新 {updated_total} 条记录")
+
+    except Exception as e:
+        logger.error(f"Step 11 失败: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sentiment-only", action="store_true",
@@ -532,19 +644,20 @@ def main():
     if args.steps:
         want = set(args.steps.split(","))
     else:
-        want = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
+        want = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"}
 
     step_map = {
-        "1": step1_fetch_top10,
-        "2": step2_fetch_sentiment,
-        "3": step3_fill_null_prices,
-        "4": step4_fetch_lhb_detail,
-        "5": step5_fetch_jigou,
-        "6": step6_fetch_ggtj,
-        "7": step7_fetch_seat_detail,
-        "8": step8_fill_volume_ratio,
-        "9": step9_post_close_tracking,
+        "1":  step1_fetch_top10,
+        "2":  step2_fetch_sentiment,
+        "3":  step3_fill_null_prices,
+        "4":  step4_fetch_lhb_detail,
+        "5":  step5_fetch_jigou,
+        "6":  step6_fetch_ggtj,
+        "7":  step7_fetch_seat_detail,
+        "8":  step8_fill_volume_ratio,
+        "9":  step9_post_close_tracking,
         "10": step10_fill_candidate_returns,
+        "11": step11_refresh_lhb_returns,
     }
     for k in sorted(want, key=lambda x: int(x)):
         fn = step_map.get(k)

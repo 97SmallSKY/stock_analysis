@@ -1,18 +1,17 @@
 """
-📊 选股决策复盘
+📊 选股决策复盘 v2
 
-同天龙虎榜候选股对比分析：
-  Tab1: 同天候选对比  — 评分 vs 实际 T+5 收益散点图 + 对比表
-  Tab2: 单次深度复盘  — 持股时间轴 + 平仓后跟踪 + 同天收益对比 + LLM 分析
-  Tab3: 错失机会统计  — 日期范围内最大错失 Top10 + 评分体系偏差分析
+三个 Tab：
+  Tab1: 同天候选对比  — 龙虎榜股票涨跌幅趋势叠加图 + T+5 横向对比柱状图
+  Tab2: 单次交易深度复盘 — 蜡烛图 + 买入/卖出/最高点标注
+  Tab3: 错失机会统计  — 龙虎榜全局分析，每天最优解 vs 实际买入对比
 """
 
-import json
 from datetime import datetime, timedelta
 
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 _RED   = "#E84040"
@@ -30,24 +29,78 @@ def _fmt_pct(v) -> str:
     return f"{v:+.2f}%"
 
 
-def _color_pct(v) -> str:
+def _pct_color(v) -> str:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return _GRAY
     return _GREEN if v > 0 else _RED if v < 0 else _GRAY
 
 
-def _get_closed_trades() -> pd.DataFrame:
-    """读取所有已平仓交易（用于 Tab2 选择）"""
+def _get_engine():
+    from skills.stock_sim_robot.sim_trade_db import _get_engine as _eng
+    return _eng()
+
+
+def _get_lhb_dates() -> list[str]:
+    """从 lhb_top10 取最近有数据的 trade_date 列表"""
     try:
         from sqlalchemy import text
-        from skills.stock_sim_robot.sim_trade_db import _get_engine
+        engine = _get_engine()
+        df = pd.read_sql(
+            text("SELECT DISTINCT trade_date FROM lhb_top10 ORDER BY trade_date DESC LIMIT 60"),
+            engine,
+        )
+        return df["trade_date"].tolist() if not df.empty else []
+    except Exception:
+        return []
+
+
+def _get_lhb_stocks(trade_date: str) -> pd.DataFrame:
+    """取指定日期的龙虎榜股票（含 T+N 收益）"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        sql = text("""
+            SELECT
+                "代码", "名称", "收盘价", "涨跌幅",
+                "龙虎榜净买额", "流通市值", "换手率", "上榜原因",
+                "上榜后1日", "上榜后2日", "上榜后5日", "上榜后10日",
+                trade_date
+            FROM lhb_top10
+            WHERE trade_date = :d
+            ORDER BY "序号"
+        """)
+        return pd.read_sql(sql, engine, params={"d": trade_date})
+    except Exception as e:
+        st.error(f"读取龙虎榜数据失败: {e}")
+        return pd.DataFrame()
+
+
+def _get_bought_code(trade_date: str) -> str | None:
+    """查找该龙虎榜日期是否有对应买入交易，返回买入股代码"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        df = pd.read_sql(
+            text("SELECT code FROM sim_trades WHERE trade_date = :d AND status IN ('open','closed') LIMIT 1"),
+            engine,
+            params={"d": trade_date},
+        )
+        return str(df.iloc[0]["code"]) if not df.empty else None
+    except Exception:
+        return None
+
+
+def _get_closed_trades() -> pd.DataFrame:
+    """读取所有已平仓交易（含开仓中，用于 Tab2 选择）"""
+    try:
+        from sqlalchemy import text
         engine = _get_engine()
         sql = text("""
             SELECT id, trade_date, code, name, buy_price, sell_price,
-                   profit_pct, sell_type, sell_date
+                   profit_pct, sell_type, sell_date, buy_date
             FROM sim_trades
-            WHERE status = 'closed'
-            ORDER BY sell_date DESC, id DESC
+            WHERE status IN ('closed', 'open')
+            ORDER BY COALESCE(sell_date, trade_date) DESC, id DESC
             LIMIT 200
         """)
         return pd.read_sql(sql, engine)
@@ -56,134 +109,254 @@ def _get_closed_trades() -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _get_available_dates() -> list[str]:
-    """获取有候选数据的日期列表"""
+def _get_post_tracking(trade_id: int) -> pd.DataFrame:
+    """读取 sim_post_tracking"""
     try:
         from sqlalchemy import text
-        from skills.stock_sim_robot.sim_trade_db import _get_engine
         engine = _get_engine()
-        sql = text(
-            "SELECT DISTINCT trade_date FROM sim_selection_log ORDER BY trade_date DESC LIMIT 100"
-        )
-        df = pd.read_sql(sql, engine)
-        return df["trade_date"].tolist() if not df.empty else []
+        sql = text("SELECT * FROM sim_post_tracking WHERE trade_id = :tid ORDER BY track_day")
+        return pd.read_sql(sql, engine, params={"tid": trade_id})
     except Exception:
-        return []
+        return pd.DataFrame()
 
 
-# ── Tab1：同天候选对比 ────────────────────────────────────────────────────────
+# ── Tab1：同天候选对比（基于 lhb_top10）────────────────────────────────────────
 
 def render_tab1():
-    st.subheader("同天候选股对比")
+    st.subheader("同天龙虎榜候选股对比")
+    st.caption("数据来源：龙虎榜 Top10 历史收益（东方财富 `上榜后N日`）")
 
-    dates = _get_available_dates()
+    dates = _get_lhb_dates()
     if not dates:
-        st.info("暂无候选数据，请先运行 daily_update step10 填充 T+N 收益")
+        st.warning("暂无龙虎榜数据，请先运行 daily_update step1")
         return
 
-    col1, col2 = st.columns([2, 1])
+    col1, col2 = st.columns([3, 1])
     with col1:
         selected_date = st.selectbox("选择龙虎榜日期", dates, key="tab1_date")
     with col2:
         st.write("")
-        refresh = st.button("刷新数据", key="tab1_refresh")
+        refresh = st.button("刷新", key="tab1_refresh")
 
-    cache_key = f"tab1_data_{selected_date}"
+    cache_key = f"tab1_{selected_date}"
     if refresh or cache_key not in st.session_state:
-        with st.spinner("加载对比数据..."):
-            from modules.comparison_analyzer import build_comparison_table, analyze_same_day_candidates
-            table = build_comparison_table(selected_date)
-            summary = analyze_same_day_candidates(selected_date)
-        st.session_state[cache_key] = (table, summary)
+        df = _get_lhb_stocks(selected_date)
+        bought_code = _get_bought_code(selected_date)
+        st.session_state[cache_key] = (df, bought_code)
     else:
-        table, summary = st.session_state[cache_key]
+        df, bought_code = st.session_state[cache_key]
 
-    if table.empty:
-        st.warning(f"{selected_date} 无候选数据（T+5 收益可能还未填充）")
+    if df.empty:
+        st.warning(f"{selected_date} 无龙虎榜数据")
         return
 
-    # 汇总指标卡
+    # 标记是否买入
+    df["是否买入"] = df["代码"].astype(str) == str(bought_code or "")
+
+    # 检查 T+N 数据是否填充
+    has_t1  = df["上榜后1日"].notna().any()
+    has_t5  = df["上榜后5日"].notna().any()
+    has_t10 = df["上榜后10日"].notna().any()
+
+    # ── 指标卡 ────────────────────────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric("候选总数", summary.get("total", "—"))
+        st.metric("龙虎榜股票数", len(df))
     with c2:
-        best_ret = summary.get("best_t5_ret")
-        st.metric("同天最高T+5收益", _fmt_pct(best_ret), delta=summary.get("best_t5_code", ""))
+        if has_t5:
+            avg_t5 = df["上榜后5日"].mean()
+            st.metric("T+5 平均涨幅", _fmt_pct(avg_t5))
+        else:
+            st.metric("T+5 平均涨幅", "待结算")
     with c3:
-        bought_ret = summary.get("bought_t5_ret")
-        st.metric("实际买入T+5收益", _fmt_pct(bought_ret))
+        if has_t5:
+            best_row = df.loc[df["上榜后5日"].idxmax()]
+            st.metric(
+                "最优股 T+5",
+                _fmt_pct(best_row["上榜后5日"]),
+                delta=f"{best_row['名称']}({best_row['代码']})",
+            )
+        else:
+            st.metric("最优股 T+5", "待结算")
     with c4:
-        missed = summary.get("missed_ret")
-        color  = "normal" if missed is None else ("off" if missed <= 0 else "inverse")
-        st.metric("错失差距", _fmt_pct(missed), delta_color=color)
+        if bought_code and has_t5:
+            bought_rows = df[df["是否买入"]]
+            if not bought_rows.empty:
+                bought_t5 = bought_rows.iloc[0]["上榜后5日"]
+                best_t5 = df["上榜后5日"].max()
+                diff = (best_t5 - bought_t5) if pd.notna(bought_t5) else None
+                st.metric(
+                    "买入 vs 最优差距",
+                    _fmt_pct(diff),
+                    delta=f"买入:{_fmt_pct(bought_t5)}",
+                    delta_color="inverse" if (diff or 0) > 0 else "normal",
+                )
+            else:
+                st.metric("买入 vs 最优差距", "—")
+        elif not bought_code:
+            st.metric("买入股", "本日未买入")
+        else:
+            st.metric("买入 vs 最优差距", "待结算")
 
-    corr = summary.get("score_correlation")
-    optimal = summary.get("selected_optimal")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if corr is not None:
-            corr_label = "强" if abs(corr) > 0.6 else "中" if abs(corr) > 0.3 else "弱"
-            st.info(f"📈 评分与T+5收益相关性: **{corr}**（{corr_label}相关）")
-    with col_b:
-        if optimal is not None:
-            icon = "✅" if optimal else "❌"
-            msg  = "选中了最优股" if optimal else f"未选最优股（最优: {summary.get('best_t5_code')}）"
-            st.info(f"{icon} {msg}")
+    if not has_t1:
+        st.info(f"⏳ {selected_date} 的 T+N 收益尚未到结算日，将在上榜后1~10个交易日内自动更新")
 
-    # 散点图：评分 vs T+5 收益
-    has_t5 = table["T+5收益%"].notna().any()
+    # ── 趋势折线图（多股叠加）─────────────────────────────────────────────────
+    st.subheader("上榜后涨跌幅趋势（多股叠加）")
+
+    # 构建 T+0/T+1/T+2/T+5/T+10 的涨幅序列
+    x_points = []
+    col_map   = {}
+    if has_t1:
+        x_points.append("T+1"); col_map["T+1"] = "上榜后1日"
+    if df["上榜后2日"].notna().any():
+        x_points.append("T+2"); col_map["T+2"] = "上榜后2日"
     if has_t5:
-        fig = px.scatter(
-            table,
-            x="评分",
-            y="T+5收益%",
-            text="代码",
-            color="是否买入",
-            color_discrete_map={True: _BLUE, False: _GRAY},
-            size_max=12,
-            hover_data=["名称", "评分排名", "连板数"],
-            title=f"{selected_date} 评分 vs T+5实际收益",
+        x_points.append("T+5"); col_map["T+5"] = "上榜后5日"
+    if has_t10:
+        x_points.append("T+10"); col_map["T+10"] = "上榜后10日"
+
+    if x_points:
+        fig_trend = go.Figure()
+        for _, row in df.iterrows():
+            ys = [row.get(col_map[x]) for x in x_points]
+            is_bought = row["是否买入"]
+            # 只画有至少一个数据点的股票
+            if not any(pd.notna(y) for y in ys):
+                continue
+            label = f"{row['名称']}({row['代码']})"
+            fig_trend.add_trace(go.Scatter(
+                x=x_points,
+                y=ys,
+                mode="lines+markers",
+                name=label,
+                line={
+                    "width": 3 if is_bought else 1.5,
+                    "color": _BLUE if is_bought else None,
+                    "dash":  "solid" if is_bought else "dot",
+                },
+                marker={"size": 8 if is_bought else 5},
+                opacity=1.0 if is_bought else 0.65,
+                hovertemplate=f"<b>{label}</b><br>%{{x}}: %{{y:+.2f}}%<extra></extra>",
+            ))
+
+        fig_trend.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
+        if bought_code:
+            fig_trend.add_annotation(
+                text=f"— 蓝色粗线 = 实际买入股 ({bought_code})",
+                xref="paper", yref="paper",
+                x=0.01, y=1.05, showarrow=False,
+                font={"color": _BLUE, "size": 12},
+            )
+        fig_trend.update_layout(
+            title=f"{selected_date} 龙虎榜股票上榜后涨跌幅趋势",
+            xaxis_title="上榜后第N个交易日",
+            yaxis_title="涨跌幅 %",
+            legend={"orientation": "v", "x": 1.02, "y": 1},
+            hovermode="x unified",
+            height=450,
         )
-        fig.update_traces(textposition="top center", marker={"size": 10})
-        fig.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig_trend, use_container_width=True)
     else:
-        st.info("T+5 收益尚未填充，请等待 daily_update step10 完成")
+        st.info(f"⏳ 上榜后收益数据尚未填充，请等待下一次 daily_update（通常次日更新 T+1）")
 
-    # 对比表
-    st.subheader("详细对比表")
-    display_cols = ["代码", "名称", "评分", "评分排名", "T+1收益%", "T+5收益%", "T+10收益%", "收益排名T5", "是否买入", "未选主因"]
-    display_cols = [c for c in display_cols if c in table.columns]
+    # ── T+5 横向对比柱状图 ─────────────────────────────────────────────────────
+    if has_t5:
+        st.subheader("T+5 收益横向对比")
+        df_sorted = df.sort_values("上榜后5日", ascending=False).copy()
+        colors = []
+        for _, row in df_sorted.iterrows():
+            if row["是否买入"]:
+                colors.append(_BLUE)
+            elif pd.notna(row["上榜后5日"]) and row["上榜后5日"] > 0:
+                colors.append(_GREEN)
+            else:
+                colors.append(_RED)
 
-    def _highlight_bought(row):
+        # 最优股加星标
+        best_idx = df_sorted["上榜后5日"].idxmax()
+        text_labels = []
+        for idx, row in df_sorted.iterrows():
+            label = _fmt_pct(row["上榜后5日"])
+            if idx == best_idx:
+                label = "★ " + label
+            if row["是否买入"]:
+                label = "▶ " + label
+            text_labels.append(label)
+
+        fig_bar = go.Figure(go.Bar(
+            x=df_sorted["名称"] + "<br>" + df_sorted["代码"],
+            y=df_sorted["上榜后5日"],
+            marker_color=colors,
+            text=text_labels,
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>T+5: %{y:+.2f}%<extra></extra>",
+        ))
+        fig_bar.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
+        fig_bar.update_layout(
+            title=f"{selected_date} T+5 收益横向对比（蓝=买入 ★=最优）",
+            yaxis_title="T+5 涨跌幅 %",
+            xaxis_tickangle=-30,
+            height=420,
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    # ── 详细数据表 ─────────────────────────────────────────────────────────────
+    st.subheader("详细数据")
+    display_df = df[[
+        "代码", "名称", "收盘价", "涨跌幅",
+        "上榜后1日", "上榜后2日", "上榜后5日", "上榜后10日",
+        "龙虎榜净买额", "换手率", "上榜原因", "是否买入",
+    ]].copy()
+
+    # 净买额换算成万元
+    if "龙虎榜净买额" in display_df.columns:
+        display_df["净买额(万)"] = (display_df["龙虎榜净买额"] / 1e4).round(0)
+        display_df = display_df.drop(columns=["龙虎榜净买额"])
+
+    # 重命名
+    display_df = display_df.rename(columns={
+        "涨跌幅":    "T+0涨跌%",
+        "上榜后1日": "T+1%",
+        "上榜后2日": "T+2%",
+        "上榜后5日": "T+5%",
+        "上榜后10日":"T+10%",
+        "换手率":    "换手%",
+    })
+
+    def _style_row(row):
         if row.get("是否买入"):
-            return ["background-color: #1a3a5c"] * len(row)
+            return ["background-color: #1a2a4a; font-weight:bold"] * len(row)
         return [""] * len(row)
 
     st.dataframe(
-        table[display_cols].style.apply(_highlight_bought, axis=1),
+        display_df.style.apply(_style_row, axis=1),
         use_container_width=True,
         hide_index=True,
     )
 
 
-# ── Tab2：单次交易深度复盘 ────────────────────────────────────────────────────
+# ── Tab2：单次交易深度复盘（K 线蜡烛图）─────────────────────────────────────
 
 def render_tab2():
     st.subheader("单次交易深度复盘")
 
     trades = _get_closed_trades()
     if trades.empty:
-        st.info("暂无已平仓交易记录")
+        st.info("暂无交易记录（模拟炒股机器人尚未产生交易）")
         return
 
-    # 构建选项
-    trades["label"] = (
-        trades["trade_date"] + " | " +
-        trades["name"].fillna("") + "(" + trades["code"] + ")" +
-        " | " + trades["profit_pct"].apply(lambda x: f"{x:+.1f}%" if pd.notna(x) else "—") +
-        " | " + trades["sell_type"].fillna("")
-    )
+    # 构建选项标签
+    def _trade_label(row) -> str:
+        status = "📂 持仓中" if row.get("status") == "open" else ""
+        pct_str = _fmt_pct(row.get("profit_pct"))
+        sell_t  = str(row.get("sell_type") or "")
+        date_str = str(row.get("trade_date") or "")
+        return f"{date_str} | {row.get('name','')}({row.get('code','')}) | {pct_str} {sell_t} {status}".strip()
+
+    if "status" not in trades.columns:
+        trades["status"] = "closed"
+    trades["label"] = trades.apply(_trade_label, axis=1)
 
     col1, col2 = st.columns([3, 1])
     with col1:
@@ -192,203 +365,564 @@ def render_tab2():
         st.write("")
         load_btn = st.button("加载复盘", key="tab2_load")
 
-    if not load_btn and "tab2_trade_id" not in st.session_state:
+    trade_row = trades[trades["label"] == selected_label].iloc[0]
+    trade_id  = int(trade_row["id"])
+    code      = str(trade_row["code"])
+    name      = str(trade_row.get("name") or code)
+
+    if not load_btn and f"tab2_kline_{trade_id}" not in st.session_state:
         st.info("选择一笔交易后点击「加载复盘」")
         return
 
-    trade_row = trades[trades["label"] == selected_label].iloc[0]
-    trade_id  = int(trade_row["id"])
-
     if load_btn:
-        st.session_state["tab2_trade_id"] = trade_id
-        if f"tab2_timeline_{trade_id}" in st.session_state:
-            del st.session_state[f"tab2_timeline_{trade_id}"]
+        for k in list(st.session_state.keys()):
+            if k.startswith(f"tab2_kline_{trade_id}"):
+                del st.session_state[k]
 
-    trade_id = st.session_state.get("tab2_trade_id", trade_id)
-
-    cache_key = f"tab2_timeline_{trade_id}"
+    cache_key = f"tab2_kline_{trade_id}"
     if cache_key not in st.session_state:
-        with st.spinner("加载复盘数据..."):
-            from modules.comparison_analyzer import get_holding_timeline, analyze_same_day_candidates
-            timeline = get_holding_timeline(trade_id)
-            trade_date = str(trade_row.get("trade_date", ""))
-            same_day   = analyze_same_day_candidates(trade_date) if trade_date else {}
-        st.session_state[cache_key] = (timeline, same_day)
+        with st.spinner(f"拉取 {name}({code}) K 线数据..."):
+            kline_df = _fetch_trade_kline(trade_row)
+        st.session_state[cache_key] = kline_df
     else:
-        timeline, same_day = st.session_state[cache_key]
+        kline_df = st.session_state[cache_key]
 
-    if "error" in timeline:
-        st.error(f"加载失败: {timeline['error']}")
-        return
+    buy_price  = float(trade_row.get("buy_price") or 0) or None
+    sell_price = float(trade_row.get("sell_price") or 0) or None
+    profit_pct = trade_row.get("profit_pct")
+    sell_type  = str(trade_row.get("sell_type") or "")
+    trade_date = str(trade_row.get("trade_date") or "")
+    buy_date   = str(trade_row.get("buy_date") or trade_date)
+    sell_date  = str(trade_row.get("sell_date") or "")
 
-    trade_info = timeline.get("trade_info", {})
-
-    # 基本信息
+    # ── 指标卡 ──────────────────────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric("买入价", f"¥{trade_info.get('buy_price', '—')}")
+        st.metric("买入价", f"¥{buy_price:.2f}" if buy_price else "—")
     with c2:
-        st.metric("卖出价", f"¥{trade_info.get('sell_price', '—')}")
+        st.metric("卖出价", f"¥{sell_price:.2f}" if sell_price else "持仓中")
     with c3:
-        pct = trade_info.get("profit_pct")
-        st.metric("盈亏", _fmt_pct(pct))
+        color = "normal"
+        if profit_pct is not None:
+            color = "off" if profit_pct < 0 else "normal"
+        st.metric("盈亏", _fmt_pct(profit_pct), delta_color=color)
     with c4:
-        st.metric("卖出类型", trade_info.get("sell_type", "—"))
+        st.metric("卖出类型", sell_type or "持仓中")
 
-    # 平仓后走势曲线
-    post_tracking = timeline.get("post_tracking", [])
-    if post_tracking:
+    # ── 蜡烛图 + 成交量 ───────────────────────────────────────────────────────
+    if kline_df is None or kline_df.empty:
+        st.warning(f"未能拉取到 {name}({code}) 的 K 线数据（可能已退市或临时接口失败）")
+    else:
+        _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, sell_price)
+
+    # ── 平仓后跟踪折线 ────────────────────────────────────────────────────────
+    post_df = _get_post_tracking(trade_id)
+    if not post_df.empty:
         st.subheader("平仓后走势（相对卖出价）")
-        pt_df = pd.DataFrame(post_tracking)
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=pt_df["track_day"].apply(lambda d: f"T+{d}"),
-            y=pt_df["pct_vs_sell"],
+        fig_post = go.Figure()
+        fig_post.add_trace(go.Scatter(
+            x=post_df["track_day"].apply(lambda d: f"T+{d}"),
+            y=post_df["pct_vs_sell"],
             mode="lines+markers+text",
-            text=pt_df["pct_vs_sell"].apply(_fmt_pct),
+            text=post_df["pct_vs_sell"].apply(_fmt_pct),
             textposition="top center",
             line={"color": _BLUE, "width": 2},
-            name="相对卖出价涨跌%",
+            name="相对卖出价%",
+            hovertemplate="<b>%{x}</b><br>相对卖出价: %{y:+.2f}%<extra></extra>",
         ))
-        fig.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
-        fig.update_layout(title="平仓后 T+N 表现", yaxis_title="相对卖出价涨跌幅 %")
-        st.plotly_chart(fig, use_container_width=True)
+        if "index_pct" in post_df.columns and post_df["index_pct"].notna().any():
+            fig_post.add_trace(go.Scatter(
+                x=post_df["track_day"].apply(lambda d: f"T+{d}"),
+                y=post_df["index_pct"],
+                mode="lines",
+                line={"color": _GRAY, "width": 1, "dash": "dot"},
+                name="上证指数%",
+                hovertemplate="上证: %{y:+.2f}%<extra></extra>",
+            ))
+        fig_post.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.4)
+        fig_post.update_layout(
+            title="平仓后 T+N 表现 vs 上证指数",
+            xaxis_title="平仓后第N个交易日",
+            yaxis_title="涨跌幅 %",
+            height=320,
+        )
+        st.plotly_chart(fig_post, use_container_width=True)
     else:
-        st.info("平仓后跟踪数据尚未填充（等待 daily_update step9）")
+        st.info("⏳ 平仓后跟踪数据将在卖出后次日起自动采集（daily_update step9）")
 
-    # 同天候选收益对比柱状图
-    same_day_table = same_day.get("comparison_table")
-    if same_day_table is not None and not same_day_table.empty:
-        st.subheader("同天候选股 T+5 收益对比")
-        chart_df = same_day_table[same_day_table["T+5收益%"].notna()].copy()
-        if not chart_df.empty:
-            chart_df["颜色"] = chart_df.apply(
-                lambda r: _BLUE if r["是否买入"] else (_GREEN if r["T+5收益%"] > 0 else _RED),
-                axis=1
-            )
-            fig2 = go.Figure(go.Bar(
-                x=chart_df["代码"] + "\n" + chart_df["名称"],
-                y=chart_df["T+5收益%"],
-                marker_color=chart_df["颜色"],
-                text=chart_df["T+5收益%"].apply(_fmt_pct),
+    # ── 同天龙虎榜对比 ────────────────────────────────────────────────────────
+    if trade_date:
+        lhb_df = _get_lhb_stocks(trade_date)
+        if not lhb_df.empty and lhb_df["上榜后5日"].notna().any():
+            st.subheader(f"同天龙虎榜 T+5 收益对比（{trade_date}）")
+            lhb_df["is_me"] = lhb_df["代码"].astype(str) == code
+            lhb_sorted = lhb_df.sort_values("上榜后5日", ascending=False)
+            bar_colors = [_BLUE if r["is_me"] else (_GREEN if (r["上榜后5日"] or 0) > 0 else _RED)
+                          for _, r in lhb_sorted.iterrows()]
+            bar_labels = [("▶ " if r["is_me"] else "") + _fmt_pct(r["上榜后5日"])
+                          for _, r in lhb_sorted.iterrows()]
+            fig_comp = go.Figure(go.Bar(
+                x=lhb_sorted["名称"] + "<br>" + lhb_sorted["代码"],
+                y=lhb_sorted["上榜后5日"],
+                marker_color=bar_colors,
+                text=bar_labels,
                 textposition="outside",
             ))
-            fig2.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
-            fig2.update_layout(title="同天候选股 T+5 收益（蓝色=实际买入）", yaxis_title="T+5收益 %")
-            st.plotly_chart(fig2, use_container_width=True)
+            fig_comp.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.4)
+            fig_comp.update_layout(
+                title=f"{trade_date} 同天龙虎榜 T+5 收益（蓝=本次买入）",
+                yaxis_title="T+5 涨跌幅 %",
+                xaxis_tickangle=-30,
+                height=380,
+            )
+            st.plotly_chart(fig_comp, use_container_width=True)
 
-    # 持股期间新闻事件
-    news_events = timeline.get("news_events", [])
-    if news_events:
-        st.subheader("持股期间新闻事件")
-        news_df = pd.DataFrame(news_events)
-        news_df["情感"] = news_df["sentiment"].map({
-            "positive": "🟢 利好",
-            "negative": "🔴 利空",
-            "neutral":  "⚪ 中性",
-        }).fillna("⚪ 中性")
-        display = news_df[["event_date", "情感", "title"]].rename(columns={
-            "event_date": "日期",
-            "title":      "标题",
-        })
-        st.dataframe(display, use_container_width=True, hide_index=True)
-    else:
-        st.info("持股期间无新闻记录（平仓时未触发新闻拉取，或该股无东方财富新闻）")
 
-    # LLM 深度分析
-    st.subheader("LLM 深度分析")
-    llm_key = f"tab2_llm_{trade_id}"
-    if llm_key in st.session_state:
-        st.markdown(st.session_state[llm_key])
+def _fetch_trade_kline(trade_row) -> pd.DataFrame | None:
+    """拉取该笔交易对应的 K 线（买入前5日 ~ 卖出后10日）"""
+    from modules.market_data import get_kline_raw
+    code      = str(trade_row.get("code") or "")
+    trade_date = str(trade_row.get("trade_date") or "")
+    sell_date  = str(trade_row.get("sell_date") or "")
+
+    if not code or not trade_date:
+        return None
+
+    # 拉取足够长的 K 线（买入前10天 + 持仓 + 平仓后10天 ≈ 60天窗口）
+    anchor = sell_date if sell_date else trade_date
+    kline = get_kline_raw(code, anchor, days=60)
+    if kline is None or kline.empty:
+        return None
+
+    # 统一日期格式
+    kline["日期"] = kline["日期"].astype(str).str.replace("-", "")
+    # 只保留 trade_date 前5个交易日起 ~ anchor 后10个交易日内
+    all_dates = sorted(kline["日期"].tolist())
+    try:
+        start_idx = max(0, all_dates.index(trade_date) - 5)
+    except ValueError:
+        # trade_date 不在 K 线里（停牌），就从最早有数据开始
+        start_idx = 0
+    kline = kline[kline["日期"] >= all_dates[start_idx]].reset_index(drop=True)
+    return kline
+
+
+def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, sell_price):
+    """渲染蜡烛图主图 + 成交量子图，标注买入/卖出/最高点"""
+    df = kline_df.copy()
+
+    # 统一日期格式（x 轴用 YYYY-MM-DD 格式更好看）
+    df["date_fmt"] = df["日期"].apply(lambda d: f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(str(d)) == 8 else str(d))
+
+    # 持仓期间最高收盘价
+    if buy_date and sell_date:
+        hold = df[(df["日期"] >= buy_date) & (df["日期"] <= sell_date)]
+    elif buy_date:
+        hold = df[df["日期"] >= buy_date]
     else:
-        if st.button("生成深度分析（调用 AI，约10秒）", key="tab2_llm_btn"):
-            with st.spinner("AI 分析中..."):
-                from modules.comparison_analyzer import generate_llm_deep_analysis
-                analysis = generate_llm_deep_analysis(trade_id)
-            if analysis:
-                st.session_state[llm_key] = analysis
-                st.markdown(analysis)
+        hold = df
+    max_close_idx = hold["收盘"].idxmax() if not hold.empty and "收盘" in hold.columns else None
+    max_row = df.loc[max_close_idx] if max_close_idx is not None else None
+
+    # 创建子图（主图 K 线 + 副图成交量）
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        row_heights=[0.72, 0.28],
+    )
+
+    # K 线蜡烛图
+    open_col  = next((c for c in ["开盘", "open", "Open"] if c in df.columns), None)
+    high_col  = next((c for c in ["最高", "high", "High"] if c in df.columns), None)
+    low_col   = next((c for c in ["最低", "low", "Low"] if c in df.columns), None)
+    close_col = next((c for c in ["收盘", "close", "Close"] if c in df.columns), None)
+    vol_col   = next((c for c in ["成交量", "volume", "Volume"] if c in df.columns), None)
+
+    if all([open_col, high_col, low_col, close_col]):
+        fig.add_trace(go.Candlestick(
+            x=df["date_fmt"],
+            open=df[open_col],
+            high=df[high_col],
+            low=df[low_col],
+            close=df[close_col],
+            name=f"{name}({code})",
+            increasing_line_color=_RED,    # A股：红涨绿跌
+            decreasing_line_color=_GREEN,
+        ), row=1, col=1)
+    elif close_col:
+        # 没有完整 OHLC，降级为折线
+        fig.add_trace(go.Scatter(
+            x=df["date_fmt"], y=df[close_col],
+            mode="lines", name="收盘价",
+            line={"color": _BLUE},
+        ), row=1, col=1)
+
+    # 成交量子图
+    if vol_col:
+        vol_colors = []
+        for i, row in df.iterrows():
+            if open_col and close_col:
+                vol_colors.append(_RED if row[close_col] >= row[open_col] else _GREEN)
             else:
-                st.info("该交易不符合 LLM 深度分析条件（需为止损单或同天错失>5%）")
+                vol_colors.append(_BLUE)
+        fig.add_trace(go.Bar(
+            x=df["date_fmt"], y=df[vol_col],
+            marker_color=vol_colors,
+            name="成交量",
+            opacity=0.6,
+        ), row=2, col=1)
+
+    # ── 标注线 ────────────────────────────────────────────────────────────────
+    buy_date_fmt  = f"{buy_date[:4]}-{buy_date[4:6]}-{buy_date[6:]}"  if buy_date  and len(buy_date) == 8  else buy_date
+    sell_date_fmt = f"{sell_date[:4]}-{sell_date[4:6]}-{sell_date[6:]}" if sell_date and len(sell_date) == 8 else sell_date
+
+    shapes = []
+    annotations = []
+
+    # 买入线（蓝色虚线）
+    if buy_date and buy_date_fmt in df["date_fmt"].values:
+        shapes.append(dict(
+            type="line", x0=buy_date_fmt, x1=buy_date_fmt,
+            y0=0, y1=1, yref="paper",
+            line={"color": _BLUE, "width": 2, "dash": "dash"},
+        ))
+        annotations.append(dict(
+            x=buy_date_fmt,
+            y=buy_price if buy_price and close_col else 0,
+            yref="y" if buy_price and close_col else "paper",
+            text=f"买入 ¥{buy_price:.2f}" if buy_price else "买入",
+            showarrow=True, arrowhead=2, arrowcolor=_BLUE,
+            font={"color": _BLUE, "size": 11},
+            bgcolor="rgba(0,80,200,0.15)",
+            bordercolor=_BLUE,
+        ))
+
+    # 卖出线（红色虚线）
+    if sell_date and sell_price and sell_date_fmt in df["date_fmt"].values:
+        shapes.append(dict(
+            type="line", x0=sell_date_fmt, x1=sell_date_fmt,
+            y0=0, y1=1, yref="paper",
+            line={"color": _RED, "width": 2, "dash": "dash"},
+        ))
+        pct_str = _fmt_pct(trade_row.get("profit_pct") if hasattr(trade_row, 'get') else None)
+        annotations.append(dict(
+            x=sell_date_fmt,
+            y=sell_price,
+            yref="y",
+            text=f"卖出 ¥{sell_price:.2f} ({pct_str})",
+            showarrow=True, arrowhead=2, arrowcolor=_RED,
+            font={"color": _RED, "size": 11},
+            bgcolor="rgba(200,0,0,0.15)",
+            bordercolor=_RED,
+            ax=40, ay=-30,
+        ))
+
+    # 最高点标注（金色三角）
+    if max_row is not None and close_col:
+        max_date_fmt = f"{str(max_row['日期'])[:4]}-{str(max_row['日期'])[4:6]}-{str(max_row['日期'])[6:]}"
+        max_close = float(max_row[close_col])
+        max_pct = ((max_close - buy_price) / buy_price * 100) if buy_price else None
+        fig.add_trace(go.Scatter(
+            x=[max_date_fmt],
+            y=[max_close],
+            mode="markers+text",
+            marker={"symbol": "triangle-up", "size": 14, "color": _GOLD},
+            text=[f"最高 ¥{max_close:.2f}" + (f"<br>{_fmt_pct(max_pct)}" if max_pct else "")],
+            textposition="top center",
+            textfont={"color": _GOLD, "size": 10},
+            name="持仓最高点",
+            showlegend=True,
+        ), row=1, col=1)
+
+    fig.update_layout(
+        title=f"{name}({code}) 复盘 K 线",
+        shapes=shapes,
+        annotations=annotations,
+        xaxis_rangeslider_visible=False,
+        hovermode="x unified",
+        height=600,
+        legend={"orientation": "h", "yanchor": "bottom", "y": 1.02},
+    )
+    fig.update_yaxes(title_text="价格 (元)", row=1, col=1)
+    fig.update_yaxes(title_text="成交量", row=2, col=1)
+
+    st.plotly_chart(fig, use_container_width=True)
 
 
-# ── Tab3：错失机会统计 ────────────────────────────────────────────────────────
+# ── Tab3：错失机会统计（lhb_top10 全局分析）─────────────────────────────────
 
 def render_tab3():
-    st.subheader("错失机会统计")
+    st.subheader("龙虎榜错失机会统计")
+    st.caption("分析每天龙虎榜股票中的最优解（上榜后 T+5 最高涨幅），对比实际买入选择")
 
-    col1, col2, col3 = st.columns(3)
+    # 日期范围
+    col1, col2 = st.columns(2)
     with col1:
         start_date = st.date_input(
-            "开始日期",
-            value=datetime.today() - timedelta(days=90),
-            key="tab3_start",
+            "开始日期", value=datetime.today() - timedelta(days=90), key="tab3_start"
         )
     with col2:
-        end_date = st.date_input(
-            "结束日期",
-            value=datetime.today(),
-            key="tab3_end",
-        )
-    with col3:
-        threshold = st.number_input("最低错失收益 (%)", min_value=0.0, value=5.0, step=1.0, key="tab3_threshold")
+        end_date = st.date_input("结束日期", value=datetime.today(), key="tab3_end")
 
-    if st.button("查询", key="tab3_query"):
+    if st.button("开始分析", key="tab3_run"):
         start_str = start_date.strftime("%Y%m%d")
         end_str   = end_date.strftime("%Y%m%d")
 
         with st.spinner("分析中..."):
-            from modules.comparison_analyzer import find_missed_opportunities
-            missed = find_missed_opportunities(start_str, end_str, threshold=threshold)
+            result = _analyze_missed_opportunities(start_str, end_str)
 
-        if missed.empty:
-            st.success(f"该时间段内无错失机会（T+5>{threshold}%未买入的股票）")
-            return
+        st.session_state["tab3_result"] = result
 
-        # 汇总指标
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("错失机会总数", len(missed))
-        with c2:
-            max_missed = missed["错失差距%"].max() if "错失差距%" in missed.columns else None
-            st.metric("最大错失差距", _fmt_pct(max_missed))
-        with c3:
-            avg_missed = missed["错失差距%"].mean() if "错失差距%" in missed.columns else None
-            st.metric("平均错失差距", _fmt_pct(avg_missed))
+    if "tab3_result" not in st.session_state:
+        st.info("选择日期范围后点击「开始分析」")
+        return
 
-        # 错失机会表
-        st.subheader(f"错失机会 Top{min(10, len(missed))}")
-        st.dataframe(missed.head(10), use_container_width=True, hide_index=True)
+    result = st.session_state["tab3_result"]
+    if result is None or result.get("daily_df") is None:
+        st.warning("该时间段内无龙虎榜数据（T+5 收益需等上榜后5个交易日）")
+        return
 
-        # 错失差距分布图
-        if "错失差距%" in missed.columns and missed["错失差距%"].notna().any():
-            fig = px.histogram(
-                missed,
-                x="错失差距%",
-                nbins=20,
-                title="错失差距分布（同天最优股收益 - 实际买入股收益）",
-                color_discrete_sequence=[_GOLD],
-            )
-            st.plotly_chart(fig, use_container_width=True)
+    daily_df = result["daily_df"]
+    summary  = result["summary"]
 
-        # 评分排名分析：哪些排名的股票最容易被错过
-        if "评分排名" in missed.columns:
-            rank_dist = missed["评分排名"].value_counts().sort_index()
-            st.subheader("错失股的评分排名分布")
-            fig2 = go.Figure(go.Bar(
-                x=rank_dist.index.map(lambda r: f"第{r}名"),
-                y=rank_dist.values,
-                marker_color=_GOLD,
+    if daily_df.empty:
+        st.info("该时间段内暂无有 T+5 数据的龙虎榜日期")
+        return
+
+    # ── 汇总指标卡 ─────────────────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("分析天数", summary["total_days"])
+    with c2:
+        st.metric("有买入记录天数", summary["traded_days"])
+    with c3:
+        st.metric("买中最优股次数", f"{summary['optimal_hits']} / {summary['traded_days']}")
+    with c4:
+        st.metric("平均错失差距", _fmt_pct(summary["avg_missed"]))
+
+    # ── 每日最优 vs 买入对比柱状图 ─────────────────────────────────────────────
+    st.subheader("每日：最优股 vs 买入股 T+5 收益")
+    traded_days = daily_df[daily_df["bought_code"].notna()]
+
+    if not traded_days.empty:
+        fig_daily = go.Figure()
+        # 最优股柱（金色）
+        fig_daily.add_trace(go.Bar(
+            name="最优股 T+5",
+            x=traded_days["trade_date"],
+            y=traded_days["best_t5"],
+            marker_color=_GOLD,
+            text=traded_days.apply(
+                lambda r: f"{r['best_name']}({r['best_code']})<br>{_fmt_pct(r['best_t5'])}", axis=1
+            ),
+            textposition="outside",
+            opacity=0.85,
+        ))
+        # 买入股柱（蓝色）
+        fig_daily.add_trace(go.Bar(
+            name="买入股 T+5",
+            x=traded_days["trade_date"],
+            y=traded_days["bought_t5"],
+            marker_color=_BLUE,
+            text=traded_days.apply(
+                lambda r: f"{r['bought_name']}({r['bought_code']})<br>{_fmt_pct(r['bought_t5'])}", axis=1
+            ),
+            textposition="inside",
+            opacity=0.9,
+        ))
+        # 买中最优的日期打绿色标记
+        optimal_dates = traded_days[traded_days["is_optimal"]]["trade_date"].tolist()
+        if optimal_dates:
+            fig_daily.add_trace(go.Scatter(
+                name="✅ 买中最优",
+                x=optimal_dates,
+                y=[traded_days.loc[traded_days["trade_date"] == d, "best_t5"].values[0] + 0.5
+                   for d in optimal_dates],
+                mode="markers",
+                marker={"symbol": "star", "size": 12, "color": _GREEN},
             ))
-            fig2.update_layout(
-                title="哪个排名的股票最常被错过",
-                xaxis_title="评分排名",
-                yaxis_title="次数",
-            )
-            st.plotly_chart(fig2, use_container_width=True)
+        fig_daily.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.4)
+        fig_daily.update_layout(
+            barmode="group",
+            title="每日最优股 vs 实际买入股 T+5 收益对比",
+            xaxis_title="龙虎榜日期",
+            yaxis_title="T+5 涨跌幅 %",
+            xaxis_tickangle=-30,
+            height=450,
+        )
+        st.plotly_chart(fig_daily, use_container_width=True)
 
-            if 1 in rank_dist.index:
-                st.warning(f"⚠️ 有 {rank_dist[1]} 次：评分第1却未买入的股票后来涨超{threshold}%，需检查选股逻辑")
+    # ── 最优股评分分布（反映评分体系准确率）──────────────────────────────────
+    if not traded_days.empty and "best_signal_rank" in traded_days.columns:
+        rank_data = traded_days["best_signal_rank"].dropna()
+        if not rank_data.empty:
+            st.subheader("最优股在我们评分中的排名分布")
+            rank_counts = rank_data.astype(int).value_counts().sort_index()
+            hit_pct = (rank_counts.get(1, 0) / len(rank_data) * 100)
+            st.caption(f"评分第1名命中最优股的概率：**{hit_pct:.0f}%**（越高说明评分体系越准确）")
+
+            fig_rank = go.Figure(go.Bar(
+                x=[f"评分第{r}名" for r in rank_counts.index],
+                y=rank_counts.values,
+                marker_color=[_GREEN if r == 1 else _GOLD if r == 2 else _GRAY for r in rank_counts.index],
+                text=rank_counts.values,
+                textposition="outside",
+            ))
+            fig_rank.update_layout(
+                title="最优股出现在哪个评分排名？（命中率分析）",
+                yaxis_title="次数",
+                height=350,
+            )
+            st.plotly_chart(fig_rank, use_container_width=True)
+
+    # ── 明细表 ─────────────────────────────────────────────────────────────────
+    st.subheader("每日详情")
+    disp = daily_df[[
+        "trade_date", "lhb_count",
+        "best_code", "best_name", "best_t5",
+        "bought_code", "bought_name", "bought_t5",
+        "missed_gap", "is_optimal",
+    ]].rename(columns={
+        "trade_date":  "日期",
+        "lhb_count":   "龙虎榜股数",
+        "best_code":   "最优股代码",
+        "best_name":   "最优股名称",
+        "best_t5":     "最优T+5%",
+        "bought_code": "买入代码",
+        "bought_name": "买入名称",
+        "bought_t5":   "买入T+5%",
+        "missed_gap":  "错失差距%",
+        "is_optimal":  "买中最优",
+    })
+    disp = disp.sort_values("日期", ascending=False)
+
+    def _highlight(row):
+        if row.get("买中最优"):
+            return ["background-color: #0d2e14"] * len(row)
+        if pd.notna(row.get("错失差距%")) and row["错失差距%"] > 5:
+            return ["background-color: #2e0d0d"] * len(row)
+        return [""] * len(row)
+
+    st.dataframe(disp.style.apply(_highlight, axis=1), use_container_width=True, hide_index=True)
+
+
+def _analyze_missed_opportunities(start_str: str, end_str: str) -> dict | None:
+    """
+    基于 lhb_top10 计算每天最优股 vs 实际买入股的差距。
+    返回 {daily_df, summary} 或 None
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+
+        # 取指定日期范围内所有有 T+5 数据的龙虎榜记录
+        sql = text("""
+            SELECT
+                lhb.trade_date,
+                lhb."代码"     AS code,
+                lhb."名称"     AS name,
+                lhb."上榜后5日" AS t5_ret,
+                t.code         AS trade_code,
+                t.name         AS trade_name,
+                t.profit_pct,
+                t.sell_type
+            FROM lhb_top10 lhb
+            LEFT JOIN sim_trades t
+                ON t.trade_date = lhb.trade_date
+               AND t."code" = lhb."代码"
+            WHERE lhb.trade_date BETWEEN :s AND :e
+              AND lhb."上榜后5日" IS NOT NULL
+            ORDER BY lhb.trade_date, lhb."上榜后5日" DESC
+        """)
+        df = pd.read_sql(sql, engine, params={"s": start_str, "e": end_str})
+        if df.empty:
+            return None
+
+        # 同时获取每天的买入情况（sim_trades）
+        trades_sql = text("""
+            SELECT trade_date, code, name,
+                   (SELECT lhb2."上榜后5日"
+                    FROM lhb_top10 lhb2
+                    WHERE lhb2.trade_date = t.trade_date
+                      AND lhb2."代码" = t.code
+                    LIMIT 1) AS t5_ret
+            FROM sim_trades t
+            WHERE trade_date BETWEEN :s AND :e
+        """)
+        trades_df = pd.read_sql(trades_sql, engine, params={"s": start_str, "e": end_str})
+
+        # 也获取每天买入股的评分排名（来自 sim_selection_log）
+        rank_sql = text("""
+            SELECT trade_date, code,
+                   rank AS signal_rank
+            FROM sim_selection_log
+            WHERE trade_date BETWEEN :s AND :e
+        """)
+        rank_df = pd.read_sql(rank_sql, engine, params={"s": start_str, "e": end_str})
+
+        # 按天计算：最优股 + 买入股
+        daily_rows = []
+        for trade_date, day_group in df.groupby("trade_date"):
+            # 最优股（T+5 最高）
+            best_row = day_group.iloc[0]  # 已经按 T+5 desc 排序
+
+            # 买入股
+            bought = trades_df[trades_df["trade_date"] == trade_date]
+            bought_code  = None
+            bought_name  = None
+            bought_t5    = None
+            if not bought.empty:
+                b = bought.iloc[0]
+                bought_code = b["code"]
+                bought_name = b["name"]
+                bought_t5   = b.get("t5_ret")
+
+            # 买入股在评分中的排名
+            best_signal_rank = None
+            if rank_df is not None and not rank_df.empty:
+                best_rank_row = rank_df[
+                    (rank_df["trade_date"] == trade_date) &
+                    (rank_df["code"] == best_row["code"])
+                ]
+                if not best_rank_row.empty:
+                    best_signal_rank = int(best_rank_row.iloc[0]["signal_rank"])
+
+            is_optimal = (bought_code == best_row["code"]) if bought_code else False
+            missed_gap = (float(best_row["t5_ret"]) - float(bought_t5)) if (
+                pd.notna(best_row["t5_ret"]) and pd.notna(bought_t5)
+            ) else None
+
+            daily_rows.append({
+                "trade_date":       trade_date,
+                "lhb_count":        len(day_group),
+                "best_code":        best_row["code"],
+                "best_name":        best_row["name"],
+                "best_t5":          best_row["t5_ret"],
+                "best_signal_rank": best_signal_rank,
+                "bought_code":      bought_code,
+                "bought_name":      bought_name,
+                "bought_t5":        bought_t5,
+                "is_optimal":       is_optimal,
+                "missed_gap":       round(missed_gap, 2) if missed_gap is not None else None,
+            })
+
+        daily_df = pd.DataFrame(daily_rows)
+        traded_days = daily_df[daily_df["bought_code"].notna()]
+
+        summary = {
+            "total_days":    len(daily_df),
+            "traded_days":   len(traded_days),
+            "optimal_hits":  int(traded_days["is_optimal"].sum()) if not traded_days.empty else 0,
+            "avg_missed":    round(traded_days["missed_gap"].mean(), 2) if not traded_days.empty and traded_days["missed_gap"].notna().any() else None,
+        }
+
+        return {"daily_df": daily_df, "summary": summary}
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"_analyze_missed_opportunities 失败: {e}")
+        return None
 
 
 # ── 主渲染入口 ────────────────────────────────────────────────────────────────
