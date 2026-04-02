@@ -282,7 +282,80 @@ def format_weekly_report(week_tag: str | None = None) -> str:
                     f" 挂牌={t.get('list_price', '—')} [持仓中]"
                 )
 
+    # 追加「本周选股复盘」区块
+    review_block = _format_weekly_review_block(week_tag)
+    if review_block:
+        lines.append("")
+        lines.append(review_block)
+
     return "\n".join(lines)
+
+
+def _format_weekly_review_block(week_tag: str) -> str:
+    """
+    生成飞书周报「本周选股复盘」区块文字。
+    包含：错失机会、卖出决策验证。
+    """
+    try:
+        from datetime import datetime, timedelta
+        import re
+
+        # 解析 week_tag 为日期范围（如 '2026-W13' → 周一~周五）
+        match = re.match(r"(\d{4})-W(\d{1,2})", week_tag)
+        if not match:
+            return ""
+        year, week = int(match.group(1)), int(match.group(2))
+        monday = datetime.strptime(f"{year}-W{week:02d}-1", "%Y-W%W-%w")
+        friday = monday + timedelta(days=4)
+        start_str = monday.strftime("%Y%m%d")
+        end_str   = friday.strftime("%Y%m%d")
+
+        from modules.comparison_analyzer import build_weekly_review_summary
+        review = build_weekly_review_summary(start_str, end_str)
+
+        if not review:
+            return ""
+
+        lines = ["**【本周选股复盘】**"]
+
+        # 错失机会
+        missed_count = review.get("missed_count", 0)
+        top_missed   = review.get("top_missed", [])
+        if missed_count > 0:
+            lines.append(f"  📌 错失机会（未买入但T+5>{5}%）: 共 {missed_count} 次")
+            for i, m in enumerate(top_missed[:3], 1):
+                t5 = m.get("T+5收益%")
+                code = m.get("代码", "")
+                name = m.get("名称", "")
+                rank = m.get("评分排名", "?")
+                reason = m.get("未选主因", "")[:30]
+                lines.append(
+                    f"  {i}. {name}({code}) +{t5:.1f}%（评分第{rank}名）"
+                    + (f" — {reason}" if reason else "")
+                )
+        else:
+            lines.append("  ✅ 本周无明显错失机会（评分体系与收益一致性良好）")
+
+        # 卖出决策验证
+        sell_stats = review.get("sell_decision_stats", {})
+        sl_total   = sell_stats.get("stop_loss_total", 0)
+        sl_correct = sell_stats.get("stop_loss_correct", 0)
+        tp_total   = sell_stats.get("take_profit_total", 0)
+        sold_early = sell_stats.get("sold_early_count", 0)
+
+        if sl_total > 0:
+            lines.append(f"  🛡️ 止损验证: {sl_total} 笔中 {sl_correct} 笔正确（止损后继续跌）")
+        if tp_total > 0 and sold_early > 0:
+            lines.append(f"  ⚠️ 卖出过早: {sold_early}/{tp_total} 笔（T+5还涨>3%）")
+        elif tp_total > 0:
+            lines.append(f"  ✅ 止盈决策: {tp_total} 笔均属合理")
+
+        return "\n".join(lines)
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).debug(f"_format_weekly_review_block 非致命: {e}")
+        return ""
 
 
 # ── 4. 持仓报告 ────────────────────────────────────────────────────────

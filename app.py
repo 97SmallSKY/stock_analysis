@@ -26,6 +26,7 @@ _PAGE_SLUG_MAP = {
     "backtest":          "🔬 策略回测",
     "backtest_analysis": "📉 回测分析",
     "data_manager":      "⚙️ 数据管理",
+    "trade_comparison":  "📊 选股决策复盘",
 }
 
 _PAGE_LIST = [
@@ -40,6 +41,7 @@ _PAGE_LIST = [
     "🔬 策略回测",
     "📉 回测分析",
     "⚙️ 数据管理",
+    "📊 选股决策复盘",
 ]
 
 # 从 URL 参数或 session_state 决定默认落地页
@@ -110,4 +112,7 @@ elif page == "📉 回测分析":
     render()
 elif page == "⚙️ 数据管理":
     from pages.data_manager import render
+    render()
+elif page == "📊 选股决策复盘":
+    from pages.trade_comparison import render
     render()

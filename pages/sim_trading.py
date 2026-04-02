@@ -211,6 +211,76 @@ def _source_label(src: str) -> str:
     return mapping.get(str(src) if src else "", src or "—")
 
 
+# ─── 同天竞品实时对比组件 ────────────────────────────────────────────────
+
+def _render_same_day_competitor_widget(open_df: "pd.DataFrame") -> None:
+    """
+    在持仓列表下方显示「同天竞品」实时对比组件。
+    展示当前持仓股 vs 同天未选股票的今日涨幅对比。
+    若未选股票涨幅领先持仓股 >3%，橙色高亮提示。
+    """
+    try:
+        from modules.comparison_analyzer import build_comparison_table
+
+        with st.expander("🔍 同天候选股对比（当前持仓 vs 同天未买入股票）", expanded=False):
+            any_data = False
+            for _, pos_row in open_df.iterrows():
+                trade_date = str(pos_row.get("trade_date", ""))
+                held_code  = str(pos_row.get("code", ""))
+                held_name  = str(pos_row.get("name", ""))
+                if not trade_date:
+                    continue
+
+                cache_key = f"sim_competitor_{trade_date}"
+                if cache_key not in st.session_state:
+                    table = build_comparison_table(trade_date)
+                    st.session_state[cache_key] = table
+                else:
+                    table = st.session_state[cache_key]
+
+                if table.empty:
+                    continue
+
+                any_data = True
+                st.markdown(f"**{trade_date} — 持仓股: {held_name}({held_code})**")
+
+                # 获取已持仓股的 T+5 收益
+                held_row = table[table["代码"] == held_code]
+                held_t5  = float(held_row.iloc[0]["T+5收益%"]) if not held_row.empty and pd.notna(held_row.iloc[0].get("T+5收益%")) else None
+
+                others = table[table["代码"] != held_code].copy()
+                if others.empty:
+                    st.caption("无其他候选股数据")
+                    continue
+
+                display_cols = [c for c in ["代码", "名称", "评分", "T+1收益%", "T+5收益%", "未选主因"] if c in others.columns]
+                others_display = others[display_cols].copy()
+
+                # 检查是否有候选股 T+5 收益明显领先（>3%）
+                if held_t5 is not None and "T+5收益%" in others_display.columns:
+                    leading = others_display[
+                        others_display["T+5收益%"].fillna(-999) > held_t5 + 3
+                    ]
+                    if not leading.empty:
+                        st.warning(
+                            f"⚠️ {len(leading)} 只同天候选股 T+5 收益领先持仓股 >3%："
+                            f" {', '.join(leading['代码'].tolist())}"
+                        )
+
+                st.dataframe(others_display, use_container_width=True, hide_index=True)
+                st.caption(f"持仓股 {held_code} T+5收益: {held_t5:+.2f}%" if held_t5 is not None else f"持仓股 {held_code} T+5收益: 尚未填充")
+
+            if not any_data:
+                st.info("暂无同天候选对比数据（等待 daily_update step10 填充 T+5 收益）")
+                if st.button("快速跳转到「选股决策复盘」页面"):
+                    st.switch_page("pages/trade_comparison.py")
+
+    except Exception as e:
+        # 不阻断主页面渲染
+        import logging
+        logging.getLogger(__name__).debug(f"_render_same_day_competitor_widget 非致命: {e}")
+
+
 # ─── 主渲染函数 ──────────────────────────────────────────────────────────
 
 def render():
@@ -681,6 +751,10 @@ def render():
         # 持仓中的提示
         if not open_.empty:
             st.info(f"📌 当前持仓中 {len(open_)} 笔，买入价等待 T+1 开盘后 09:35 自动回填。")
+
+        # ── 同天竞品实时对比 ─────────────────────────────────────────────
+        if not open_.empty:
+            _render_same_day_competitor_widget(open_)
 
         # ── 交易流水视图（切换Tab）──────────────────────────────────────
         st.divider()

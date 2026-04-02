@@ -483,6 +483,34 @@ def step8_fill_volume_ratio():
 # ============================================================
 # 主入口
 # ============================================================
+def step9_post_close_tracking():
+    """
+    Step 9: 批量补全平仓后 T+N 价格跟踪（sim_post_tracking）
+    针对所有 status='closed' 但跟踪记录不足5个节点的交易。
+    """
+    logger.info("=== Step 9: 平仓后跟踪数据补全（sim_post_tracking）===")
+    try:
+        from modules.post_close_tracker import batch_track_pending
+        n = batch_track_pending()
+        logger.info(f"Step 9 完成：处理 {n} 笔交易的平仓后跟踪")
+    except Exception as e:
+        logger.error(f"Step 9 失败: {e}")
+
+
+def step10_fill_candidate_returns():
+    """
+    Step 10: 批量补全候选股 T+N 实际收益（sim_candidate_results）
+    针对 sim_selection_log 中还未填充 T+5 收益的日期。
+    """
+    logger.info("=== Step 10: 候选股 T+N 收益填充（sim_candidate_results）===")
+    try:
+        from modules.post_close_tracker import batch_fill_candidate_returns
+        n = batch_fill_candidate_returns()
+        logger.info(f"Step 10 完成：处理 {n} 个日期的候选股收益")
+    except Exception as e:
+        logger.error(f"Step 10 失败: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sentiment-only", action="store_true",
@@ -504,7 +532,7 @@ def main():
     if args.steps:
         want = set(args.steps.split(","))
     else:
-        want = {"1", "2", "3", "4", "5", "6", "7", "8"}
+        want = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "10"}
 
     step_map = {
         "1": step1_fetch_top10,
@@ -515,8 +543,10 @@ def main():
         "6": step6_fetch_ggtj,
         "7": step7_fetch_seat_detail,
         "8": step8_fill_volume_ratio,
+        "9": step9_post_close_tracking,
+        "10": step10_fill_candidate_returns,
     }
-    for k in sorted(want):
+    for k in sorted(want, key=lambda x: int(x)):
         fn = step_map.get(k)
         if fn:
             fn()

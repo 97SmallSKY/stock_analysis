@@ -356,6 +356,13 @@ def close_trade(
             except Exception as _e:
                 logger.debug(f"auto_log_if_loss 非致命: {_e}")
 
+        # 异步拉取持股期间新闻事件（不阻塞主流程）
+        try:
+            from modules.news_fetcher import fetch_and_classify_for_trade
+            fetch_and_classify_for_trade(trade_id)
+        except Exception as _e:
+            logger.debug(f"fetch_and_classify_for_trade 非致命: {_e}")
+
     except Exception as e:
         logger.error(f"close_trade 失败: {e}")
 
@@ -1103,6 +1110,60 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_type  ON sim_audit_log(event_type);
 CREATE INDEX IF NOT EXISTS idx_audit_log_time  ON sim_audit_log(event_time DESC);
 """
 
+_CREATE_SIM_CANDIDATE_RESULTS = """
+CREATE TABLE IF NOT EXISTS sim_candidate_results (
+    id              SERIAL PRIMARY KEY,
+    selection_id    INT NOT NULL,              -- FK → sim_selection_log.id
+    trade_date      VARCHAR(8),               -- T 日（冗余，便于按日期查询）
+    code            VARCHAR(6),
+    t1_ret          FLOAT,                    -- T+1 收益%（相对 T 日收盘）
+    t3_ret          FLOAT,                    -- T+3 收益%
+    t5_ret          FLOAT,                    -- T+5 收益%
+    t10_ret         FLOAT,                    -- T+10 收益%
+    t1_close        FLOAT,                    -- T+1 收盘价
+    t5_close        FLOAT,                    -- T+5 收盘价
+    fetched_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(selection_id)              -- 幂等保护：同一 selection_id 只写一次
+);
+CREATE INDEX IF NOT EXISTS idx_cand_results_date ON sim_candidate_results(trade_date);
+CREATE INDEX IF NOT EXISTS idx_cand_results_sel  ON sim_candidate_results(selection_id);
+"""
+
+_CREATE_SIM_POST_TRACKING = """
+CREATE TABLE IF NOT EXISTS sim_post_tracking (
+    id           SERIAL PRIMARY KEY,
+    trade_id     INT NOT NULL,                -- FK → sim_trades.id
+    track_day    INT NOT NULL,               -- N: 1/3/5/10/15（平仓后第N个交易日）
+    track_date   VARCHAR(8),                -- 实际交易日期（跳过非交易日）
+    close        FLOAT,
+    high         FLOAT,
+    low          FLOAT,
+    volume_ratio FLOAT,                     -- 成交量/5日均量
+    pct_vs_sell  FLOAT,                     -- 相对卖出价涨跌幅 %
+    pct_vs_buy   FLOAT,                     -- 相对买入价涨跌幅 %
+    index_pct    FLOAT,                     -- 上证指数当日涨跌幅 %
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(trade_id, track_day)
+);
+CREATE INDEX IF NOT EXISTS idx_post_track_trade ON sim_post_tracking(trade_id);
+"""
+
+_CREATE_SIM_NEWS_EVENTS = """
+CREATE TABLE IF NOT EXISTS sim_news_events (
+    id          SERIAL PRIMARY KEY,
+    trade_id    INT NOT NULL,                -- FK → sim_trades.id
+    code        VARCHAR(6),
+    event_date  VARCHAR(8),
+    title       TEXT,
+    url         TEXT,
+    sentiment   VARCHAR(8),                 -- positive / negative / neutral
+    keywords    TEXT,                       -- JSON array，如 ["机构增持", "业绩超预期"]
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_news_trade ON sim_news_events(trade_id);
+CREATE INDEX IF NOT EXISTS idx_news_date  ON sim_news_events(event_date);
+"""
+
 # 审计事件类型常量
 AUDIT_PHASE_A_SELECT    = "phase_a_select"    # Phase A 选股完成
 AUDIT_PHASE_A_SKIP      = "phase_a_skip"      # Phase A 无满足条件股票
@@ -1120,6 +1181,7 @@ AUDIT_FORCE_CLOSE       = "force_close"       # 持仓超期强制平仓
 def create_extended_tables():
     """
     创建扩展表：sim_price_log / sim_selection_log / sim_nl_strategy / sim_audit_log
+                sim_candidate_results / sim_post_tracking / sim_news_events
     幂等操作，可重复调用。
     """
     try:
@@ -1130,7 +1192,22 @@ def create_extended_tables():
             conn.execute(text(_CREATE_SIM_SELECTION_LOG))
             conn.execute(text(_CREATE_SIM_NL_STRATEGY))
             conn.execute(text(_CREATE_SIM_AUDIT_LOG))
-        logger.info("扩展表 sim_price_log / sim_selection_log / sim_nl_strategy / sim_audit_log 已就绪 ✅")
+            conn.execute(text(_CREATE_SIM_CANDIDATE_RESULTS))
+            conn.execute(text(_CREATE_SIM_POST_TRACKING))
+            conn.execute(text(_CREATE_SIM_NEWS_EVENTS))
+            # Bug 1 修复：为已存在的表补加 UNIQUE 约束（幂等）
+            try:
+                conn.execute(text("""
+                    ALTER TABLE sim_candidate_results
+                    ADD CONSTRAINT IF NOT EXISTS uq_cand_sel UNIQUE (selection_id)
+                """))
+            except Exception:
+                pass  # 约束已存在或数据库不支持 IF NOT EXISTS，忽略
+        logger.info(
+            "扩展表已就绪 ✅ "
+            "sim_price_log / sim_selection_log / sim_nl_strategy / sim_audit_log / "
+            "sim_candidate_results / sim_post_tracking / sim_news_events"
+        )
         return True
     except Exception as e:
         logger.error(f"创建扩展表失败: {e}")
@@ -1357,6 +1434,232 @@ def get_selection_log(trade_date: str | None = None, trade_id: int | None = None
         return pd.read_sql(sql, engine, params=params)
     except Exception as e:
         logger.error(f"get_selection_log 失败: {e}")
+        return pd.DataFrame()
+
+
+# ── sim_candidate_results CRUD ────────────────────────────────────────────────
+
+def save_candidate_results(entries: list[dict]) -> bool:
+    """
+    保存候选股 T+N 实际收益（幂等：已存在则跳过）
+
+    每个 entry 需包含:
+        selection_id, trade_date, code,
+        t1_ret, t3_ret, t5_ret, t10_ret, t1_close, t5_close
+    """
+    if not entries:
+        return True
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            for e in entries:
+                conn.execute(text("""
+                    INSERT INTO sim_candidate_results
+                        (selection_id, trade_date, code,
+                         t1_ret, t3_ret, t5_ret, t10_ret, t1_close, t5_close)
+                    VALUES
+                        (:selection_id, :trade_date, :code,
+                         :t1_ret, :t3_ret, :t5_ret, :t10_ret, :t1_close, :t5_close)
+                    ON CONFLICT DO NOTHING
+                """), {
+                    "selection_id": e.get("selection_id"),
+                    "trade_date":   e.get("trade_date"),
+                    "code":         e.get("code"),
+                    "t1_ret":       e.get("t1_ret"),
+                    "t3_ret":       e.get("t3_ret"),
+                    "t5_ret":       e.get("t5_ret"),
+                    "t10_ret":      e.get("t10_ret"),
+                    "t1_close":     e.get("t1_close"),
+                    "t5_close":     e.get("t5_close"),
+                })
+        return True
+    except Exception as e:
+        logger.error(f"save_candidate_results 失败: {e}")
+        return False
+
+
+def get_candidate_results(trade_date: str) -> pd.DataFrame:
+    """
+    查询某天所有候选股的 T+N 收益（JOIN sim_selection_log 以获取评分和排名）
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        sql = text("""
+            SELECT
+                sl.id AS selection_id, sl.trade_date, sl.code, sl.name,
+                sl.rank, sl.signal_score, sl.lianban_count,
+                sl.reason_tech, sl.reason_fund, sl.llm_rank_reason,
+                sl.trade_id,
+                cr.t1_ret, cr.t3_ret, cr.t5_ret, cr.t10_ret,
+                cr.t1_close, cr.t5_close
+            FROM sim_selection_log sl
+            LEFT JOIN sim_candidate_results cr ON cr.selection_id = sl.id
+            WHERE sl.trade_date = :d
+            ORDER BY sl.rank ASC
+        """)
+        return pd.read_sql(sql, engine, params={"d": str(trade_date)})
+    except Exception as e:
+        logger.error(f"get_candidate_results 失败: {e}")
+        return pd.DataFrame()
+
+
+def get_pending_candidate_dates() -> list[str]:
+    """
+    返回 sim_selection_log 中还有候选股未填充 T+5 收益的日期列表
+    用于 daily_update step10 批量补全
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        sql = text("""
+            SELECT DISTINCT sl.trade_date
+            FROM sim_selection_log sl
+            LEFT JOIN sim_candidate_results cr ON cr.selection_id = sl.id
+            WHERE cr.id IS NULL
+              AND sl.trade_date <= TO_CHAR(CURRENT_DATE - INTERVAL '5 days', 'YYYYMMDD')
+            ORDER BY sl.trade_date
+        """)
+        rows = pd.read_sql(sql, engine)
+        return rows["trade_date"].tolist() if not rows.empty else []
+    except Exception as e:
+        logger.error(f"get_pending_candidate_dates 失败: {e}")
+        return []
+
+
+# ── sim_post_tracking CRUD ────────────────────────────────────────────────────
+
+def save_post_tracking(entries: list[dict]) -> bool:
+    """
+    保存平仓后跟踪数据（幂等：UNIQUE(trade_id, track_day)）
+
+    每个 entry 需包含:
+        trade_id, track_day, track_date, close, high, low,
+        volume_ratio, pct_vs_sell, pct_vs_buy, index_pct
+    """
+    if not entries:
+        return True
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            for e in entries:
+                conn.execute(text("""
+                    INSERT INTO sim_post_tracking
+                        (trade_id, track_day, track_date, close, high, low,
+                         volume_ratio, pct_vs_sell, pct_vs_buy, index_pct)
+                    VALUES
+                        (:trade_id, :track_day, :track_date, :close, :high, :low,
+                         :volume_ratio, :pct_vs_sell, :pct_vs_buy, :index_pct)
+                    ON CONFLICT (trade_id, track_day) DO NOTHING
+                """), {
+                    "trade_id":     e.get("trade_id"),
+                    "track_day":    e.get("track_day"),
+                    "track_date":   e.get("track_date"),
+                    "close":        e.get("close"),
+                    "high":         e.get("high"),
+                    "low":          e.get("low"),
+                    "volume_ratio": e.get("volume_ratio"),
+                    "pct_vs_sell":  e.get("pct_vs_sell"),
+                    "pct_vs_buy":   e.get("pct_vs_buy"),
+                    "index_pct":    e.get("index_pct"),
+                })
+        return True
+    except Exception as e:
+        logger.error(f"save_post_tracking 失败: {e}")
+        return False
+
+
+def get_post_tracking(trade_id: int) -> pd.DataFrame:
+    """查询某笔交易的平仓后跟踪数据"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        sql = text(
+            "SELECT * FROM sim_post_tracking WHERE trade_id=:id ORDER BY track_day"
+        )
+        return pd.read_sql(sql, engine, params={"id": int(trade_id)})
+    except Exception as e:
+        logger.error(f"get_post_tracking 失败: {e}")
+        return pd.DataFrame()
+
+
+def get_pending_post_tracking_trades() -> pd.DataFrame:
+    """
+    返回需要继续跟踪的已平仓交易（sim_post_tracking 记录数 < 5）
+    用于 daily_update step9 批量补全
+    """
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        sql = text("""
+            SELECT t.id AS trade_id, t.code, t.name,
+                   t.buy_price, t.sell_price, t.sell_date,
+                   COUNT(pt.id) AS tracked_days
+            FROM sim_trades t
+            LEFT JOIN sim_post_tracking pt ON pt.trade_id = t.id
+            WHERE t.status = 'closed'
+              AND t.sell_date IS NOT NULL
+              AND t.sell_date <= TO_CHAR(CURRENT_DATE - INTERVAL '1 day', 'YYYYMMDD')
+            GROUP BY t.id, t.code, t.name, t.buy_price, t.sell_price, t.sell_date
+            HAVING COUNT(pt.id) < 5
+            ORDER BY t.sell_date DESC
+            LIMIT 100
+        """)
+        return pd.read_sql(sql, engine)
+    except Exception as e:
+        logger.error(f"get_pending_post_tracking_trades 失败: {e}")
+        return pd.DataFrame()
+
+
+# ── sim_news_events CRUD ──────────────────────────────────────────────────────
+
+def save_news_events(entries: list[dict]) -> bool:
+    """
+    保存持股期间新闻事件
+
+    每个 entry 需包含:
+        trade_id, code, event_date, title, url, sentiment, keywords
+    """
+    if not entries:
+        return True
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            for e in entries:
+                conn.execute(text("""
+                    INSERT INTO sim_news_events
+                        (trade_id, code, event_date, title, url, sentiment, keywords)
+                    VALUES
+                        (:trade_id, :code, :event_date, :title, :url, :sentiment, :keywords)
+                """), {
+                    "trade_id":   e.get("trade_id"),
+                    "code":       e.get("code"),
+                    "event_date": e.get("event_date"),
+                    "title":      e.get("title"),
+                    "url":        e.get("url"),
+                    "sentiment":  e.get("sentiment"),
+                    "keywords":   e.get("keywords"),
+                })
+        return True
+    except Exception as e:
+        logger.error(f"save_news_events 失败: {e}")
+        return False
+
+
+def get_news_events(trade_id: int) -> pd.DataFrame:
+    """查询某笔交易持股期间的新闻事件"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        sql = text(
+            "SELECT * FROM sim_news_events WHERE trade_id=:id ORDER BY event_date"
+        )
+        return pd.read_sql(sql, engine, params={"id": int(trade_id)})
+    except Exception as e:
+        logger.error(f"get_news_events 失败: {e}")
         return pd.DataFrame()
 
 
