@@ -217,72 +217,95 @@ def render_tab1():
     if not has_t1:
         st.info(f"⏳ {selected_date} 的 T+N 收益尚未到结算日，将在上榜后1~10个交易日内自动更新")
 
-    # ── 趋势折线图（多股叠加，T+0 作起始锚点）────────────────────────────────
-    st.subheader("上榜后涨跌幅趋势（多股叠加）")
+    # ── 归一化 K 线多股对比图（前1个月 ~ 上榜后~15交易日）─────────────────────
+    st.subheader("近1个月走势对比（以上榜日收盘价归一化）")
+    st.caption("所有股票以上榜当天（T+0）收盘价为基准（=0%），展示前后走势；蓝色粗线 = 本次买入股")
 
-    # T+0 用当天涨跌幅作起点（体现上榜当天表现），之后接 T+1/T+2/T+5/T+10
-    x_points = ["T+0"]
-    col_map  = {"T+0": "涨跌幅"}
-    if has_t1:
-        x_points.append("T+1"); col_map["T+1"] = "上榜后1日"
-    if df["上榜后2日"].notna().any():
-        x_points.append("T+2"); col_map["T+2"] = "上榜后2日"
-    if has_t5:
-        x_points.append("T+5"); col_map["T+5"] = "上榜后5日"
-    if has_t10:
-        x_points.append("T+10"); col_map["T+10"] = "上榜后10日"
+    kline_cache_key = f"tab1_klines_{selected_date}"
+    if refresh or kline_cache_key not in st.session_state:
+        kline_dict = _fetch_lhb_klines(df, selected_date)
+        st.session_state[kline_cache_key] = kline_dict
+    else:
+        kline_dict = st.session_state[kline_cache_key]
 
-    # 只要有 T+0 数据就渲染（T+0=涨跌幅字段始终有值）
-    fig_trend = go.Figure()
-    for _, row in df.iterrows():
-        ys = [row.get(col_map[x]) for x in x_points]
-        is_bought = row["是否买入"]
-        label = f"{row['名称']}({row['代码']})"
-        # 单点时用 markers+text，多点时用 lines+markers
-        mode = "markers+text" if len([y for y in ys if pd.notna(y)]) == 1 else "lines+markers"
-        fig_trend.add_trace(go.Scatter(
-            x=x_points,
-            y=ys,
-            mode=mode,
-            name=label,
-            text=[f"{_fmt_pct(y)}" if pd.notna(y) else "" for y in ys],
-            textposition="top center",
-            textfont={"size": 9, "color": _BLUE if is_bought else None},
-            line={
-                "width": 3 if is_bought else 1.5,
-                "color": _BLUE if is_bought else None,
-                "dash":  "solid" if is_bought else "dot",
-            },
-            marker={"size": 10 if is_bought else 6,
-                    "symbol": "star" if is_bought else "circle"},
-            opacity=1.0 if is_bought else 0.72,
-            hovertemplate=f"<b>{label}</b><br>%{{x}}: %{{y:+.2f}}%<extra></extra>",
-        ))
+    if kline_dict:
+        # T+0 日期格式化为 YYYY-MM-DD（用于 X 轴标注）
+        t0_fmt = f"{selected_date[:4]}-{selected_date[4:6]}-{selected_date[6:]}"
 
-    fig_trend.add_hline(y=0, line_dash="dash", line_color=_GRAY, opacity=0.5)
-    if bought_code:
-        fig_trend.add_annotation(
-            text=f"★ 星形 = 实际买入股 ({bought_code})",
-            xref="paper", yref="paper",
-            x=0.01, y=1.06, showarrow=False,
-            font={"color": _BLUE, "size": 11},
+        fig_kline = go.Figure()
+        for _, row in df.iterrows():
+            code_str  = str(row["代码"])
+            name_str  = str(row["名称"])
+            is_bought = bool(row["是否买入"])
+            kl = kline_dict.get(code_str)
+            if kl is None or kl.empty or "收盘" not in kl.columns:
+                continue
+
+            # 找到 T+0 当天的收盘价作为基准
+            t0_rows = kl[kl["日期"] == selected_date]
+            if t0_rows.empty:
+                # T+0 停牌，取最近一个交易日
+                before = kl[kl["日期"] <= selected_date]
+                if before.empty:
+                    continue
+                base_price = float(before.iloc[-1]["收盘"])
+            else:
+                base_price = float(t0_rows.iloc[0]["收盘"])
+
+            if base_price <= 0:
+                continue
+
+            # 归一化：相对 T+0 收盘价的涨跌幅 %
+            kl = kl.copy()
+            kl["归一化%"] = (kl["收盘"] / base_price - 1) * 100
+            # X 轴：YYYY-MM-DD 格式
+            kl["date_fmt"] = kl["日期"].apply(
+                lambda d: f"{str(d)[:4]}-{str(d)[4:6]}-{str(d)[6:]}" if len(str(d)) == 8 else str(d)
+            )
+
+            label = f"{name_str}({code_str})"
+            fig_kline.add_trace(go.Scatter(
+                x=kl["date_fmt"],
+                y=kl["归一化%"],
+                mode="lines",
+                name=label,
+                line={
+                    "width": 3   if is_bought else 1.2,
+                    "color": _BLUE if is_bought else None,
+                    "dash":  "solid" if is_bought else "solid",
+                },
+                opacity=1.0 if is_bought else 0.55,
+                hovertemplate=f"<b>{label}</b><br>%{{x}}<br>相对T+0: %{{y:+.2f}}%<extra></extra>",
+            ))
+
+        # T+0 竖线标注
+        fig_kline.add_vline(
+            x=t0_fmt,
+            line_dash="dash", line_color=_GOLD, line_width=2,
+            annotation_text="上榜日",
+            annotation_position="top right",
+            annotation_font_color=_GOLD,
         )
-    if not has_t5:
-        fig_trend.add_annotation(
-            text="⏳ T+5/T+10 待结算",
-            xref="paper", yref="paper",
-            x=0.99, y=1.06, showarrow=False,
-            font={"color": _GRAY, "size": 10},
+        fig_kline.add_hline(y=0, line_dash="dot", line_color=_GRAY, opacity=0.4)
+
+        legend_note = f"蓝色粗线 = 买入股({bought_code})  |  其余为同天龙虎榜股票" if bought_code else "展示同天龙虎榜所有股票走势"
+        fig_kline.update_layout(
+            title=f"{selected_date} 龙虎榜股票近1个月走势（以上榜日收盘价归一化）",
+            xaxis_title="日期",
+            yaxis_title="相对上榜日收盘价涨跌幅 %",
+            legend={"orientation": "v", "x": 1.01, "y": 1},
+            hovermode="x unified",
+            height=580,
+            annotations=[dict(
+                text=legend_note,
+                xref="paper", yref="paper",
+                x=0.01, y=1.04, showarrow=False,
+                font={"size": 11, "color": _BLUE if bought_code else _GRAY},
+            )],
         )
-    fig_trend.update_layout(
-        title=f"{selected_date} 龙虎榜股票上榜后涨跌幅走势",
-        xaxis_title="上榜后第N个交易日",
-        yaxis_title="涨跌幅 %",
-        legend={"orientation": "v", "x": 1.01, "y": 1},
-        hovermode="x unified",
-        height=500,
-    )
-    st.plotly_chart(fig_trend, use_container_width=True)
+        st.plotly_chart(fig_kline, use_container_width=True)
+    else:
+        st.warning("K 线数据获取失败，请检查网络或稍后刷新")
 
     # ── 横向对比柱状图（优先 T+5，降级用 T+1）────────────────────────────────
     bar_col    = "上榜后5日" if has_t5 else ("上榜后1日" if has_t1 else None)
@@ -358,6 +381,44 @@ def render_tab1():
         use_container_width=True,
         hide_index=True,
     )
+
+
+# ── 辅助：批量拉取龙虎榜 K 线 ─────────────────────────────────────────────────
+
+def _fetch_lhb_klines(df: "pd.DataFrame", trade_date: str) -> dict:
+    """
+    批量拉取龙虎榜 df 中所有股票的历史 K 线。
+    范围：trade_date 前 35 个自然日 起，覆盖到 trade_date 后约 20 个交易日。
+    返回 {code: kline_df}，kline_df 包含 日期(YYYYMMDD)/收盘 列。
+    失败的股票跳过（不阻塞其他股票）。
+    """
+    from datetime import timedelta
+    from modules.market_data import get_kline_raw
+
+    try:
+        start_dt = (pd.Timestamp(trade_date) - timedelta(days=35)).strftime("%Y%m%d")
+    except Exception:
+        start_dt = trade_date
+
+    codes = df["代码"].astype(str).tolist()
+    total = len(codes)
+
+    progress_bar = st.progress(0, text=f"拉取 K 线数据（共 {total} 只）...")
+    result = {}
+
+    for i, code in enumerate(codes):
+        try:
+            kl = get_kline_raw(code, start_dt, days=80)
+            if kl is not None and not kl.empty:
+                kl = kl.copy()
+                kl["日期"] = kl["日期"].astype(str).str.replace("-", "").str[:8]
+                result[code] = kl
+        except Exception:
+            pass
+        progress_bar.progress((i + 1) / total, text=f"已拉取 {i+1}/{total}：{code}")
+
+    progress_bar.empty()
+    return result
 
 
 # ── Tab2：单次交易深度复盘（K 线蜡烛图）─────────────────────────────────────
