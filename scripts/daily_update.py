@@ -534,12 +534,14 @@ def step11_refresh_lhb_returns():
     logger.info("=== Step 11: 刷新 lhb_top10 上榜后N日收益 ===")
     try:
         from sqlalchemy import text
-        from utils.storage import storage as _storage
+        from config.settings import STORAGE_MODE
 
-        engine = _storage._engine  # type: ignore[attr-defined]
-        if engine is None:
+        if STORAGE_MODE != "postgres":
             logger.warning("Step 11 仅支持 PostgreSQL 模式，跳过")
             return
+
+        from skills.stock_sim_robot.sim_trade_db import _get_engine
+        engine = _get_engine()
 
         # 找出近30天内上榜后1日为空的日期
         cutoff = (TODAY - timedelta(days=1)).strftime("%Y%m%d")
