@@ -6,6 +6,14 @@
 
 ---
 
+## For Agents
+
+If you are an AI agent working on this codebase, **read `AGENTS.md` first**.
+
+It contains environment setup, common commands, key module entry points, prohibited actions, coding conventions, and the four-step development workflow. Detailed business rules and working principles are in `skill/总控 Prompt.md`.
+
+---
+
 ## 功能模块
 
 | 页面 | 说明 |
@@ -145,9 +153,16 @@ cd ~/stock_analysis
 
 ## 更新日志
 
-### v2.4（2026-04-01）— 性能优化方案文档同步（文档先行）
+### v2.5（2026-04-02）— AGENTS.md 结构化，agent 友好
+
+- **新建** `AGENTS.md` — 标准 OpenAI AGENTS.md 规范，覆盖环境配置、常用命令、关键模块入口、禁止项、编码约定、Cron 清单
+- **更新** `README.md` — 顶部新增 "For Agents" 章节，指向 `AGENTS.md`
+
+### v2.4（2026-04-01）— 4档分级降速熔断 + 性能优化方案文档同步
 
 > 本版本先完成文档对齐（README + docs），代码改造将在后续 Phase 5 实施并回填验证数据。
+
+- **落地** 4档分级降速熔断，替代原二元停车逻辑（`sim_trade_db.check_circuit_breaker()`）：正常/谨慎/警戒/危机四档，基于 AHS 区间连续调节仓位系数和入场门槛
 
 - **新增** 性能瓶颈总览：回测慢、监控慢、页面慢、存储层慢四类问题
 - **新增** 优先级路线图：P0（立刻见效）/ P1（结构优化）/ P2（中长期）
