@@ -279,6 +279,28 @@ def render_tab1():
             ))
 
         legend_note = f"蓝色粗线 = 买入股({bought_code})  |  其余为同天龙虎榜股票" if bought_code else "展示同天龙虎榜所有股票走势"
+
+        # T+0 竖线：用 Scatter 模拟，完全绕开 Plotly shapes 跨轴处理（字符串 x 报 TypeError）
+        # 计算所有股票 y 范围来确定竖线高度
+        all_y = []
+        for trace in fig_kline.data:
+            if hasattr(trace, "y") and trace.y is not None:
+                all_y.extend([v for v in trace.y if v is not None and str(v) != "nan"])
+        y_min = min(all_y) * 1.1 if all_y else -15
+        y_max = max(all_y) * 1.1 if all_y else 30
+        fig_kline.add_trace(go.Scatter(
+            x=[t0_fmt, t0_fmt],
+            y=[y_min, y_max],
+            mode="lines+text",
+            line=dict(color=_GOLD, width=2, dash="dash"),
+            text=["", "上榜日"],
+            textposition="top center",
+            textfont=dict(color=_GOLD, size=12),
+            name="上榜日",
+            showlegend=False,
+            hoverinfo="skip",
+        ))
+
         fig_kline.update_layout(
             title=f"{selected_date} 龙虎榜股票近1个月走势（以上榜日收盘价归一化）",
             xaxis_title="日期",
@@ -286,40 +308,12 @@ def render_tab1():
             legend={"orientation": "v", "x": 1.01, "y": 1},
             hovermode="x unified",
             height=580,
-            # T+0 竖线 + 基准线直接写进 shapes，避免 add_shape/add_vline 对字符串 x 触发跨轴计算
-            shapes=[
-                dict(
-                    type="line",
-                    x0=t0_fmt, x1=t0_fmt,
-                    y0=0,      y1=1,
-                    xref="x",  yref="paper",
-                    line=dict(color=_GOLD, width=2, dash="dash"),
-                ),
-                dict(
-                    type="line",
-                    x0=0,    x1=1,
-                    y0=0,    y1=0,
-                    xref="paper", yref="y",
-                    line=dict(color=_GRAY, width=1, dash="dot"),
-                    opacity=0.4,
-                ),
-            ],
-            annotations=[
-                dict(
-                    text="上榜日",
-                    x=t0_fmt, y=0.97,
-                    xref="x", yref="paper",
-                    showarrow=False,
-                    font=dict(color=_GOLD, size=12),
-                    xanchor="left",
-                ),
-                dict(
-                    text=legend_note,
-                    xref="paper", yref="paper",
-                    x=0.01, y=1.04, showarrow=False,
-                    font={"size": 11, "color": _BLUE if bought_code else _GRAY},
-                ),
-            ],
+            annotations=[dict(
+                text=legend_note,
+                xref="paper", yref="paper",
+                x=0.01, y=1.04, showarrow=False,
+                font={"size": 11, "color": _BLUE if bought_code else _GRAY},
+            )],
         )
         st.plotly_chart(fig_kline, use_container_width=True)
     else:
