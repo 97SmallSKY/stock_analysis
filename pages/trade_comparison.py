@@ -303,7 +303,8 @@ def render_tab1():
             st.plotly_chart(fig_scatter, use_container_width=True)
 
     # ── 最优涨幅横向柱状图 ──────────────────────────────────────────────────────
-    bar_col   = "最优涨幅" if has_best else ("上榜后1日" if df["上榜后1日"].notna().any() if "上榜后1日" in df.columns else False else None)
+    _has_t1 = "上榜后1日" in df.columns and df["上榜后1日"].notna().any()
+    bar_col   = "最优涨幅" if has_best else ("上榜后1日" if _has_t1 else None)
     bar_label = "最优涨幅" if has_best else "T+1"
 
     if bar_col and bar_col in df.columns:
