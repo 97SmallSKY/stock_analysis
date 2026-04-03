@@ -2300,6 +2300,42 @@ _MODE_CONFIG: dict[str, dict] = {
 }
 
 _CONFIG_KEY_MODE = "trading_mode"
+_CONFIG_KEY_CB_OVERRIDE = "cb_manual_override"
+
+
+def get_cb_override() -> bool:
+    """从 sim_config 读取人工覆盖熔断开关（重启后持久有效）。"""
+    try:
+        from sqlalchemy import text as _text
+        engine = _get_engine()
+        row = pd.read_sql(
+            _text("SELECT config_value FROM sim_config WHERE config_key=:k"),
+            engine, params={"k": _CONFIG_KEY_CB_OVERRIDE}
+        )
+        if not row.empty:
+            return str(row.iloc[0]["config_value"]).strip() == "1"
+    except Exception as e:
+        logger.debug(f"get_cb_override 读取失败: {e}")
+    return False
+
+
+def set_cb_override(active: bool) -> bool:
+    """持久化写入人工覆盖状态到 sim_config（重启后仍然有效）。"""
+    try:
+        from sqlalchemy import text as _text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(_text("""
+                INSERT INTO sim_config (config_key, config_value, updated_at)
+                VALUES (:k, :v, NOW())
+                ON CONFLICT (config_key)
+                DO UPDATE SET config_value=EXCLUDED.config_value, updated_at=NOW()
+            """), {"k": _CONFIG_KEY_CB_OVERRIDE, "v": "1" if active else "0"})
+        logger.info(f"✅ 熔断人工覆盖已{'开启' if active else '关闭'}")
+        return True
+    except Exception as e:
+        logger.error(f"set_cb_override 写入失败: {e}")
+        return False
 
 
 def get_trading_mode() -> str:
@@ -2455,9 +2491,9 @@ def check_circuit_breaker(stats: dict | None = None) -> dict:
         }
     """
     import os
-    # 人工覆盖开关
-    if os.getenv("SKIP_CIRCUIT_BREAKER") == "1":
-        logger.warning("⚠️  SKIP_CIRCUIT_BREAKER=1，熔断检查已跳过（人工覆盖）")
+    # 人工覆盖开关（环境变量 OR DB 持久化覆盖）
+    if os.getenv("SKIP_CIRCUIT_BREAKER") == "1" or get_cb_override():
+        logger.warning("⚠️  熔断检查已跳过（人工覆盖）")
         cfg = _MODE_CONFIG["normal"]
         return {
             "allow_open": True, "mode": "normal", "mode_label": cfg["label"],
@@ -2578,8 +2614,118 @@ def check_circuit_breaker(stats: dict | None = None) -> dict:
     }
 
 
+_CREATE_SIM_BATCH_SCORES = """
+CREATE TABLE IF NOT EXISTS sim_batch_scores (
+    trade_date      VARCHAR(8)  NOT NULL,   -- 龙虎榜日期 YYYYMMDD
+    code            VARCHAR(6)  NOT NULL,   -- 股票代码
+    name            VARCHAR(20),            -- 股票名称
+    lhb_rank        INT,                    -- 龙虎榜序号（1-10）
+    score_tech      INT,                    -- 技术面得分
+    score_fund      INT,                    -- 资金面得分
+    score_history   INT,                    -- 历史胜率得分
+    score_total     INT,                    -- 综合评分
+    advice          VARCHAR(20),            -- 操作建议
+    net_buy_strength FLOAT,                 -- 净买入强度%
+    volume_ratio    FLOAT,                  -- 量比
+    gain20          FLOAT,                  -- 近20日涨幅%
+    lianban_count   INT DEFAULT 0,          -- 连板数
+    seat_summary    TEXT,                   -- 席位摘要
+    computed_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (trade_date, code)
+);
+CREATE INDEX IF NOT EXISTS idx_batch_scores_date ON sim_batch_scores(trade_date);
+"""
+
+
+def create_batch_scores_table() -> bool:
+    """创建 sim_batch_scores 表（幂等）"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            conn.execute(text(_CREATE_SIM_BATCH_SCORES))
+        return True
+    except Exception as e:
+        logger.error(f"创建 sim_batch_scores 表失败: {e}")
+        return False
+
+
+def load_batch_scores(trade_date: str) -> "pd.DataFrame":
+    """从 DB 加载指定日期的批量评分缓存，无记录时返回空 DataFrame。"""
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        df = pd.read_sql(
+            text("SELECT * FROM sim_batch_scores WHERE trade_date=:d ORDER BY lhb_rank"),
+            engine, params={"d": trade_date}
+        )
+        return df
+    except Exception as e:
+        logger.debug(f"load_batch_scores({trade_date}) 失败: {e}")
+        return pd.DataFrame()
+
+
+def save_batch_scores(trade_date: str, rows: list[dict]) -> bool:
+    """
+    将批量评分结果写入 DB（UPSERT）。
+
+    Args:
+        trade_date: 龙虎榜日期 YYYYMMDD
+        rows: list of dict，每条包含 code/name/lhb_rank/score_tech/score_fund/
+              score_history/score_total/advice/net_buy_strength/volume_ratio/
+              gain20/lianban_count/seat_summary
+    """
+    if not rows:
+        return False
+    try:
+        from sqlalchemy import text
+        engine = _get_engine()
+        with engine.begin() as conn:
+            for row in rows:
+                conn.execute(text("""
+                    INSERT INTO sim_batch_scores
+                        (trade_date, code, name, lhb_rank, score_tech, score_fund,
+                         score_history, score_total, advice, net_buy_strength,
+                         volume_ratio, gain20, lianban_count, seat_summary, computed_at)
+                    VALUES
+                        (:trade_date, :code, :name, :lhb_rank, :score_tech, :score_fund,
+                         :score_history, :score_total, :advice, :net_buy_strength,
+                         :volume_ratio, :gain20, :lianban_count, :seat_summary, NOW())
+                    ON CONFLICT (trade_date, code)
+                    DO UPDATE SET
+                        name=EXCLUDED.name, lhb_rank=EXCLUDED.lhb_rank,
+                        score_tech=EXCLUDED.score_tech, score_fund=EXCLUDED.score_fund,
+                        score_history=EXCLUDED.score_history, score_total=EXCLUDED.score_total,
+                        advice=EXCLUDED.advice, net_buy_strength=EXCLUDED.net_buy_strength,
+                        volume_ratio=EXCLUDED.volume_ratio, gain20=EXCLUDED.gain20,
+                        lianban_count=EXCLUDED.lianban_count, seat_summary=EXCLUDED.seat_summary,
+                        computed_at=NOW()
+                """), {
+                    "trade_date": trade_date,
+                    "code": row.get("code", ""),
+                    "name": row.get("name", ""),
+                    "lhb_rank": row.get("lhb_rank"),
+                    "score_tech": row.get("score_tech"),
+                    "score_fund": row.get("score_fund"),
+                    "score_history": row.get("score_history"),
+                    "score_total": row.get("score_total"),
+                    "advice": row.get("advice", ""),
+                    "net_buy_strength": row.get("net_buy_strength"),
+                    "volume_ratio": row.get("volume_ratio"),
+                    "gain20": row.get("gain20"),
+                    "lianban_count": row.get("lianban_count", 0),
+                    "seat_summary": row.get("seat_summary", ""),
+                })
+        logger.info(f"✅ save_batch_scores: {trade_date} 写入 {len(rows)} 条")
+        return True
+    except Exception as e:
+        logger.error(f"save_batch_scores({trade_date}) 写入失败: {e}")
+        return False
+
+
 if __name__ == "__main__":
     # 测试：初始化建表
     logging_ok = create_tables()
     create_trade_events_table()
+    create_batch_scores_table()
     print(f"建表结果: {logging_ok}")

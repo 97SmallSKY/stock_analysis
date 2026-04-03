@@ -26,9 +26,11 @@ fi
 mkdir -p "$DIR/logs"
 
 # 自动找到安装了 streamlit 的 Python
-# 优先 .venv，其次 anaconda，最后系统 python3
+# 优先 .venv，其次 miniconda3（服务器），再次 anaconda，最后系统 python3
 if [ -f "$DIR/.venv/bin/python" ] && "$DIR/.venv/bin/python" -c "import streamlit" &>/dev/null; then
     PYTHON="$DIR/.venv/bin/python"
+elif [ -f "/root/miniconda3/bin/python" ] && /root/miniconda3/bin/python -c "import streamlit" &>/dev/null; then
+    PYTHON="/root/miniconda3/bin/python"
 elif [ -f "/opt/homebrew/anaconda3/bin/python" ] && /opt/homebrew/anaconda3/bin/python -c "import streamlit" &>/dev/null; then
     PYTHON="/opt/homebrew/anaconda3/bin/python"
 elif command -v python3 &>/dev/null && python3 -c "import streamlit" &>/dev/null; then

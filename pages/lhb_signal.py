@@ -22,7 +22,7 @@ from utils.storage import storage
 from utils.retry import safe_akshare_call
 from modules.data_fetcher import fetch_lhb_netbuy_by_date
 from config.settings import FAMOUS_TRADERS, STRATEGY_CONFIG
-from modules.scorer import score_tech as _score_tech_shared, score_fund as _score_fund_shared, score_history as _score_history_shared
+from modules.scorer import score_tech as _score_tech_shared, score_fund as _score_fund_shared, score_history as _score_history_shared, _ema
 
 _RED   = "#E84040"
 _GREEN = "#33CC66"
@@ -510,7 +510,9 @@ def render():
     names       = top10["名称"].tolist() if "名称" in top10.columns else codes
     options_list = [f"{r+1}. {n}（{c}）" for r, (n, c) in enumerate(zip(names, codes))]
 
-    batch_mode   = st.checkbox("📊 批量评分所有 Top10（对比视图）", value=False)
+    _bc1, _bc2 = st.columns([3, 2])
+    batch_mode   = _bc1.checkbox("📊 批量评分所有 Top10（对比视图）", value=False)
+    force_recompute = _bc2.checkbox("🔄 强制重新计算（忽略缓存）", value=False) if batch_mode else False
 
     if not batch_mode:
         selected_opt = st.selectbox("选择股票", options=options_list, key="sig_stock_sel")
@@ -520,7 +522,7 @@ def render():
         _render_single(codes[idx], names[idx], sel_date, top10.iloc[idx], mkt, lianban_map)
     else:
         lianban_map = _get_lianban_map(sel_date)
-        _render_batch(codes, names, sel_date, top10, mkt, lianban_map)
+        _render_batch(codes, names, sel_date, top10, mkt, lianban_map, force_recompute=force_recompute)
 
 
 # ============================================================
@@ -1075,60 +1077,108 @@ def _render_op_checklist(name: str, code: str, advice: dict):
 # ============================================================
 
 def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame, mkt: dict,
-                  lianban_map: dict | None = None):
+                  lianban_map: dict | None = None, force_recompute: bool = False):
     st.divider()
     st.subheader("③ Top10 批量评分对比")
 
-    results  = []
-    progress = st.progress(0, text="批量评分中...")
-    for i, (code, name) in enumerate(zip(codes, names)):
-        progress.progress((i + 1) / len(codes), text=f"评分 {name}（{i+1}/{len(codes)}）...")
-        kline    = _get_kline(code, trade_date)
-        fund_flow = _get_fund_flow(code)
-        seat_df  = _get_lhb_seat_detail(code, trade_date)
-        hist     = _get_history_winrate(code)
-        lhb_row  = top10.iloc[i] if i < len(top10) else pd.Series()
+    # ── 尝试从 DB 读取缓存 ────────────────────────────────────────
+    results = []
+    cached_df = pd.DataFrame()
+    if not force_recompute:
+        try:
+            from skills.stock_sim_robot.sim_trade_db import load_batch_scores, create_batch_scores_table
+            create_batch_scores_table()
+            cached_df = load_batch_scores(trade_date)
+        except Exception:
+            pass
 
-        lianban_count = (lianban_map or {}).get(code, 0)
-        t_r = _score_tech(kline, trade_date, lianban_count=lianban_count)
-        f_r = _score_fund(lhb_row, fund_flow, seat_df)
-        h_r = _score_history(hist)
-        tot = t_r["score"] + f_r["score"] + h_r["score"]
-        adv = _gen_advice(tot, t_r, f_r, hist)
-        adv = _apply_market_filter(adv, mkt)
+    if not cached_df.empty:
+        st.caption(f"✅ 已从数据库加载缓存（计算时间：{cached_df['computed_at'].iloc[0]}）"
+                   "  若需重新计算请勾选「强制重算」")
+        for _, row in cached_df.iterrows():
+            _strength_str = f"{row['net_buy_strength']:.2f}%" if row.get("net_buy_strength") is not None and not pd.isna(row.get("net_buy_strength")) else "—"
+            results.append({
+                "排名": row["lhb_rank"],
+                "股票": f"{row['name']}（{row['code']}）",
+                "综合评分": row["score_total"],
+                "技术面":   row["score_tech"],
+                "资金面":   row["score_fund"],
+                "历史胜率": row["score_history"],
+                "净买强度":  _strength_str,
+                "量比":     f"{row['volume_ratio']:.2f}" if row.get("volume_ratio") is not None and not pd.isna(row.get("volume_ratio")) else "—",
+                "近20日涨幅": f"{row['gain20']:+.1f}%" if row.get("gain20") is not None and not pd.isna(row.get("gain20")) else "—",
+                "连板":     f"{int(row['lianban_count'])}板" if row.get("lianban_count") else "—",
+                "席位亮点": row.get("seat_summary") or "—",
+                "操作建议": row.get("advice") or "—",
+            })
+    else:
+        # ── 实时计算 ──────────────────────────────────────────────
+        db_rows = []
+        progress = st.progress(0, text="批量评分中...")
+        for i, (code, name) in enumerate(zip(codes, names)):
+            progress.progress((i + 1) / len(codes), text=f"评分 {name}（{i+1}/{len(codes)}）...")
+            kline    = _get_kline(code, trade_date)
+            fund_flow = _get_fund_flow(code)
+            seat_df  = _get_lhb_seat_detail(code, trade_date)
+            hist     = _get_history_winrate(code)
+            lhb_row  = top10.iloc[i] if i < len(top10) else pd.Series()
 
-        jg_tag = f"机构{f_r['jigou_buy']}席" if f_r.get("jigou_buy") else ""
-        fy_tag = "/".join(f_r.get("famous_buy", []))
-        seat_summary = " | ".join(filter(None, [jg_tag, fy_tag])) or "—"
+            lianban_count = (lianban_map or {}).get(code, 0)
+            t_r = _score_tech(kline, trade_date, lianban_count=lianban_count)
+            f_r = _score_fund(lhb_row, fund_flow, seat_df)
+            h_r = _score_history(hist)
+            tot = t_r["score"] + f_r["score"] + h_r["score"]
+            adv = _gen_advice(tot, t_r, f_r, hist)
+            adv = _apply_market_filter(adv, mkt)
 
-        # 净买入强度：优先从 f_r 取（fetch_signal 已计算），降级从 lhb_row 估算
-        _strength = f_r.get("net_buy_strength_pct")
-        if _strength is None:
-            _net_buy    = lhb_row.get("龙虎榜净买额") or 0
-            _circ_val   = lhb_row.get("流通市值") or lhb_row.get("流通股本") or 0
-            try:
-                _strength = round(float(_net_buy) / float(_circ_val) * 100, 3) if float(_circ_val) > 0 else None
-            except Exception:
-                _strength = None
-        _strength_str = f"{_strength:.2f}%" if _strength is not None else "—"
+            jg_tag = f"机构{f_r['jigou_buy']}席" if f_r.get("jigou_buy") else ""
+            fy_tag = "/".join(f_r.get("famous_buy", []))
+            seat_summary = " | ".join(filter(None, [jg_tag, fy_tag])) or "—"
 
-        results.append({
-            "排名": i + 1,
-            "股票":     f"{name}（{code}）",
-            "综合评分": tot,
-            "技术面":   t_r["score"],
-            "资金面":   f_r["score"],
-            "历史胜率": h_r["score"],
-            "净买强度":  _strength_str,
-            "量比":     f"{t_r.get('volume_ratio'):.2f}" if t_r.get("volume_ratio") is not None else "—",
-            "近20日涨幅": f"{t_r.get('gain20', 0):+.1f}%" if t_r.get("gain20") is not None else "—",
-            "连板":     f"{lianban_count}板" if lianban_count > 0 else "—",
-            "席位亮点": seat_summary,
-            "操作建议": adv["action"],
-        })
-        time.sleep(0.4)
+            _strength = f_r.get("net_buy_strength_pct")
+            if _strength is None:
+                _net_buy  = lhb_row.get("龙虎榜净买额") or 0
+                _circ_val = lhb_row.get("流通市值") or lhb_row.get("流通股本") or 0
+                try:
+                    _strength = round(float(_net_buy) / float(_circ_val) * 100, 3) if float(_circ_val) > 0 else None
+                except Exception:
+                    _strength = None
+            _strength_str = f"{_strength:.2f}%" if _strength is not None else "—"
 
-    progress.empty()
+            results.append({
+                "排名": i + 1,
+                "股票":     f"{name}（{code}）",
+                "综合评分": tot,
+                "技术面":   t_r["score"],
+                "资金面":   f_r["score"],
+                "历史胜率": h_r["score"],
+                "净买强度":  _strength_str,
+                "量比":     f"{t_r.get('volume_ratio'):.2f}" if t_r.get("volume_ratio") is not None else "—",
+                "近20日涨幅": f"{t_r.get('gain20', 0):+.1f}%" if t_r.get("gain20") is not None else "—",
+                "连板":     f"{lianban_count}板" if lianban_count > 0 else "—",
+                "席位亮点": seat_summary,
+                "操作建议": adv["action"],
+            })
+            db_rows.append({
+                "code": code, "name": name, "lhb_rank": i + 1,
+                "score_tech": t_r["score"], "score_fund": f_r["score"],
+                "score_history": h_r["score"], "score_total": tot,
+                "advice": adv["action"], "net_buy_strength": _strength,
+                "volume_ratio": t_r.get("volume_ratio"), "gain20": t_r.get("gain20"),
+                "lianban_count": lianban_count, "seat_summary": seat_summary,
+            })
+            time.sleep(0.4)
+
+        progress.empty()
+
+        # 写入 DB 缓存
+        try:
+            from skills.stock_sim_robot.sim_trade_db import save_batch_scores, create_batch_scores_table
+            create_batch_scores_table()
+            save_batch_scores(trade_date, db_rows)
+            st.caption("✅ 评分已缓存到数据库，下次加载此日期将直接显示（无需重新计算）")
+        except Exception as e:
+            st.caption(f"⚠️ 缓存写入失败（不影响显示）: {e}")
 
     df_res = pd.DataFrame(results).sort_values("综合评分", ascending=False)
 
@@ -1161,3 +1211,29 @@ def _render_batch(codes: list, names: list, trade_date: str, top10: pd.DataFrame
     df_show["综合评分"] = df_show["综合评分"].map(_fmt)
     st.dataframe(df_show, use_container_width=True, hide_index=True)
     st.caption("🔴≥80重点关注  🟡65-79谨慎参与  🟠50-64观望  🟢<50回避")
+
+
+# ============================================================
+# 公开接口：供 trade_comparison.py 调用（复盘页嵌入批量评分）
+# ============================================================
+
+def render_batch_for_comparison(trade_date: str, top10: "pd.DataFrame") -> None:
+    """
+    对指定日期的龙虎榜 Top10 重新运行批量评分，渲染堆积条形图 + 汇总表格。
+
+    Args:
+        trade_date: 龙虎榜日期（YYYYMMDD）
+        top10:      lhb_top10 行情 DataFrame（至少含 代码/名称 列）
+    """
+    import pandas as _pd_local
+
+    # 确保列名存在
+    if top10.empty or "代码" not in top10.columns or "名称" not in top10.columns:
+        st.warning("lhb_top10 数据为空，无法运行批量评分")
+        return
+
+    codes  = top10["代码"].astype(str).tolist()
+    names  = top10["名称"].astype(str).tolist()
+    mkt    = _get_market_sentiment(trade_date)
+    lianban_map = _get_lianban_map(trade_date)
+    _render_batch(codes, names, trade_date, top10, mkt, lianban_map)

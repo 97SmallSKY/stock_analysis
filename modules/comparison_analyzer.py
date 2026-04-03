@@ -41,12 +41,18 @@ def build_comparison_table(trade_date: str) -> pd.DataFrame:
 
     df = df.copy()
 
-    # 评分排名（评分高=排名1）
-    df["评分排名"] = df["signal_score"].rank(ascending=False, method="min").astype(int)
+    # 评分排名（评分高=排名1）—— fillna 避免 NaN 导致 astype(int) 失败
+    df["评分排名"] = (
+        df["signal_score"].rank(ascending=False, method="min")
+        .fillna(0).astype(int)
+    )
 
     # T+5 收益排名（收益高=排名1）
     if "t5_ret" in df.columns and df["t5_ret"].notna().any():
-        df["收益排名T5"] = df["t5_ret"].rank(ascending=False, method="min").astype(int)
+        df["收益排名T5"] = (
+            df["t5_ret"].rank(ascending=False, method="min")
+            .fillna(0).astype(int)
+        )
     else:
         df["收益排名T5"] = None
 

@@ -388,9 +388,18 @@ def render():
     # 判断是否已人工开启 SKIP_CIRCUIT_BREAKER
     import os as _os
     _skip_env = _os.getenv("SKIP_CIRCUIT_BREAKER", "0") == "1"
-    # 也支持 session_state 内的临时覆盖（页面开关）
+    # DB 持久化覆盖（重启后仍有效）
+    try:
+        from skills.stock_sim_robot.sim_trade_db import get_cb_override as _get_cb_override
+        _skip_db = _get_cb_override()
+    except Exception:
+        _skip_db = False
+    # 也支持 session_state 内的临时覆盖（与 DB 状态同步初始化）
+    if "_skip_cb_initialized" not in st.session_state:
+        st.session_state["_skip_cb"] = _skip_db
+        st.session_state["_skip_cb_initialized"] = True
     _skip_session = st.session_state.get("_skip_cb", False)
-    _cb_skipped   = _skip_env or _skip_session
+    _cb_skipped   = _skip_env or _skip_session or _skip_db
     _cb_mode      = _cb.get("mode", "normal")
     _cb_mode_label = _cb.get("mode_label", "🟢 正常")
 
@@ -506,21 +515,33 @@ def render():
         _sw_col1, _sw_col2 = st.columns([3, 2])
         with _sw_col1:
             if _cb_skipped:
-                st.success("✅ 风控已被人工覆盖，Phase A 将以正常模式运行。")
+                st.success("✅ 风控已被人工覆盖，Phase A 将以正常模式运行（重启后仍有效）。")
                 if st.button("🔒 重新启用风控保护", type="secondary"):
+                    try:
+                        from skills.stock_sim_robot.sim_trade_db import set_cb_override as _set_cb_override
+                        _set_cb_override(False)
+                    except Exception:
+                        pass
                     st.session_state["_skip_cb"] = False
-                    _load_health_data.clear()
+                    st.session_state.pop("_skip_cb_initialized", None)
+                    _get_health_data.clear()
                     st.rerun()
             else:
                 st.warning(
                     "⚠️ 以下操作将覆盖当前分级降速模式，允许 Phase A 以正常模式执行。\n\n"
                     "**适用场景：** 你已手动评估风险，确认当前市场适合操作（如大盘超跌后反弹机会）。\n\n"
-                    "**范围：** 仅本次浏览器 Session 有效，关闭页面后自动失效。"
+                    "**范围：** 持久化到数据库，重启服务后仍然有效，需手动点击「重新启用风控」才会恢复。"
                 )
                 if st.button("🔓 手动覆盖风控（按正常模式执行）", type="primary",
                              disabled=(_cb_mode == "normal")):
+                    try:
+                        from skills.stock_sim_robot.sim_trade_db import set_cb_override as _set_cb_override
+                        _set_cb_override(True)
+                    except Exception:
+                        pass
                     st.session_state["_skip_cb"] = True
-                    _load_health_data.clear()
+                    st.session_state.pop("_skip_cb_initialized", None)
+                    _get_health_data.clear()
                     st.rerun()
         with _sw_col2:
             st.caption("**当前模式说明**")
