@@ -52,6 +52,7 @@ tail -f logs/streamlit.log
 tail -f logs/daily_update.log
 tail -f logs/sim_robot.log
 tail -f logs/monitor_intraday.log
+tail -f logs/hourly_fill.log      # 每小时 N日收益刷新日志
 
 # 语法检查（改完代码后必做）
 /root/miniconda3/bin/python -m py_compile <文件路径>
@@ -178,14 +179,25 @@ stock_analysis/
 ├── config/
 │   └── settings.py
 ├── docs/
-│   ├── database.md
-│   ├── architecture_plan.md
-│   ├── 龙虎榜量化策略_改进方案.md          # 完整改进方案（回测/因子/风控/工程5大维度）
-│   ├── 龙虎榜策略_工程化落地方案v2.md      # 工程化落地（API兜底/查询频率/监控/日志）
-│   ├── 龙虎榜Top10量化系统 — 反馈调节与仓位管理框架.md  # 分级降速/AHS仓位/教训管理
-│   ├── 重构进度_202604.md
-│   └── 项目审查与重构计划_202604.md
+│   ├── database.md                                          # 数据表结构说明
+│   ├── architecture_plan.md                                 # 架构设计
+│   ├── optimization_plan.md                                 # 优化方案（含落地状态标注）
+│   ├── robot_issues.md                                      # 机器人已知问题归档
+│   ├── loss_lessons.md                                      # 亏损教训简记
+│   ├── agent_handoff_选股对比分析.md                         # 选股对比分析交接文档
+│   ├── 选股对比分析系统设计方案.md                           # trade_comparison 详细设计
+│   ├── 复盘总结系统增强设计方案.md                           # 复盘总结系统增强方案
+│   ├── 龙虎榜量化策略_改进方案.md                            # 完整改进方案（回测/因子/风控/工程5大维度）
+│   ├── 龙虎榜策略_工程化落地方案v2.md                        # 工程化落地（API兜底/查询频率/监控/日志）
+│   ├── 龙虎榜Top10量化系统 — 反馈调节与仓位管理框架.md        # 分级降速/AHS仓位/教训管理
+│   ├── 重构进度_202604.md                                   # 2026-04 重构进度记录
+│   └── 项目审查与重构计划_202604.md                         # 审查结论与重构计划
 └── logs/
+    ├── streamlit.log
+    ├── daily_update.log
+    ├── sim_robot.log
+    ├── monitor_intraday.log
+    └── hourly_fill.log      # --steps 11,9 每小时刷新日志
 ```
 
 ---
