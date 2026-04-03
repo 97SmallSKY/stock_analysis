@@ -94,7 +94,7 @@ nohup /root/miniconda3/bin/python -m streamlit run app.py \
 | `5 9 工作日` | 次日 T+1 价格补全 |
 | `*/3 9-15 工作日` | 盘中监控，触发时推飞书（4线程并发，批量写 price_log）|
 | `50 18 工作日` | 盘后 Phase A 选股建仓（`sim_robot_run.py phase_a`）|
-| `40 18 工作日` | 盘后全量数据更新（8步，含量比补全）|
+| `40 18 工作日` | 盘后全量数据更新（**11步**，含量比/平仓后跟踪/候选收益/N日收益刷新）|
 | `@reboot` | 服务器重启后 2 分钟自动拉起 |
 
 ---
@@ -118,10 +118,12 @@ nohup /root/miniconda3/bin/python -m streamlit run app.py \
 stock_analysis/
 ├── app.py
 ├── pages/
-│   ├── sim_trading.py          # 模拟炒股主页面
+│   ├── sim_trading.py          # 模拟炒股主页面（四档模式横幅、AHS仪表盘、净值曲线）
 │   ├── lhb_signal.py           # 决策辅助信号
 │   ├── lhb_returns.py          # 龙虎榜盈亏分析
 │   ├── mainboard_strategy.py   # 主板精选策略
+│   ├── trade_comparison.py     # 选股决策复盘（同天候选对比/单次交易深度复盘/错失机会统计）
+│   ├── realtime_monitor.py     # 实时监控仪表盘（AKShare实时 + 新浪备用，多源快照）
 │   ├── dashboard.py
 │   ├── daily_select.py
 │   ├── market_sentiment.py
@@ -130,19 +132,29 @@ stock_analysis/
 │   └── data_manager.py
 ├── modules/
 │   ├── data_fetcher.py         # 行情/情绪/市场温度计
-│   └── analyzer.py             # 回测核心（simulate_with_stoploss）
+│   ├── analyzer.py             # 回测核心（simulate_with_stoploss + roundtrip_cost）
+│   ├── market_data.py          # 统一行情层（get_kline / _get_nth_trading_day）
+│   ├── scorer.py               # 统一评分引擎（score_tech/score_fund/score_history）
+│   ├── ms_scorer.py            # MarketSnapshot 数据结构
+│   ├── realtime_fetcher.py     # 实时行情抓取（AKShare + 新浪备用）
+│   ├── feature_engine.py       # 特征工程
+│   ├── comparison_analyzer.py  # 同日候选股复盘对比（analyze_same_day_candidates）
+│   ├── post_close_tracker.py   # 平仓后跟踪（batch_track_pending / batch_fill_candidate_returns）
+│   ├── news_fetcher.py         # 持股期新闻抓取与 LLM 情感分类
+│   └── monitor.py              # 监控调度（已被 monitor_intraday 取代，保留兼容）
 ├── scripts/
-│   ├── daily_update.py         # 每日8步数据更新（Step8=量比补全）
+│   ├── daily_update.py         # 每日11步数据更新（Step8=量比/Step9=平仓后跟踪/Step10=候选股收益/Step11=N日收益刷新）
 │   ├── sim_robot_run.py        # 模拟炒股机器人（phase_a/phase_b）
 │   ├── start_stock.sh          # Streamlit 保活脚本（cron 每5分钟）
-│   ├── llm_select.py           # 独立 LLM 选股脚本
+│   ├── backfill_features.py    # 历史特征补全
 │   └── fix_reasons.py          # 历史原因字段回填
 ├── skills/stock_sim_robot/
-│   ├── fetch_signal.py         # 信号评分（净买入强度/对倒检测）
+│   ├── fetch_signal.py         # 信号评分（净买入强度/对倒检测，委托 modules/scorer）
 │   ├── llm_select.py           # LLM 辅助选股
 │   ├── trade_runner.py         # 建仓/平仓执行
-│   ├── sim_trade_db.py         # DB CRUD（熔断/AHS/绩效统计）
-│   ├── monitor_intraday.py     # 盘中监控（并发4线程，check_and_trigger）
+│   ├── trade_log.py            # 平仓记录写入（_analyze_loss_reason + sim_trade_lessons）
+│   ├── sim_trade_db.py         # DB CRUD（熔断/AHS/绩效/四档模式/sim_config）
+│   ├── monitor_intraday.py     # 盘中监控（并发4线程，check_and_trigger → tuple）
 │   └── summary_report.py       # 盘后汇总推送
 ├── utils/
 │   ├── storage.py              # PostgreSQL/Excel 统一访问层
@@ -243,7 +255,7 @@ stock_analysis/
 | 近10笔最大回撤 > -15% | 全部清仓，建议策略暂停 |
 
 - 人工覆盖：`SKIP_CIRCUIT_BREAKER=1`
-- ⚠️ **当前是二元「停车」逻辑，P1 计划升级为四档「降速」（见 §9b）**
+- ✅ **已升级为四档「降速」逻辑（见 §9c），二元「停车」已废弃**
 
 **9b. 账户健康评分 AHS（已落地：`sim_trade_db.calc_account_health_score()`）**
 - 评分构成（基础50分）：近10笔胜率（±25）+ 平均盈亏（±15）+ 连亏惩罚（最多-20）+ 今日盈亏（±10）
@@ -273,7 +285,9 @@ stock_analysis/
 ## 页面与模块约定
 
 **10. 当前重点页面**
-- `pages/sim_trading.py` — 模拟炒股（含实时行情、AHS仪表盘、净值曲线）
+- `pages/sim_trading.py` — 模拟炒股（含实时行情、AHS仪表盘、净值曲线、四档模式横幅）
+- `pages/trade_comparison.py` — 选股决策复盘（同天候选对比 / 单次交易深度复盘 / 错失机会统计）
+- `pages/realtime_monitor.py` — 实时监控仪表盘（多源实时快照，AKShare + 新浪备用）
 - `pages/lhb_signal.py` — 决策辅助信号
 - `pages/mainboard_strategy.py` — 主板精选策略
 - `pages/data_manager.py` — 数据管理
@@ -297,7 +311,8 @@ stock_analysis/
 | 净买入强度（流通市值占比） | ✅ | `fetch_signal._score_fund()` |
 | 对倒检测（文本分析） | ✅ | `fetch_signal._score_fund()` |
 | AHS 账户健康评分 | ✅ | `sim_trade_db.calc_account_health_score()` |
-| 五层熔断规则 | ✅ | `sim_trade_db.check_circuit_breaker()` |
+| 四档分级降速熔断（取代五层停车） | ✅ | `sim_trade_db.check_circuit_breaker()` / `get_trading_mode()` / `set_trading_mode()` |
+| 四档仓位计算 | ✅ | `sim_trade_db.calc_position_size()`；`sim_config` 表持久化模式 |
 | 绩效统计（胜率/回撤/连亏） | ✅ | `sim_trade_db.get_performance_stats()` |
 | 盘中监控（并发4线程） | ✅ | `monitor_intraday.run_monitor()` |
 | price_log 批量写入 | ✅ | `sim_trade_db.log_price_ticks_batch()` |
@@ -305,10 +320,18 @@ stock_analysis/
 | 页面查询 LIMIT 限流 | ✅ | `pages/sim_trading._load_trades(limit=800)` |
 | 机器人日志 Tab | ✅ | `pages/sim_trading.py` Tab5（级别筛选 / 关键词过滤 / 日志下载）|
 | 量比字段补全（Step8） | ✅ | `scripts/daily_update.step8_fill_volume_ratio()` |
-| 分级降速框架 | ✅ | `sim_trade_db.get_trading_mode / set_trading_mode / calc_position_size`；页面 `sim_trading.py` 四档横幅 |
+| 平仓后 T+N 跟踪（Step9） | ✅ | `modules/post_close_tracker.batch_track_pending()`；写 `sim_post_tracking` 表 |
+| 候选股收益回填（Step10） | ✅ | `modules/post_close_tracker.batch_fill_candidate_returns()`；写 `sim_candidate_results` 表 |
+| lhb_top10 N日收益刷新（Step11） | ✅ | `scripts/daily_update.step11_refresh_lhb_returns()` |
+| 持股期新闻抓取+LLM情感分类 | ✅ | `modules/news_fetcher.fetch_and_classify_for_trade()`；写 `sim_news_events` 表 |
+| 选股决策复盘页 | ✅ | `pages/trade_comparison.py`（3Tab：同天候选对比/单次深度复盘/错失机会统计）|
+| 实时监控仪表盘 | ✅ | `pages/realtime_monitor.py`（AKShare实时 + 新浪备用，MarketSnapshot）|
+| 统一行情层 | ✅ | `modules/market_data.get_kline()` / `_get_nth_trading_day()`（降级自然日估算）|
+| 统一评分引擎 | ✅ | `modules/scorer.py`（score_tech/score_fund/score_history）|
+| 同日候选复盘分析 | ✅ | `modules/comparison_analyzer.analyze_same_day_candidates()` |
 | 亏损原因自动归类 | ✅ | `trade_log._analyze_loss_reason()` + `sim_trade_lessons` 表（非 `sim_trades.loss_reason` 字段）|
 | 营业部动态评分表 | ❌ P2 | — |
-| 教训管理库（sim_trade_lessons） | ⚠️ P2 | `trade_log.py` 已自动写入，前端查看/录入入口待开发 |
+| 教训管理库（前端入口） | ⚠️ P2 | `sim_trade_lessons` 表已自动写入，前端查看/录入入口待开发 |
 | Walk-Forward 滚动回测 | ❌ P2 | — |
 
 ---
@@ -333,16 +356,21 @@ stock_analysis/
   | 已落地 | `loss_reason` 归类逻辑已在 `trade_log._analyze_loss_reason()` 中实现，结果写入独立的 `sim_trade_lessons` 表 |
 
 - `sim_summary`（周汇总）、`sim_strategy`（止盈止损配置）
+- `sim_config`（持久化配置：运行模式 / 人工覆盖熔断开关）
 - `sim_selection_log`、`sim_audit_log`、`sim_trade_events`、`sim_nl_strategy`
+- `sim_post_tracking`（平仓后 T+1/T+3/T+5/T+10/T+20 价格跟踪，`step9` 写入）
+- `sim_candidate_results`（每日候选股最终收益，`step10` 写入）
+- `sim_news_events`（持股期新闻事件，含 LLM 情感分类）
+- `sim_trade_lessons`（亏损原因 + 改进建议，平仓后由 `trade_log` 自动写入）
+- `sim_price_log`（盘中价格 tick 记录）
 
 **改进方案建议新增（优先级）：**
 
 | 表名 | 优先级 | 用途 |
 |------|--------|------|
 | `dept_performance` | P1 | 营业部 T+1/T+3/T+5 历史胜率，月频更新 |
-| `sim_lesson_log` | P2 | 教训库（类别/根因/修复方案/验证状态）|
+| `daily_pnl` | P2 | 每日盈亏汇总（预计算，避免页面实时聚合）|
 | `stock_signals` | P2 | 每日选股信号及因子得分 |
-| `daily_pnl` | P2 | 每日盈亏汇总 |
 | `model_monitor` | P3 | 模型性能跟踪（IC/AUC），周频 |
 
 **数据库修改注意事项：**
