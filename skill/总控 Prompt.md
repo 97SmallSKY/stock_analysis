@@ -65,13 +65,22 @@ nohup /root/miniconda3/bin/python -m streamlit run app.py \
 
 # 执行每日更新 / 机器人
 /root/miniconda3/bin/python scripts/daily_update.py
-/root/miniconda3/bin/python scripts/sim_robot_run.py phase_a
-/root/miniconda3/bin/python scripts/sim_robot_run.py phase_b
+/root/miniconda3/bin/python scripts/sim_robot_run.py phase_a  # 盘后 18:45 手动触发
+/root/miniconda3/bin/python scripts/sim_robot_run.py phase_b  # 次日 09:35 手动触发
 
-# 手动触发 T+N 价格补全（盘后或补全历史数据时用）
-# 单日补全：
-/root/miniconda3/bin/python scripts/daily_update.py --step 3
-# 全量 backfill（历史数据补全，成功率提示 SHORT_KLINE = 正常不可补全）：
+# sim_robot_run.py 其他常用命令
+/root/miniconda3/bin/python scripts/sim_robot_run.py query weekly       # 本周战报
+/root/miniconda3/bin/python scripts/sim_robot_run.py query positions    # 当前持仓
+/root/miniconda3/bin/python scripts/sim_robot_run.py query history      # 最近10笔
+/root/miniconda3/bin/python scripts/sim_robot_run.py init               # 首次建表
+/root/miniconda3/bin/python scripts/sim_robot_run.py phase_a 20260326   # 指定日期测试
+
+# 手动触发指定步骤（--steps 多步骤逗号分隔）
+# 单步补全 T+N 价格：
+/root/miniconda3/bin/python scripts/daily_update.py --steps 3
+# 每小时刷新 lhb_top10 N日收益 + 平仓跟踪：
+/root/miniconda3/bin/python scripts/daily_update.py --steps 11,9
+# 全量 backfill（历史数据补全，成功率提示 SHORT_KLINE = 正常不可补全，脚本在服务器）：
 /root/miniconda3/bin/python scripts/backfill_v4.py
 ```
 
@@ -90,11 +99,13 @@ nohup /root/miniconda3/bin/python -m streamlit run app.py \
 | 时间 | 任务 |
 |------|------|
 | `*/5 * * * *` | Streamlit 保活（`scripts/start_stock.sh`）|
-| `55 14 工作日` | 盘前情绪快速刷新 |
-| `5 9 工作日` | 次日 T+1 价格补全 |
+| `55 14 工作日` | 盘中情绪快速刷新（`--sentiment-only`）|
+| `5 9 工作日` | 次日 T+1 价格补全（全量 daily_update）|
+| `35 9 工作日` | Phase B：回填买入价 + 初始化分批卖出（`sim_robot_run.py phase_b`）|
 | `*/3 9-15 工作日` | 盘中监控，触发时推飞书（4线程并发，批量写 price_log）|
-| `50 18 工作日` | 盘后 Phase A 选股建仓（`sim_robot_run.py phase_a`）|
+| `45 18 工作日` | Phase A：盘后结算 + 今日选股（`sim_robot_run.py phase_a`）|
 | `40 18 工作日` | 盘后全量数据更新（**11步**，含量比/平仓后跟踪/候选收益/N日收益刷新）|
+| `0 * * 工作日` | 每小时刷新 lhb_top10 N日收益 + 平仓跟踪（`--steps 11,9`，写 hourly_fill.log）|
 | `@reboot` | 服务器重启后 2 分钟自动拉起 |
 
 ---
