@@ -24,6 +24,8 @@
 | ❌ X7 | 调用 `check_and_trigger()` 假设返回 list | 已改为 `tuple[list[dict], dict | None]`，必须解包 |
 | ❌ X8 | 在 openclaw 仓库目录执行 git 操作 | 污染公司开源仓库 |
 | ❌ X9 | 直接输出代码（未给方案等确认） | 绕过了先方案后代码的工作流 |
+| ❌ X10 | `trade_comparison.py` 中使用 `add_shape(yref/xref="paper")`、`add_vline()`、`add_hline()` | 旧版 Plotly 不支持跨轴引用，服务器报 TypeError；改用 Scatter trace 或 title.text |
+| ❌ X11 | `sim_trading.py` 中用缓存函数名 `.clear()` 清缓存 | 函数名重构后引用失效触发 NameError；改用 `st.session_state.pop(key, None)` |
 
 ---
 
@@ -330,7 +332,7 @@ stock_analysis/
 
 ---
 
-# 已落地功能速查（截至 2026-04-01）
+# 已落地功能速查（截至 2026-04-03）
 
 | 功能 | 状态 | 代码位置 |
 |------|------|---------|
@@ -367,7 +369,7 @@ stock_analysis/
 
 **已建表：**
 - `lhb_top10`（含 `流通市值`【万元】、`龙虎榜净买额`、`净买额占总成交比`）
-- `lhb_top10_prices`（含 `UNIQUE(代码, trade_date)` 约束；已新增 `volume_ratio` 字段（相对历史均値的量比））
+- `lhb_top10_prices`（含 `UNIQUE(代码, trade_date)` 约束【**2026-04-01 新增**，原无约束】；已新增 `volume_ratio` 字段（相对历史均值的量比））
 - `lhb_detail`、`lhb_seat_detail`（含 `解读` 字段）
 - `market_sentiment`、`lhb_jigou`、`lhb_ggtj`
 - `sim_trades`：
@@ -554,7 +556,7 @@ D2-1 并发改造后，函数签名从 `-> list[dict]` 改为 `-> tuple[list[dic
 - K 线图的买入/卖出竖线：改为 Scatter trace，不使用 `add_vline` / `add_shape`
 - 标题说明文字：改为 `fig.update_layout(title=dict(text="..."))` 而非 `add_annotation(yref="paper")`
 
-**规则**：`pages/trade_comparison.py` 中**禁止使用 `add_shape(yref/xref="paper")`、`add_vline()`、`add_hline()`**，一律改用 Scatter trace 或 title.text 实现；其他页面新增图表时同样注意 Plotly 版本兼容性。
+**规则**：`pages/trade_comparison.py` 中**禁止使用 `add_shape(yref/xref="paper")`、`add_vline()`、`add_hline()`**，一律改用 Scatter trace 或 title.text 实现；其他页面新增图表时同样注意 Plotly 版本兼容性（见 ❌ X10）。
 
 ## 14. `sim_trading.py` 覆盖风控缓存 NameError + 重启后自动展开（2026-04-02 修复）
 
