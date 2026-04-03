@@ -252,8 +252,8 @@ stock_analysis/
 - Phase B 高开放弃阈值：AHS≥70→9%；AHS≥50→7%；AHS<50→5%
 - 分批止盈自适应：AHS<50 时第1档+2%（原+3%），第2档+4%（原+5%）；AHS≥70 第3档+10%（原+8%）
 
-**9c. 【P1 计划中】分级降速框架（`docs/龙虎榜Top10量化系统 — 反馈调节与仓位管理框架.md`）**
-取代二元熔断，改为四档连续降速（**代码尚未落地**）：
+**9c. 【✅ 已落地】分级降速框架（`docs/龙虎榜Top10量化系统 — 反馈调节与仓位管理框架.md`）**
+取代二元熔断，改为四档连续降速（**2026-04-01 已落地**：`sim_trade_db.py` `get_trading_mode / set_trading_mode / calc_position_size`；页面 `sim_trading.py` 已展示四档横幅）：
 
 | 模式 | 仓位系数 | 入场门槛 | 每日建仓上限 | AHS 区间 |
 |------|---------|---------|------------|---------|
@@ -264,7 +264,7 @@ stock_analysis/
 
 自动恢复条件：连赢2笔 / MA5上穿MA20 / 出现85分+信号 / 人工复盘确认 → 各自动升一级
 
-亏损原因归类（待落地字段 `sim_trades.loss_reason`）：
+亏损原因归类（**✅ 已落地**：`skills/stock_sim_robot/trade_log.py` `_analyze_loss_reason()` + `sim_trade_lessons` 表；平仓后自动写入，非 `sim_trades.loss_reason` 字段）：
 - `market_systemic` → 缩仓，不提门槛
 - `low_quality_signal` → 提门槛 +10分，不缩仓
 - `late_stop_loss` → 收紧止损线 1%
@@ -305,10 +305,10 @@ stock_analysis/
 | 页面查询 LIMIT 限流 | ✅ | `pages/sim_trading._load_trades(limit=800)` |
 | 机器人日志 Tab | ✅ | `pages/sim_trading.py` Tab5（级别筛选 / 关键词过滤 / 日志下载）|
 | 量比字段补全（Step8） | ✅ | `scripts/daily_update.step8_fill_volume_ratio()` |
-| 分级降速框架 | ❌ P1 | — |
-| 亏损原因自动归类 | ❌ P1 | — |
+| 分级降速框架 | ✅ | `sim_trade_db.get_trading_mode / set_trading_mode / calc_position_size`；页面 `sim_trading.py` 四档横幅 |
+| 亏损原因自动归类 | ✅ | `trade_log._analyze_loss_reason()` + `sim_trade_lessons` 表（非 `sim_trades.loss_reason` 字段）|
 | 营业部动态评分表 | ❌ P2 | — |
-| 教训管理库（sim_lesson_log） | ❌ P2 | — |
+| 教训管理库（sim_trade_lessons） | ⚠️ P2 | `trade_log.py` 已自动写入，前端查看/录入入口待开发 |
 | Walk-Forward 滚动回测 | ❌ P2 | — |
 
 ---
@@ -330,7 +330,7 @@ stock_analysis/
   | AHS/风控 | `invest_ratio, net_buy_strength_pct`（净买入强度%）, `duodao_risk`（对倒风险评分）|
   | 原因说明 | `llm_reason, reason_tech, reason_fund, reason_history, reason_seat` |
   | 状态 | `status`（open/closed/abandoned）, `week_tag` |
-  | 待落地 | `loss_reason`（亏损原因分类，P1 计划中）|
+  | 已落地 | `loss_reason` 归类逻辑已在 `trade_log._analyze_loss_reason()` 中实现，结果写入独立的 `sim_trade_lessons` 表 |
 
 - `sim_summary`（周汇总）、`sim_strategy`（止盈止损配置）
 - `sim_selection_log`、`sim_audit_log`、`sim_trade_events`、`sim_nl_strategy`
