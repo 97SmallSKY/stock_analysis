@@ -56,6 +56,10 @@ tail -f logs/monitor_intraday.log
 # 语法检查（改完代码后必做）
 /root/miniconda3/bin/python -m py_compile <文件路径>
 
+# 热重载（单文件修复，无需重启 Streamlit，等待 ~3秒后刷新浏览器）
+touch ~/stock_analysis/<文件路径>   # 例：touch pages/lhb_signal.py
+# 注意：新增文件、修改 app.py、修改 import 链时必须完整重启
+
 # 重启 Streamlit
 pkill -f "streamlit run"
 nohup /root/miniconda3/bin/python -m streamlit run app.py \
@@ -529,6 +533,47 @@ D2-1 并发改造后，函数签名从 `-> list[dict]` 改为 `-> tuple[list[dic
 
 **规则**：`SHORT_KLINE` 失败属于**正常不可补全情况**，无需处理。补全脚本可以忽略此类记录，不必告警。
 
+## 13. Plotly `yref="paper"` / `xref="paper"` TypeError（2026-04-02 修复）
+
+**现象**：`pages/trade_comparison.py` 使用 `fig.add_shape(yref="paper")` 或 `fig.add_vline()` 时，服务器端 Plotly 版本报 `TypeError`，因为旧版 Plotly 不支持 `yref/xref="paper"` 跨轴引用。
+
+**修复**（已于 2026-04-02 落地）：
+- 归一化曲线的上榜日竖线：改为 `fig.add_trace(go.Scatter(..., mode="lines"))` 实现
+- K 线图的买入/卖出竖线：改为 Scatter trace，不使用 `add_vline` / `add_shape`
+- 标题说明文字：改为 `fig.update_layout(title=dict(text="..."))` 而非 `add_annotation(yref="paper")`
+
+**规则**：`pages/trade_comparison.py` 中**禁止使用 `add_shape(yref/xref="paper")`、`add_vline()`、`add_hline()`**，一律改用 Scatter trace 或 title.text 实现；其他页面新增图表时同样注意 Plotly 版本兼容性。
+
+## 14. `sim_trading.py` 覆盖风控缓存 NameError + 重启后自动展开（2026-04-02 修复）
+
+**现象 1**：点击"重新启用风控"/"手动覆盖风控"按钮后，代码调用 `_load_health_data.clear()` 触发 `NameError`（函数名已重构，引用失效）。
+
+**修复**：改为清除 `session_state` 缓存键：
+```python
+st.session_state.pop("__cache_sim_health", None)
+st.session_state.pop("__cache_ts_sim_health", None)
+```
+
+**现象 2**：切换风控模式后重启 Streamlit，风控提示面板会再次自动展开，造成重复干扰。
+
+**修复**：引入 `_cb_expander_seen_{_cb_mode}` session_state 标志，记录当前模式的提示是否已展示过，**仅在模式变化时重新展开提醒用户**，重启后不重复弹出。
+
+**规则**：`sim_trading.py` 中清除缓存必须用 `session_state.pop(key, None)` 而非直接调用缓存函数名；跨重启的"一次性展开"逻辑必须通过 session_state 标志控制。
+
+## 15. `lhb_signal.py` 函数未定义 NameError + 热重载技巧（2026-04-02 修复）
+
+**现象**："决策辅助信号"页面报 `NameError: name '_sma' is not defined`，原因是内部辅助函数 `_sma` 在重构时被移除或未正确导入。
+
+**修复**：在 `lhb_signal.py` 内补全 `_sma` 函数定义（或改为 `pd.Series.rolling().mean()` 直接调用）。
+
+**热重载技巧**（无需重启 Streamlit）：
+```bash
+# 修改完代码后，touch 文件触发 Streamlit 文件监听热重载
+touch pages/lhb_signal.py
+# 等待约 3 秒后刷新浏览器即可，无需 pkill + nohup 重启
+```
+**规则**：单文件 bug 修复后，**优先使用 `touch <文件>` 触发热重载**，避免完整重启中断线上监控（盘中时段尤其重要）；仅以下情况需完整重启：新增文件、修改 `app.py`、修改依赖 import 链。
+
 ---
 
 # 重点原则
@@ -543,6 +588,7 @@ D2-1 并发改造后，函数签名从 `-> list[dict]` 改为 `-> tuple[list[dic
 8. 如果要求"直接改代码"，也要先给出改动摘要，再给代码
 9. **禁止删除因子降级兼容路径**：改进因子时，旧逻辑作为 fallback 保留，避免无 float_mktcap 数据的历史记录评分降为 0
 10. **每次部署到服务器后**，必须先停止并重启 Streamlit，再进行页面功能验证
+    - **例外**：单文件 bug 修复可用 `touch <文件>` 热重载，无需完整重启（避免中断盘中监控）
 
 ---
 
