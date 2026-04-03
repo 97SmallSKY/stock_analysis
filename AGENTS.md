@@ -5,6 +5,28 @@
 
 ---
 
+## ⚠️ P0 — 每次修改后必须 rsync 上传并重启服务
+
+**每完成一轮代码修改，必须执行以下两步，不可省略：**
+
+```bash
+# Step 1：rsync 同步改动文件到服务器（远程无 git，不能 git pull）
+rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
+  pages/xxx.py jd:~/stock_analysis/pages/
+# 若改动多个目录，同步整个项目（排除数据/日志/缓存）：
+rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
+  --exclude='.git' --exclude='.claude/' --exclude='data/' --exclude='logs/' \
+  ./ jd:~/stock_analysis/
+
+# Step 2：重启 Streamlit 服务使改动生效
+ssh jd "cd ~/stock_analysis && ./stop.sh && sleep 1 && STREAMLIT_PORT=8051 ./start.sh"
+```
+
+> 服务器别名: `ssh jd` | 路径: `~/stock_analysis` | Python: `/root/miniconda3/bin/python`
+> **线上地址：http://117.72.184.8:8051**
+
+---
+
 ## 1. Project Overview
 
 A-share Dragon Tiger List (龙虎榜) quantitative trading analysis system with:

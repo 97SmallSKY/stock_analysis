@@ -511,7 +511,11 @@ def render():
     )
 
     # ── 手动覆盖开关区 ───────────────────────────────────────────────────
-    with st.expander("🔧 风控手动干预（谨慎操作）", expanded=(_cb_mode in ("crisis", "alert") and not _cb_skipped)):
+    _cb_expand_key = f"_cb_expander_seen_{_cb_mode}"
+    _cb_should_expand = (_cb_mode in ("crisis", "alert") and not _cb_skipped and not st.session_state.get(_cb_expand_key, False))
+    if _cb_should_expand:
+        st.session_state[_cb_expand_key] = True
+    with st.expander("🔧 风控手动干预（谨慎操作）", expanded=_cb_should_expand):
         _sw_col1, _sw_col2 = st.columns([3, 2])
         with _sw_col1:
             if _cb_skipped:
@@ -523,8 +527,8 @@ def render():
                     except Exception:
                         pass
                     st.session_state["_skip_cb"] = False
-                    st.session_state.pop("_skip_cb_initialized", None)
-                    _get_health_data.clear()
+                    st.session_state.pop("__cache_sim_health", None)
+                    st.session_state.pop("__cache_ts_sim_health", None)
                     st.rerun()
             else:
                 st.warning(
@@ -540,8 +544,8 @@ def render():
                     except Exception:
                         pass
                     st.session_state["_skip_cb"] = True
-                    st.session_state.pop("_skip_cb_initialized", None)
-                    _get_health_data.clear()
+                    st.session_state.pop("__cache_sim_health", None)
+                    st.session_state.pop("__cache_ts_sim_health", None)
                     st.rerun()
         with _sw_col2:
             st.caption("**当前模式说明**")
