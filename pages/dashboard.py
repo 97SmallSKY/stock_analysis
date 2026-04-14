@@ -26,16 +26,27 @@ def _ss_set(key: str, val):
     st.session_state[f"__cache_ts_{key}"] = _time.time()
 
 
-def _nav_to(page_name: str):
-    """通过 session_state + query_params 实现页面跳转"""
-    st.session_state["_nav_page"] = page_name
-    st.query_params["page"] = {
-        "🤖 模拟炒股":       "sim_trading",
-        "🏆 主板精选策略":   "mainboard",
-        "🎯 决策辅助信号":   "signal",
-        "📈 龙虎榜盈亏分析": "returns",
-    }.get(page_name, "dashboard")
-    st.rerun()
+def _nav_to(page_key: str):
+    """使用 st.switch_page 实现页面跳转"""
+    page_map = {
+        "🤖 模拟炒股": "_sim_trading_page",
+        "🏆 主板精选策略": "_mainboard_page",
+        "🎯 决策辅助信号": "_signal_page",
+        "📈 龙虎榜盈亏分析": "_returns_page",
+    }
+    page_key_in_ss = page_map.get(page_key)
+    if page_key_in_ss and page_key_in_ss in st.session_state:
+        st.switch_page(st.session_state[page_key_in_ss])
+    else:
+        # fallback: 通过 URL path 跳转
+        path_map = {
+            "🤖 模拟炒股": "sim_trading",
+            "🏆 主板精选策略": "mainboard",
+            "🎯 决策辅助信号": "signal",
+            "📈 龙虎榜盈亏分析": "returns",
+        }
+        path = path_map.get(page_key, "dashboard")
+        st.switch_page(f"pages/{path}.py" if path != "dashboard" else "app.py")
 
 
 def render():

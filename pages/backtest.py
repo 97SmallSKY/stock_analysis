@@ -129,4 +129,7 @@ def render():
             st.caption(f"时间范围: {min_d} ~ {max_d}")
         
         if st.button("📊 前往查看详细分析", use_container_width=True):
-            st.switch_page("pages/backtest_analysis.py")
+            if "_backtest_analysis_page" in st.session_state:
+                st.switch_page(st.session_state["_backtest_analysis_page"])
+            else:
+                st.switch_page("pages/backtest_analysis.py")

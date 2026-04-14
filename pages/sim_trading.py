@@ -273,7 +273,10 @@ def _render_same_day_competitor_widget(open_df: "pd.DataFrame") -> None:
             if not any_data:
                 st.info("暂无同天候选对比数据（等待 daily_update step10 填充 T+5 收益）")
                 if st.button("快速跳转到「选股决策复盘」页面"):
-                    st.switch_page("pages/trade_comparison.py")
+                    if "_trade_comparison_page" in st.session_state:
+                        st.switch_page(st.session_state["_trade_comparison_page"])
+                    else:
+                        st.switch_page("pages/trade_comparison.py")
 
     except Exception as e:
         # 不阻断主页面渲染
