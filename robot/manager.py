@@ -111,25 +111,89 @@ class RobotManager:
         """结束机器人（强制清仓）"""
         if trade_date is None:
             trade_date = datetime.now().strftime('%Y%m%d')
-        
-        with self.engine.begin() as conn:
-            # 获取持仓
+        from .trade_cost import calc_slippage_price, calc_sell_cost
+        from data.fetcher import get_data_manager
+
+        dm = get_data_manager()
+        cm = CashManager(robot_id)
+
+        with self.engine.connect() as conn:
             positions = conn.execute(text('''
-                SELECT id, code, name, buy_shares 
+                SELECT id, code, name, buy_price, buy_shares
                 FROM sim_trades 
                 WHERE robot_id = :rid AND status = 'HOLDING'
             '''), {'rid': robot_id}).fetchall()
-            
-            if positions:
-                logger.warning(f"⚠️ 机器人 {robot_id} 还有 {len(positions)} 个持仓需要清仓")
-                # TODO: 实现清仓逻辑（需要实时价格）
-            
+
+        if positions:
+            logger.warning(f"⚠️ 机器人 {robot_id} 还有 {len(positions)} 个持仓，开始强制清仓")
+
+        for pos in positions:
+            p = dict(pos._mapping)
+            code = p['code']
+            name = p.get('name', '')
+            shares = int(p.get('buy_shares') or 0)
+            buy_price = float(p.get('buy_price') or 0)
+            if shares <= 0:
+                continue
+
+            market_price = buy_price if buy_price > 0 else 0
+            try:
+                quote = dm.get_realtime_quote(code)
+                if quote.is_valid():
+                    q_price = float((quote.data or {}).get('price') or 0)
+                    if q_price > 0:
+                        market_price = q_price
+            except Exception as e:
+                logger.warning(f"获取 {code} 实时价失败，使用买入价兜底: {e}")
+
+            if market_price <= 0:
+                logger.warning(f"跳过清仓: {code} 无有效价格")
+                continue
+
+            sell_price = calc_slippage_price(market_price, 'SELL')
+            sell_result = calc_sell_cost(sell_price, shares, code)
+
+            # 估算净利润（按买入价近似，无法回溯买入费用时保守处理）
+            cost_basis = buy_price * shares if buy_price > 0 else 0
+            net_profit = round(sell_result['total_received'] - cost_basis, 2) if cost_basis > 0 else 0.0
+            net_profit_pct = round((sell_price / buy_price - 1) * 100, 4) if buy_price > 0 else 0.0
+
+            with self.engine.begin() as conn:
+                conn.execute(text('''
+                    UPDATE sim_trades SET
+                        status = 'SOLD',
+                        sell_date = :date,
+                        sell_price = :sell_price,
+                        sell_shares = :shares,
+                        sell_amount = :amount,
+                        sell_fee = :fee,
+                        sell_stamp_duty = :stamp,
+                        net_profit = :profit,
+                        net_profit_pct = :profit_pct,
+                        sell_reason = '强制清仓（结束机器人）'
+                    WHERE id = :id
+                '''), {
+                    'date': trade_date,
+                    'sell_price': round(sell_price, 2),
+                    'shares': shares,
+                    'amount': round(sell_result['amount'], 2),
+                    'fee': round(sell_result['commission'] + sell_result['transfer_fee'], 2),
+                    'stamp': round(sell_result['stamp_tax'], 2),
+                    'profit': net_profit,
+                    'profit_pct': net_profit_pct,
+                    'id': p['id'],
+                })
+
+            cm.credit_sell(sell_result['total_received'], p['id'], code, name, trade_date, detail='结束机器人强制清仓')
+            logger.info(f"💰 清仓完成: {code} {name} @ {sell_price:.2f}")
+
+        with self.engine.begin() as conn:
             conn.execute(text('''
                 UPDATE sim_robots 
                 SET status = 'ended', ended_at = NOW()
                 WHERE robot_id = :rid
             '''), {'rid': robot_id})
-        
+
         logger.info(f"🔴 机器人已结束: {robot_id}")
     
     def fork_robot(self, source_robot_id: str, new_config: dict) -> str:

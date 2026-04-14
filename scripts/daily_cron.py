@@ -57,15 +57,13 @@ def main():
         
         elif args.command == 'phase_b':
             # Phase B 次日开盘买入（09:35）
-            logger.warning("Phase B 模块需要对接实际交易系统")
-            # from engine.live.trade_runner import run_phase_b
-            # run_phase_b(trade_date)
-        
+            from skills.stock_sim_robot.trade_runner import run_phase_b
+            run_phase_b(trade_date)
+
         elif args.command == 'phase_a':
             # Phase A 盘后选股（18:45）
-            logger.warning("Phase A 模块需要对接实际策略选股")
-            # from engine.live.trade_runner import run_phase_a
-            # run_phase_a(trade_date)
+            from skills.stock_sim_robot.trade_runner import run_phase_a
+            run_phase_a(trade_date)
         
         elif args.command == 'settle':
             # 每日结算（15:05）

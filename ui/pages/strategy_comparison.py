@@ -38,9 +38,20 @@ def render():
         engine = storage._get_engine()
         with engine.connect() as conn:
             robots = conn.execute(text('''
-                SELECT robot_id, robot_name, strategy_name, status, initial_capital
+                SELECT
+                    robot_id,
+                    robot_name,
+                    COALESCE(select_strategy, execute_strategy, 'unknown') AS strategy_name,
+                    status,
+                    initial_capital
                 FROM sim_robots
                 ORDER BY created_at DESC
+            ''')).fetchall()
+            config_rows = conn.execute(text('''
+                SELECT config_name
+                FROM score_weights_config
+                WHERE is_active = true
+                ORDER BY CASE WHEN config_name = 'default' THEN 0 ELSE 1 END, config_name
             ''')).fetchall()
         
         if not robots:
@@ -79,9 +90,10 @@ def render():
         # 评分权重配置
         st.divider()
         st.subheader("⚖️ 评分权重")
+        config_options = [r[0] for r in config_rows] if config_rows else ['default']
         config_name = st.selectbox(
             "选择权重配置",
-            options=['default'],
+            options=config_options,
             format_func=lambda x: '默认配置' if x == 'default' else x,
         )
     

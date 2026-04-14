@@ -50,7 +50,7 @@ def chart_nav_comparison(
             # 查询净值数据
             df = pd.read_sql(text('''
                 SELECT trade_date, nav 
-                FROM simDaily_summary
+                FROM sim_daily_summary
                 WHERE robot_id = :rid 
                 ORDER BY trade_date
             '''), conn, params={'rid': rid})
@@ -122,7 +122,7 @@ def chart_drawdown_comparison(robot_ids: List[str]) -> go.Figure:
         for i, rid in enumerate(robot_ids):
             df = pd.read_sql(text('''
                 SELECT trade_date, nav 
-                FROM simDaily_summary
+                FROM sim_daily_summary
                 WHERE robot_id = :rid 
                 ORDER BY trade_date
             '''), conn, params={'rid': rid})

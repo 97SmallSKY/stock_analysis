@@ -220,6 +220,11 @@ class Eliminator:
             # 使用买入价作为清仓价（保守估计）
             sell_price = calc_slippage_price(h['buy_price'], 'SELL')
             sell_result = calc_sell_cost(sell_price, h['buy_shares'], h['code'])
+            buy_price = float(h.get('buy_price') or 0)
+            shares = int(h.get('buy_shares') or 0)
+            cost_basis = buy_price * shares if buy_price > 0 else 0
+            net_profit = round(sell_result['total_received'] - cost_basis, 2) if cost_basis > 0 else 0.0
+            net_profit_pct = round((sell_price / buy_price - 1) * 100, 4) if buy_price > 0 else 0.0
             
             with self.engine.begin() as conn:
                 conn.execute(text('''
@@ -238,12 +243,12 @@ class Eliminator:
                 '''), {
                     'date': trade_date,
                     'price': round(sell_price, 2),
-                    'shares': h['buy_shares'],
-                    'amount': round(sell_result['sell_amount'], 2),
-                    'fee': round(sell_result['sell_fee'], 2),
-                    'stamp': round(sell_result['stamp_duty'], 2),
-                    'profit': round(sell_result['net_profit'], 2),
-                    'pct': round(sell_result['profit_pct'], 2),
+                    'shares': shares,
+                    'amount': round(sell_result['amount'], 2),
+                    'fee': round(sell_result['commission'] + sell_result['transfer_fee'], 2),
+                    'stamp': round(sell_result['stamp_tax'], 2),
+                    'profit': net_profit,
+                    'pct': net_profit_pct,
                     'id': h['id'],
                 })
             

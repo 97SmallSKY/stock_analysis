@@ -200,14 +200,19 @@ class RealtimeMonitor:
             return None
         
         profit_pct = (current_price - buy_price) / buy_price * 100
+        stop_loss_pct = float(robot.get('stop_loss_pct') or -5.0)
+        # 兼容历史配置异常值：默认回到硬规则 -5%
+        if stop_loss_pct >= 0 or stop_loss_pct > -2.0:
+            stop_loss_pct = -5.0
+        stop_profit_pct = float(robot.get('stop_profit_pct') or 15.0)
         
-        # 止损 -8%
-        if profit_pct <= -8:
-            return SellSignal(reason="止损", trigger_pct=-8)
-        
-        # 止盈 +15%
-        if profit_pct >= 15:
-            return SellSignal(reason="止盈", trigger_pct=15)
+        # 止损（硬规则默认 -5%）
+        if profit_pct <= stop_loss_pct:
+            return SellSignal(reason="止损", trigger_pct=stop_loss_pct)
+
+        # 止盈（默认 +15%）
+        if profit_pct >= stop_profit_pct:
+            return SellSignal(reason="止盈", trigger_pct=stop_profit_pct)
         
         return None
     
@@ -222,6 +227,10 @@ class RealtimeMonitor:
         # 计算滑点后价格
         sell_price = calc_slippage_price(price, 'SELL')
         sell_result = calc_sell_cost(sell_price, shares, code)
+        buy_price = float(holding.get('buy_price') or 0)
+        cost_basis = buy_price * shares if buy_price > 0 else 0
+        net_profit = round(sell_result['total_received'] - cost_basis, 2) if cost_basis > 0 else 0.0
+        net_profit_pct = round((sell_price / buy_price - 1) * 100, 4) if buy_price > 0 else 0.0
         
         try:
             with self.engine.begin() as conn:
@@ -243,11 +252,11 @@ class RealtimeMonitor:
                     'date': trade_date,
                     'sell_price': round(sell_price, 2),
                     'shares': shares,
-                    'amount': round(sell_result['sell_amount'], 2),
-                    'fee': round(sell_result['sell_fee'], 2),
-                    'stamp': round(sell_result['stamp_duty'], 2),
-                    'profit': round(sell_result['net_profit'], 2),
-                    'profit_pct': round(sell_result['profit_pct'], 2),
+                    'amount': round(sell_result['amount'], 2),
+                    'fee': round(sell_result['commission'] + sell_result['transfer_fee'], 2),
+                    'stamp': round(sell_result['stamp_tax'], 2),
+                    'profit': net_profit,
+                    'profit_pct': net_profit_pct,
                     'reason': reason,
                     'id': holding['id']
                 })

@@ -221,27 +221,52 @@ class DailySettlement:
                     change_pct = 0
                     if pre_close > 0:
                         change_pct = (close_price - pre_close) / pre_close * 100
+                    nav = self._calc_benchmark_nav(code, trade_date, close_price, pre_close)
                     
                     with self.engine.begin() as conn:
                         conn.execute(text('''
                             INSERT INTO benchmark_daily
-                            (index_code, index_name, trade_date, close_price, change_pct)
-                            VALUES (:code, :name, :date, :price, :pct)
+                            (index_code, index_name, trade_date, close_price, change_pct, nav)
+                            VALUES (:code, :name, :date, :price, :pct, :nav)
                             ON CONFLICT (index_code, trade_date) DO UPDATE SET
                                 close_price = EXCLUDED.close_price,
-                                change_pct = EXCLUDED.change_pct
+                                change_pct = EXCLUDED.change_pct,
+                                nav = EXCLUDED.nav
                         '''), {
                             'code': code,
                             'name': name,
                             'date': trade_date,
                             'price': close_price,
                             'pct': round(change_pct, 4),
+                            'nav': round(nav, 6),
                         })
                     logger.debug(f"  ✓ {name}({code}): {close_price:.2f} ({change_pct:+.2f}%)")
             except Exception as e:
                 logger.warning(f"  ⚠️ {name}({code}): {e}")
         
         logger.info(f"✅ 基准指数数据拉取完成")
+
+    def _calc_benchmark_nav(self, index_code: str, trade_date: str, close_price: float, pre_close: float) -> float:
+        """
+        计算基准净值（从1起算的累计净值）。
+        优先沿用上一交易日 nav，按当日涨跌幅滚动。
+        """
+        if close_price <= 0:
+            return 1.0
+
+        with self.engine.connect() as conn:
+            prev = conn.execute(text('''
+                SELECT nav
+                FROM benchmark_daily
+                WHERE index_code = :code AND trade_date < :date
+                ORDER BY trade_date DESC
+                LIMIT 1
+            '''), {'code': index_code, 'date': trade_date}).fetchone()
+
+        prev_nav = float(prev[0]) if prev and prev[0] else 1.0
+        if pre_close and pre_close > 0:
+            return prev_nav * (close_price / pre_close)
+        return prev_nav
 
 
 # === 单元测试 ===
