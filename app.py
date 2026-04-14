@@ -41,6 +41,7 @@ from pages import (
     data_manager,
     trade_comparison,
     realtime_monitor,
+    strategy_comparison,
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,6 +60,7 @@ _backtest_page = st.Page(backtest.render, title="策略回测", icon="🔬", url
 _backtest_analysis_page = st.Page(backtest_analysis.render, title="回测分析", icon="📉", url_path="backtest_analysis")
 _data_manager_page = st.Page(data_manager.render, title="数据管理", icon="⚙️", url_path="data_manager")
 _trade_comparison_page = st.Page(trade_comparison.render, title="选股决策复盘", icon="📊", url_path="trade_comparison")
+_strategy_comparison_page = st.Page(strategy_comparison.render, title="策略对比看板", icon="🏆", url_path="strategy_comparison")
 
 # 存入 session_state 供页面间跳转
 st.session_state["_dashboard_page"] = _dashboard_page
@@ -73,6 +75,7 @@ st.session_state["_backtest_page"] = _backtest_page
 st.session_state["_backtest_analysis_page"] = _backtest_analysis_page
 st.session_state["_data_manager_page"] = _data_manager_page
 st.session_state["_trade_comparison_page"] = _trade_comparison_page
+st.session_state["_strategy_comparison_page"] = _strategy_comparison_page
 
 # 页面列表（顺序决定侧边栏显示顺序）
 _pages = [
@@ -86,6 +89,7 @@ _pages = [
     _sentiment_page,
     _backtest_page,
     _backtest_analysis_page,
+    _strategy_comparison_page,
     _data_manager_page,
     _trade_comparison_page,
 ]
