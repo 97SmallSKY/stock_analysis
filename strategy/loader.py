@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from utils.storage import storage
 from sqlalchemy import text
-from .strategy_base import BaseStrategy
+from .base import BaseStrategy
 
 logger = logging.getLogger(__name__)
 
