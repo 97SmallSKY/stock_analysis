@@ -21,7 +21,7 @@ sqlalchemy>=2.0.0
 
 # 调度与通知
 schedule>=1.2.1
-requests>=2.31.0
+requests>=2.31.0   # 用于 Wanqing LLM Chat 模块
 
 # 工具
 python-dateutil>=2.8.2
