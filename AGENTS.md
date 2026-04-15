@@ -5,25 +5,51 @@
 
 ---
 
-## ⚠️ P0 — 每次修改后必须 rsync 上传并重启服务
+## ⚠️ P0 — 每次修改后必须同步到服务器并重启
 
-**每完成一轮代码修改，必须执行以下两步，不可省略：**
+**每完成一轮代码修改，必须执行以下步骤：**
+
+### 方式一：使用 rsync（推荐，差量同步）
 
 ```bash
-# Step 1：rsync 同步改动文件到服务器（远程无 git，不能 git pull）
-rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
-  pages/xxx.py jd:~/stock_analysis/pages/
-# 若改动多个目录，同步整个项目（排除数据/日志/缓存）：
+# Step 1：rsync 同步改动文件到服务器（排除数据/日志/缓存/pycache）
 rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
   --exclude='.git' --exclude='.claude/' --exclude='data/' --exclude='logs/' \
   ./ jd:~/stock_analysis/
 
 # Step 2：重启 Streamlit 服务使改动生效
-ssh jd "cd ~/stock_analysis && ./stop.sh && sleep 1 && STREAMLIT_PORT=8051 ./start.sh"
+ssh jd "cd ~/stock_analysis && ./stop.sh && sleep 1 && ./start.sh"
 ```
 
-> 服务器别名: `ssh jd` | 路径: `~/stock_analysis` | Python: `/root/miniconda3/bin/python`
+### 方式二：使用 scp（简单直接）
+
+```bash
+# 上传单个文件
+scp config/settings.py jd:~/stock_analysis/config/
+scp utils/storage.py jd:~/stock_analysis/utils/
+
+# 上传 .env 配置（每次修改配置后必须上传）
+scp .env jd:~/stock_analysis/
+
+# 上传整个项目
+scp -r . jd:~/stock_analysis/
+
+# 重启服务
+ssh jd "cd ~/stock_analysis && ./stop.sh && sleep 1 && ./start.sh"
+```
+
+### 环境变量上传（必须）
+
+```bash
+# 本地 .env 变更后，必须同步到远程服务器
+scp .env jd:~/stock_analysis/
+
+# 远程服务器 .env 路径：/root/stock_analysis/.env
+```
+
+> **服务器别名**: `ssh jd` | **路径**: `~/stock_analysis` | **Python**: `/root/miniconda3/bin/python`
 > **线上地址：http://117.72.184.8:8051**
+> **PostgreSQL 地址**：117.72.184.8:5432（本地和服务器共用）
 
 ---
 
@@ -69,7 +95,7 @@ stock_analysis/
 │   ├── fetch_signal.py             # Signal scoring (calls scorer)
 │   ├── llm_select.py               # LLM stock selection + dynamic position sizing
 │   ├── trade_runner.py             # Phase A/B execution core
-│   ├── monitor_intraday.py         # Intraday monitoring (4 concurrent threads)
+│   ├── monitor_intraday.py        # Intraday monitoring (4 concurrent threads)
 │   ├── sim_trade_db.py             # Trade DB ops + AHS scoring + circuit breaker
 │   ├── summary_report.py           # Feishu daily report
 │   └── trade_log.py                # Trade logging and audit
@@ -80,14 +106,14 @@ stock_analysis/
 │   └── backfill_features.py        # Historical feature backfill
 │
 ├── utils/                          # Infrastructure
-│   ├── storage.py                  # Storage abstraction (PostgreSQL / Excel auto-switch)
+│   ├── storage.py                  # Storage abstraction (PostgreSQL only)
 │   ├── retry.py                    # Retry + proxy-aware degradation
 │   └── helpers.py
 │
 ├── config/
 │   └── settings.py                 # Central config
 │
-├── docs/                           # Technical documentation
+├── docs/                          # Technical documentation
 │   ├── database.md                 # PostgreSQL schema reference (authoritative)
 │   ├── architecture_plan.md        # Architecture roadmap
 │   └── ...
@@ -112,15 +138,15 @@ pip install -r requirements.txt
 ### Required `.env` Variables
 
 ```env
-# Storage mode: "postgres" (production) or "excel" (offline dev)
+# 存储模式：仅支持 PostgreSQL（已移除 Excel 模式）
 STORAGE_MODE=postgres
 
-# PostgreSQL — production (VPS)
-PG_HOST=127.0.0.1
+# PostgreSQL — 本地和服务器共用远程数据库
+PG_HOST=117.72.184.8
 PG_PORT=5432
 PG_DATABASE=stock_analysis
 PG_USER=stock_user
-PG_PASSWORD=<see .env file>
+PG_PASSWORD=Stock2026!@#
 PG_TABLE_PREFIX=
 
 # LLM provider (OpenAI-compatible)
@@ -374,7 +400,7 @@ Manual override: `SKIP_CIRCUIT_BREAKER=1` (current run only, auto-expires next d
 8. DataFrames: validate field existence before access; use `pd.to_numeric(errors="coerce")` for numeric fields.
 9. Dates: handle `YYYYMMDD` / `datetime` / `date` string formats uniformly.
 10. New factors must have a fallback (return 0 score if field missing, do not break flow).
-11. Both Excel and PostgreSQL storage modes must remain compatible.
+11. PostgreSQL only — Excel storage mode has been removed.
 12. Python 3.13 compatibility required.
 13. DB schema changes: write documentation first, then code (`docs/database.md`).
 

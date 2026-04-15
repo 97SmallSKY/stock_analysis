@@ -1,7 +1,7 @@
 """
 全局配置文件
-- 本地开发：使用 Excel 存储数据
-- 远程部署：切换为 PostgreSQL 数据库
+- PostgreSQL 数据库（京东云服务器：117.72.184.8）
+- 配置通过 .env 文件管理
 """
 import os
 from datetime import datetime, timedelta
@@ -10,40 +10,18 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ============================================================
-# 存储模式配置
-# ============================================================
-# 'excel' = 本地开发模式（默认）
-# 'postgres' = 远程部署模式
-STORAGE_MODE = os.getenv("STORAGE_MODE", "excel")
-
-# ============================================================
-# Excel 配置
-# ============================================================
-EXCEL_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
-EXCEL_FILES = {
-    "lhb_detail":       os.path.join(EXCEL_DATA_DIR, "lhb_detail.xlsx"),       # 龙虎榜明细
-    "lhb_jigou":        os.path.join(EXCEL_DATA_DIR, "lhb_jigou.xlsx"),         # 机构汇总
-    "lhb_ggtj":         os.path.join(EXCEL_DATA_DIR, "lhb_ggtj.xlsx"),          # 个股上榜统计
-    "lhb_seat_detail":  os.path.join(EXCEL_DATA_DIR, "lhb_seat_detail.xlsx"),   # 当日席位明细（新）
-    "stock_kline":      os.path.join(EXCEL_DATA_DIR, "stock_kline.xlsx"),       # 个股K线
-    "backtest_results": os.path.join(EXCEL_DATA_DIR, "backtest_results.xlsx"),  # 回测结果
-    "selected_stocks":  os.path.join(EXCEL_DATA_DIR, "selected_stocks.xlsx"),   # 每日选股
-    "market_sentiment": os.path.join(EXCEL_DATA_DIR, "market_sentiment.xlsx"),  # 市场情绪
-}
-
-# ============================================================
 # PostgreSQL 配置
 # ============================================================
 # 数据库拓扑：
-#   videofetcher-db Docker 容器（共用）
-#     └── videofetcher 库  ← videofetcher 服务（保持独立）
-#     └── stock_analysis 库 ← 本项目专属（独立隔离）
+#   京东云服务器：117.72.184.8
+#   videofetcher-db Docker 容器
+#     └── stock_analysis 库 ← 本项目专属独立库
 #
-# 切换方式：修改 .env 中 PG_HOST 即可无感知切换本地↔云上
+# 本地和云上共用同一个远程 PostgreSQL
 from urllib.parse import quote_plus as _qp
 
 PG_CONFIG = {
-    "host":     os.getenv("PG_HOST",     "localhost"),
+    "host":     os.getenv("PG_HOST",     "117.72.184.8"),
     "port":     int(os.getenv("PG_PORT", 5432)),
     "database": os.getenv("PG_DATABASE", "stock_analysis"),
     "user":     os.getenv("PG_USER",     "stock_user"),
@@ -56,7 +34,6 @@ PG_URL = (
 )
 
 # 表名前缀：独立库不需要前缀，置空即可
-# 若未来复用其他库，可设为 'sa_' 等
 PG_TABLE_PREFIX = os.getenv("PG_TABLE_PREFIX", "")
 
 # ============================================================

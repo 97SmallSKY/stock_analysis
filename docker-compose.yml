@@ -1,0 +1,40 @@
+# ============================================================
+# stock_analysis - Docker Compose 配置
+# 用途：为 stock_analysis 项目提供独立的 PostgreSQL 数据库
+# 使用 named volume 持久化数据，防止容器删除后数据丢失
+# ============================================================
+# 使用方法：
+#   docker-compose up -d          # 启动服务
+#   docker-compose ps             # 查看状态
+#   docker-compose logs -f       # 查看日志
+#   docker-compose down           # 停止服务（数据保留在 volume 中）
+#   docker-compose down -v        # 停止服务并删除数据（谨慎使用！）
+# ============================================================
+
+services:
+  stock-db:
+    image: postgres:15-alpine
+    container_name: stock_analysis-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: stock_analysis
+      POSTGRES_USER: stock_user
+      POSTGRES_PASSWORD: Stock2026!@#
+    ports:
+      - "0.0.0.0:5432:5432"
+    volumes:
+      # 使用 named volume 持久化数据（推荐）
+      - stock-db-data:/var/lib/postgresql/data
+      # 可选：初始化脚本（首次创建数据库时执行）
+      # - ./init-scripts:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_user -d stock_analysis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  # Named volume：容器删除后数据不会丢失
+  # 查看 volume: docker volume ls | grep stock-db-data
+  # 备份 volume: docker run --rm -v stock_analysis-db-data:/data -v $(pwd):/backup alpine tar czf /backup/backup.tar.gz /data
+  stock-db-data:

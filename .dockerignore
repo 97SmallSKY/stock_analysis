@@ -1,0 +1,63 @@
+# Docker
+docker-compose.override.yml
+
+# 敏感配置（已在 .env.example 中提供模板）
+.env
+config/local.py
+config/secrets.py
+
+# 缓存和临时文件
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+*.spec
+
+# 虚拟环境
+venv/
+.venv/
+env/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 日志
+logs/
+*.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 数据文件
+data/cache/
+data/raw/
+*.csv
+*.parquet
+*.h5
+*.hdf5
+*.db
+*.sqlite
+*.sqlite3
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Claude / CodeFlicker
+.claude/worktrees/
+.codeflicker/discuss/
+
+# Streamlit
+.streamlit.pid
+
+# Docker volumes backup
+*backup*.tar.gz
