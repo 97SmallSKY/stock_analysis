@@ -1,0 +1,236 @@
+# 龙虎榜量化交易系统 v2 — Agent 辅助开发工作流指南
+
+> 本文档定义了使用 CodeFlicker Agent 分模块开发的推荐工作流，供人类开发者阅读。
+> Agent 使用的详细 Prompt 存放在 `docs/prompts/` 目录。
+
+---
+
+## 一、工作流概述
+
+### 1.1 核心原则
+
+```
+不推荐：                           推荐：
+┌─────────────────┐               ┌──────────┐ ┌──────────┐ ┌──────────┐
+│  窗口1：前端    │               │ 会话1    │ │ 会话2    │ │ 会话3    │
+│  所有前端代码   │               │ 数据层   │ │ 策略+交易│ │ API层    │
+└─────────────────┘               └──────────┘ └──────────┘ └──────────┘
+问题：上下文爆炸，           ┌──────────┐
+输出质量下降                 │ 会话4    │
+                             │ 前端     │
+                             └──────────┘
+```
+
+**关键原则**：
+- 按功能模块分会话，而非按技术栈分
+- 每个会话有明确的角色和边界
+- 会话之间通过接口签名和数据格式传递约定
+- 先各自开发再集成
+
+### 1.2 会话划分
+
+| 会话 | 模块 | 负责内容 |
+|------|------|----------|
+| S01 | 数据层 | ORM模型、数据采集、降级链、迁移 |
+| S02 | 策略+交易 | 评分引擎、选股服务、交易执行、风控 |
+| S03 | API层 | FastAPI路由、WebSocket、中间件 |
+| S04 | 前端 | Vue3页面、组件、状态管理 |
+| S05 | 基础设施 | Docker、CI/CD、Makefile |
+| S06 | 测试 | 单元测试、集成测试、E2E |
+
+### 1.3 依赖关系
+
+```
+S01（数据层）
+  ↓ 输出：ORM 模型、数据采集接口
+S02（策略+交易）
+  ↓ 输出：Service 类方法签名、业务逻辑
+S03（API 层）
+  ↓ 输出：接口定义、Pydantic 模型
+S04（前端）
+```
+
+---
+
+## 二、开发顺序
+
+### Phase 1: 基础设施并行
+
+```
+┌─────────────────────────────────────┐
+│ S05: 基础设施                        │
+│ - Docker Compose 配置               │
+│ - 目录结构创建                      │
+│ - Makefile 编写                     │
+│ - 环境变量模板                       │
+└─────────────────────────────────────┘
+```
+
+### Phase 2: 数据层 + API层 并行
+
+```
+┌─────────────────────┐ ┌─────────────────────┐
+│ S01: 数据层          │ │ S03: API层          │
+│ - ORM 模型          │ │ - Pydantic Schema   │
+│ - 数据采集服务      │ │ - FastAPI 路由骨架  │
+│ - Alembic 迁移      │ │ - WebSocket 协议    │
+└─────────────────────┘ └─────────────────────┘
+```
+
+### Phase 3: 策略+交易
+
+```
+┌─────────────────────────────────────┐
+│ S02: 策略与交易引擎                  │
+│ - 评分引擎                          │
+│ - 选股服务                          │
+│ - 交易执行                          │
+│ - 风控服务                          │
+│ 依赖：S01 的 ORM 模型               │
+└─────────────────────────────────────┘
+```
+
+### Phase 4: 前端
+
+```
+┌─────────────────────────────────────┐
+│ S04: 前端开发                        │
+│ - 页面框架                          │
+│ - API 集成                          │
+│ - WebSocket 集成                    │
+│ 依赖：S03 的 API 接口               │
+└─────────────────────────────────────┘
+```
+
+### Phase 5: 测试与集成
+
+```
+┌─────────────────────────────────────┐
+│ S06: 测试                           │
+│ - 单元测试                          │
+│ - 集成测试                          │
+│ - E2E 测试                          │
+│ 依赖：所有模块完成                   │
+└─────────────────────────────────────┘
+```
+
+---
+
+## 三、Prompt 使用方法
+
+### 3.1 创建新会话
+
+在 CodeFlicker 中创建新会话时：
+
+1. 选择对应的会话 Prompt 文档（如 `docs/prompts/S01_DATA_LAYER.md`）
+2. 将完整内容复制到新会话的 System Prompt
+3. 根据当前开发阶段，可能需要补充：
+   - 相关设计文档的引用
+   - 已完成模块的代码
+   - 具体的开发任务
+
+### 3.2 会话衔接
+
+每个会话完成后：
+
+1. **记录接口约定**：
+   - Service 类的方法签名
+   - 数据模型的结构
+   - API 端点的格式
+
+2. **传递到下一会话**：
+   - 将关键代码复制到下一会话的 Prompt
+   - 更新下一会话的依赖说明
+
+### 3.3 集成问题处理
+
+当各模块开发完成后，创建集成会话处理：
+
+1. 合并所有模块代码
+2. 解决接口不匹配问题
+3. 端到端测试
+4. 修复发现的问题
+
+---
+
+## 四、评审检查点
+
+在每个会话开发的关键节点进行评审：
+
+### S01 完成后
+- [ ] ORM 模型是否完整
+- [ ] Alembic 迁移脚本是否可执行
+- [ ] 数据采集服务是否有降级链
+- [ ] 是否符合 `DATABASE.md` 设计
+
+### S02 完成后
+- [ ] 评分引擎是否符合 `STRATEGY.md`
+- [ ] 风控服务是否符合 `RISK_CONTROL.md`
+- [ ] 交易流程是否符合 `TRADING_FLOW.md`
+- [ ] 状态机是否符合 `STATE_MACHINE.md`
+
+### S03 完成后
+- [ ] API 是否符合 `API.md` 设计
+- [ ] Pydantic Schema 是否完整
+- [ ] WebSocket 协议是否完善
+
+### S04 完成后
+- [ ] 页面是否覆盖所有功能
+- [ ] WebSocket 实时数据是否正确
+- [ ] 错误处理是否完善
+
+---
+
+## 五、版本控制
+
+每个会话的开发建议单独提交：
+
+```bash
+git add backend/app/models
+git commit -m "feat(data): 完成 ORM 模型定义
+
+- 新增 robots, robot_trades, trade_executions 等模型
+- 添加 Alembic 初始迁移脚本
+- 更新 README"
+
+git add backend/app/services
+git commit -m "feat(trading): 完成评分引擎和交易服务
+
+- 实现多因子评分计算
+- 实现 Phase A/B 交易流程
+- 实现 AHS 风控服务"
+
+git add backend/app/api
+git commit -m "feat(api): 完成 FastAPI 路由
+
+- 新增 robots, market, selection 等端点
+- 实现 WebSocket 实时推送
+- 添加 Pydantic Schema"
+```
+
+---
+
+## 六、相关文档
+
+| 文档 | 说明 |
+|------|------|
+| [PLAN.md](./lhb-quant-v2/PLAN.md) | 重构计划 |
+| [PROGRESS.md](./lhb-quant-v2/PROGRESS.md) | 开发进度 |
+| [DATABASE.md](./lhb-quant-v2/DATABASE.md) | 数据库设计 |
+| [STRATEGY.md](./lhb-quant-v2/STRATEGY.md) | 策略设计 |
+| [RISK_CONTROL.md](./lhb-quant-v2/RISK_CONTROL.md) | 风控体系 |
+| [TRADING_FLOW.md](./lhb-quant-v2/TRADING_FLOW.md) | 交易流程 |
+| [API.md](./lhb-quant-v2/API.md) | API 接口设计 |
+| [STATE_MACHINE.md](./lhb-quant-v2/STATE_MACHINE.md) | 状态机定义 |
+| [TESTING.md](./lhb-quant-v2/TESTING.md) | 测试策略 |
+
+### Agent Prompt 文档
+
+| 文档 | 会话 | 说明 |
+|------|------|------|
+| [S01_DATA_LAYER.md](./prompts/S01_DATA_LAYER.md) | S01 | 数据层开发 Prompt |
+| [S02_STRATEGY_TRADING.md](./prompts/S02_STRATEGY_TRADING.md) | S02 | 策略与交易引擎 Prompt |
+| [S03_API_LAYER.md](./prompts/S03_API_LAYER.md) | S03 | API 层开发 Prompt |
+| [S04_FRONTEND.md](./prompts/S04_FRONTEND.md) | S04 | 前端开发 Prompt |
+| [S05_INFRASTRUCTURE.md](./prompts/S05_INFRASTRUCTURE.md) | S05 | 基础设施 Prompt |
+| [S06_TESTING.md](./prompts/S06_TESTING.md) | S06 | 测试 Prompt |

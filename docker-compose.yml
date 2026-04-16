@@ -1,0 +1,184 @@
+# 龙虎榜量化交易系统 v2 - Docker Compose 配置
+# 开发环境
+
+services:
+  # ============================================================
+  # 数据库层 (使用远程服务器的 PostgreSQL)
+  # ============================================================
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: stock_quant_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stock_quant}
+      POSTGRES_USER: ${POSTGRES_USER:-stock_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stock_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stock_user} -d ${POSTGRES_DB:-stock_quant}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stock_quant_network
+
+  # ============================================================
+  # Redis 缓存层 (使用远程服务器的 Redis)
+  # ============================================================
+  redis:
+    image: redis:7-alpine
+    container_name: stock_quant_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stock_quant_network
+
+  # ============================================================
+  # 后端服务
+  # ============================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stock_quant_backend
+    restart: unless-stopped
+    environment:
+      # 数据库
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-stock_user}:${POSTGRES_PASSWORD:-stock_pass}@postgres:5432/${POSTGRES_DB:-stock_quant}
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+      # Celery
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      # 数据源
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      # 飞书通知
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      # 其他配置
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SECRET_KEY: ${SECRET_KEY:-dev-secret-key-change-in-production}
+      DEBUG: ${DEBUG:-true}
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - stock_quant_network
+
+  # ============================================================
+  # Celery Workers (独立部署，高优先级)
+  # ============================================================
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stock_quant_celery_worker
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=4 -Q default,trading,monitor
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-stock_user}:${POSTGRES_PASSWORD:-stock_pass}@postgres:5432/${POSTGRES_DB:-stock_quant}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - backend_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - stock_quant_network
+
+  # ============================================================
+  # Celery Beat (独立部署，定时调度)
+  # ============================================================
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stock_quant_celery_beat
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app beat --loglevel=info
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-stock_user}:${POSTGRES_PASSWORD:-stock_pass}@postgres:5432/${POSTGRES_DB:-stock_quant}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      FEISHU_WEBHOOK_URL: ${FEISHU_WEBHOOK_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - backend_logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      celery_worker:
+        condition: service_started
+    networks:
+      - stock_quant_network
+
+  # ============================================================
+  # 前端服务 (开发模式)
+  # ============================================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: stock_quant_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - stock_quant_network
+
+# ============================================================
+# 网络
+# ============================================================
+networks:
+  stock_quant_network:
+    driver: bridge
+
+# ============================================================
+# 持久化卷
+# ============================================================
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  backend_logs:
+    driver: local

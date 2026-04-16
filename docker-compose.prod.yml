@@ -1,0 +1,30 @@
+# ============================================================
+# 生产环境覆盖配置
+# 用法: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# ============================================================
+
+version: "3.8"
+
+services:
+  postgres:
+    restart: always
+    environment:
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    shm_size: 512mb
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+
+  redis:
+    restart: always
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD}
+    deploy:
+      resources:
+        limits:
+          memory: 512M
