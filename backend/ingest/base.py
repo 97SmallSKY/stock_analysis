@@ -14,11 +14,15 @@ def df_to_rows(df: Optional[pd.DataFrame], colmap: Dict[str, str]) -> list[dict]
     """将 DataFrame 转为 list[dict]，按 colmap 做列重命名；缺失列留 None。
 
     colmap = {src_col: dst_col}
+
+    注意：pandas 数值列里的 NaN 如果不显式转成 Python None，
+    插入 PG 时会被视为非法值。这里先 astype(object) 再 where，
+    保证每个 NaN/NaT 都落成真正的 None。
     """
     if df is None or df.empty:
         return []
     present = {src: dst for src, dst in colmap.items() if src in df.columns}
-    out = df[list(present.keys())].rename(columns=present)
+    out = df[list(present.keys())].rename(columns=present).astype(object)
     out = out.where(pd.notnull(out), None)
     return out.to_dict(orient="records")
 
