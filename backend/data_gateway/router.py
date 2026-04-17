@@ -11,10 +11,11 @@ from .base_adapter import BaseDataAdapter
 logger = logging.getLogger(__name__)
 
 # 默认优先级链配置
-# 当前 TuShare 仅 120 积分，只保留 DAILY_KLINE；其余品类全部走 AKShare 主链。
-# 升级到 2000 积分后，把 TuShare 插回 FINANCIAL_DATA / INDEX_DAILY / STOCK_INFO 链首即可。
+# 当前 TuShare 仅 120 积分 / 5 次每日, pro_bar 等核心接口无权限访问,
+# 暂不在任何品类中用作主链。升级到 2000 积分后, 再把 TuShare 插回
+# DAILY_KLINE / FINANCIAL_DATA / INDEX_DAILY / STOCK_INFO 链首即可。
 DEFAULT_PRIORITY_CHAINS: Dict[DataCategory, List[AdapterName]] = {
-    DataCategory.DAILY_KLINE:      [AdapterName.TUSHARE, AdapterName.AKSHARE, AdapterName.SINA, AdapterName.CRAWLER],
+    DataCategory.DAILY_KLINE:      [AdapterName.AKSHARE, AdapterName.SINA, AdapterName.CRAWLER],
     DataCategory.LHB_DETAIL:       [AdapterName.AKSHARE, AdapterName.SINA, AdapterName.CRAWLER],
     DataCategory.LHB_BROKER:       [AdapterName.AKSHARE, AdapterName.CRAWLER],
     DataCategory.INSTITUTION:      [AdapterName.SINA, AdapterName.AKSHARE, AdapterName.CRAWLER],

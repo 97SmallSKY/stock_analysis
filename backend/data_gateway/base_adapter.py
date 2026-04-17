@@ -13,6 +13,11 @@ from .circuit_breaker import CircuitBreaker
 logger = logging.getLogger(__name__)
 
 
+class AdapterNotConfigured(Exception):
+    """适配器未配置(如 token 缺失)。父类 initialize 会将其降级为 info 级日志,
+    表示"预期内的未启用",不计入 ERROR 噪音。"""
+
+
 class BaseDataAdapter(ABC):
     """
     数据源适配器基类
@@ -56,6 +61,10 @@ class BaseDataAdapter(ABC):
             self._initialized = True
             logger.info(f"[{self.name.value}] 初始化成功")
             return True
+        except AdapterNotConfigured as e:
+            # 预期内的"未启用",降级为 info,不刷 ERROR 告警
+            logger.info(f"[{self.name.value}] 跳过: {e}")
+            return False
         except Exception as e:
             logger.error(f"[{self.name.value}] 初始化失败: {e}")
             return False
@@ -139,6 +148,41 @@ class BaseDataAdapter(ABC):
                 self._minute_start = time.time()
                 self._request_count = 1
 
+    # ----------------------------------------------------------------
+    # 可重试异常的判定 —— 关键字白名单
+    # 来源: main 分支 utils/retry.py::RETRY_KEYWORDS
+    # 设计: 只对"明确是瞬时/限流/连接类"错误重试; 其余(如参数错误)直接抛
+    # ----------------------------------------------------------------
+    _RETRY_KEYWORDS = (
+        # AKShare 中文限流提示
+        "当前系统繁忙", "系统繁忙", "请稍后再试", "服务器繁忙",
+        "访问过于频繁", "请求过于频繁", "接口异常",
+        # HTTP / 网络层(英文,匹配时走 lower())
+        "too many requests", "rate limit", "429", "503", "502",
+        "timeout", "timed out", "connection", "connectionerror",
+        "remotedisconnected", "remote end closed", "connection aborted",
+        "httperror", "readtimeout", "chunkedencodingerror",
+        # JSON 解析失败(接口返回 HTML 错误页)
+        "jsondecode", "expecting value", "invalid json",
+        # 代理/网络
+        "proxy", "socks",
+    )
+    _RETRY_CN_KEYWORDS = ("繁忙", "频繁", "稍后", "异常")
+
+    @classmethod
+    def _is_retryable_error(cls, exc: Exception) -> bool:
+        """是否为瞬时/限流/网络类可重试错误。"""
+        msg = str(exc).lower()
+        for kw in cls._RETRY_KEYWORDS:
+            if kw.lower() in msg:
+                return True
+        # AKShare 有时直接 raise ValueError('当前系统繁忙') —— 中文原文匹配
+        raw = str(exc)
+        if type(exc).__name__ in ("ValueError", "RuntimeError", "Exception"):
+            if any(k in raw for k in cls._RETRY_CN_KEYWORDS):
+                return True
+        return False
+
     def _safe_request(
         self, func: Callable, *args, max_retries: int = 2, **kwargs
     ) -> Optional[pd.DataFrame]:
@@ -146,6 +190,10 @@ class BaseDataAdapter(ABC):
         安全请求封装: 熔断 + 限流 + 重试 + 异常捕获
 
         所有子类的数据获取方法应通过此方法调用实际 API。
+
+        重试策略(2026-04-18 调整):
+          - 只对可重试错误(_is_retryable_error) 做重试
+          - 其它异常(参数错、权限错)立即记录失败并返回 None,不浪费时间等
         """
         # 1. 熔断检查
         if not self.circuit_breaker.allow_request():
@@ -182,8 +230,9 @@ class BaseDataAdapter(ABC):
             except Exception as e:
                 elapsed = time.time() - start
                 last_error = f"{type(e).__name__}: {str(e)[:200]}"
+                retryable = self._is_retryable_error(e)
 
-                if attempt < max_retries:
+                if retryable and attempt < max_retries:
                     wait = (attempt + 1) * 2  # 退避: 2s, 4s
                     logger.warning(
                         f"[{self.name.value}] 请求失败(第{attempt + 1}/{max_retries + 1}次), "
@@ -192,11 +241,17 @@ class BaseDataAdapter(ABC):
                     time.sleep(wait)
                     continue
 
+                # 不可重试 或 已达上限 → 记入熔断并返回 None
                 self.circuit_breaker.record_failure(last_error)
-                logger.error(
-                    f"[{self.name.value}] 请求最终失败 "
-                    f"(共{max_retries + 1}次, {elapsed:.2f}s): {last_error}"
-                )
+                if retryable:
+                    logger.error(
+                        f"[{self.name.value}] 请求最终失败 "
+                        f"(共{max_retries + 1}次, {elapsed:.2f}s): {last_error}"
+                    )
+                else:
+                    logger.error(
+                        f"[{self.name.value}] 请求失败(不可重试, {elapsed:.2f}s): {last_error}"
+                    )
                 return None
 
         return None

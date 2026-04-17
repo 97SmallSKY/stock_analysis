@@ -7,7 +7,7 @@ import pandas as pd
 
 from .category import DataCategory, AdapterName
 from .router import DataRouter
-from .base_adapter import BaseDataAdapter
+from .base_adapter import BaseDataAdapter, AdapterNotConfigured  # noqa: F401
 from .adapters import TuShareAdapter, AKShareAdapter, SinaAdapter, CrawlerAdapter
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,14 @@ class DataSourceManager:
                     # 初始化失败也注册，但标记为未初始化
                     # 后续可以通过重试恢复
                     self._router.register_adapter(adapter)
-                    logger.warning(f"[Manager] ⚠️ {adapter_name.value} 初始化失败，已注册但不可用")
+                    # 无 token 等"未启用"场景已在 base_adapter 层降级为 info,
+                    # Manager 这里用 info 同级,避免 WARNING 噪音
+                    if not adapter_config.get("token") and adapter_name == AdapterName.TUSHARE:
+                        logger.info(f"[Manager] ⏭️ {adapter_name.value} 未配置, 已跳过")
+                    else:
+                        logger.warning(
+                            f"[Manager] ⚠️ {adapter_name.value} 初始化失败,已注册但不可用"
+                        )
 
             except Exception as e:
                 logger.error(f"[Manager] ❌ {adapter_name.value} 创建失败: {e}")

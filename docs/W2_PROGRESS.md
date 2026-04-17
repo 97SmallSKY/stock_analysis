@@ -217,3 +217,101 @@ POSTGRES_PORT=5432
 # 用 127.0.0.1 避免 pg_hba md5/peer 差异
 ssh jd "PGPASSWORD=lhb_quant_2024 psql -h 127.0.0.1 -U lhb_admin -d lhb_quant -c '\\dt'"
 ```
+
+---
+
+## 六、2026-04-18 第二轮优化(本轮完成全部 P0/P1/P2)
+
+### 6.1 P0-1 AKShare 日K / 龙虎榜 改用国内可达源
+
+**问题**: jd 京东云到东方财富(push2his.eastmoney.com)的连接 100% `RemoteDisconnected`,导致 `stock_zh_a_hist` / `stock_lhb_detail_em` 全失败。
+
+**改动** `backend/data_gateway/adapters/akshare_adapter.py`:
+
+| 接口 | 源优先级(实测京东云可达性) | 字段完备度 |
+|---|---|---|
+| `get_daily_kline` | **新浪 `stock_zh_a_daily`** → 东财 `stock_zh_a_hist` → 腾讯 `stock_zh_a_hist_tx` | 新浪源字段最全,含 volume/turnover/outstanding_share |
+| `get_lhb_detail` | 东财 `stock_lhb_detail_em` → 新浪 `stock_lhb_detail_daily_sina` | 顺带修复 akshare 新版 API 签名(start_date/end_date) |
+
+### 6.2 P0-2 TuShare initialize ping 策略修复
+
+**问题**: TuShare 120 积分账号 `trade_cal` 需要 2000 积分,`stock_basic` 每日仅 5 次;原每次 init 都 ping 浪费配额,报 ERROR 噪音。
+
+**改动**:
+- `base_adapter.py` 新增 `AdapterNotConfigured` 异常 → init 捕获时降级为 INFO(不再 ERROR)
+- `tushare_adapter.py`:
+  - 无 token → 抛 `AdapterNotConfigured`(而非 ValueError)
+  - `skip_ping` 默认 `True`(TuShare 免费接口限额太低,不适合频繁 ping)
+  - ping 改用 `stock_basic`(120 积分可调)
+- `manager.py`:无 token 时打印 `⏭️ 未配置, 已跳过`(INFO),不再 `⚠️ 初始化失败`(WARN)
+- `router.py`:TuShare 从 `DAILY_KLINE` 优先链移除(120 积分无 pro_bar 权限)
+
+### 6.3 P1-3 stock_info 带行业字段
+
+**数据源选择**:申万宏源行业(最权威,乐咕乐股 API 免费)。
+
+**实现** `akshare_adapter.get_stock_info()`:
+1. `stock_info_a_code_name()` 拿全市场主表
+2. 遍历申万一级 31 个(`sw_index_first_info`),每个通过 `sw_index_third_cons(一级代码)` 拿成份股带行业名
+3. left-join 回主表,占位符 `—` 归一为 NaN
+4. 失败最多 3 次重试,单个一级失败不影响整体
+
+**结果**:
+- 5506 只 / 行业覆盖 3837 (70%) / 25 种申万一级
+- TOP: 机械设备 533 / 电子 479 / 基础化工 409
+- 未覆盖多为:退市/暂停上市股、部分新股、北交所非申万纳入
+
+### 6.4 P2 龙虎榜灌库
+
+**问题发现**:
+1. `ON CONFLICT DO UPDATE command cannot affect row a second time` —— 同一 `(ts_code, trade_date)` 一天多条(多上榜原因)
+2. 单天失败后 tx abort 未 rollback,污染后续全部 day
+3. 外键约束违反 —— 可转债(1xxxxx)/退市股不在 stock_info 中
+
+**改动** `backend/ingest/lhb.py`:
+- `_dedup_same_key()`:同键合并(金额求和、reason 拼接)
+- `_ensure_stock_info_skel()`:对缺失 ts_code 自动 upsert 骨架(`is_active=False`)
+- catch 异常时 `conn.rollback()`
+- 循环末尾 `conn.commit()` 防末轮丢失
+
+**验证**:2024/10/08–10/18 共 9 个交易日
+- 863 行 / 526 只股票 / 0 失败
+- TOP 净买入真实(长亮科技 6.87 亿 / 深圳华强 5.65 亿)
+- 自动补 stock_info 骨架 40 条
+
+### 6.5 P2 K 线灌库(字段完整性闭环)
+
+**改动** `backend/ingest/kline.py`:同 lhb 加批内去重 + rollback + 末轮 commit。
+
+**验证**:10 只龙头 × 50 个交易日 = 500 行
+
+| 字段 | 覆盖 |
+|---|---|
+| vol | 500/500 ✅ |
+| amount | 500/500 ✅ |
+| turnover_rate | 500/500 ✅ |
+| pct_change | 500/500 ✅ |
+
+数据样本(贵州茅台 600519.SH 2024/10/18):open 1417.62 / close 1463.19 / vol 6,861,930 股 / amount 104.18 亿 / turnover 0.55%,**与真实市场一致**。
+
+单只耗时 ~0.3-0.5s(新浪源稳定),5500 只 × 1 年 ≈ 30-45 分钟。
+
+---
+
+## 七、2026-04-18 任务状态总览
+
+| 任务 | 状态 | 备注 |
+|---|---|---|
+| P0-1 AKShare 国内可达化 | ✅ | 新浪主 + 东财/腾讯降级 |
+| P0-2 TuShare init 策略 | ✅ | skip_ping 默认 True + AdapterNotConfigured |
+| P0-3 RETRY_KEYWORDS 合并 | ✅ | 见第一轮 |
+| P0-4 startup 去代理强干预 | ✅ | 见第一轮 |
+| P1-3 stock_info 带行业 | ✅ | 5506/3837 申万一级覆盖 70% |
+| P2 龙虎榜灌库验证 | ✅ | 9 天 863 行 |
+| P2 K 线灌库字段闭环 | ✅ | 字段 100% 填充 |
+
+下一步候选(未在本轮执行):
+- 全市场 K 线 cron 灌库(建议 tmux 跑 `make ingest-kline FROM=20240101 TO=$(date +%Y%m%d)`)
+- 全市场龙虎榜历史(`make ingest-lhb FROM=20240101`)
+- `market_sentiment` 灌库验证
+- 申万 L2/L3 行业补全(离线批跑 258 次 `sw_index_third_cons(三级代码)`)

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from backend.db.session import pg_conn
 from backend.db.writer import upsert_lhb_stock_daily
 from backend.ingest.base import df_to_rows, get_manager, normalize_date
+from psycopg2.extras import execute_values
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,82 @@ def _load_trading_days(start: str, end: str) -> list[str]:
         return [r[0] for r in cur.fetchall()]
 
 
+def _ensure_stock_info_skel(conn, rows: list[dict]) -> None:
+    """龙虎榜会出现可转债 / 已退市标的, 可能不在 stock_info 中。
+    外键约束要求先存在, 因此对缺失的 ts_code 先 upsert 一条骨架(symbol/name 必填)。
+    is_active=False 标记为非普通股, 供下游过滤。
+    """
+    if not rows:
+        return
+    codes = {r.get("ts_code") for r in rows if r.get("ts_code")}
+    if not codes:
+        return
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ts_code FROM stock_info WHERE ts_code = ANY(%s)",
+            (list(codes),),
+        )
+        existed = {r[0] for r in cur.fetchall()}
+    missing = codes - existed
+    if not missing:
+        return
+
+    # 为缺失 code 拼骨架记录(从 rows 取同 code 的 name)
+    name_by_code: dict[str, str] = {}
+    for r in rows:
+        c = r.get("ts_code")
+        if c in missing and c not in name_by_code:
+            name_by_code[c] = str(r.get("name") or c)[:32]
+
+    skel_rows = []
+    for c in missing:
+        symbol = c.split(".")[0] if "." in c else c
+        exch = c.split(".")[-1] if "." in c else None
+        exchange = {"SH": "SSE", "SZ": "SZSE", "BJ": "BSE"}.get(exch)
+        skel_rows.append((
+            c, symbol, name_by_code.get(c, symbol),
+            exchange, False,  # is_active=False (非普通股 / 已退市)
+        ))
+    with conn.cursor() as cur:
+        execute_values(
+            cur,
+            "INSERT INTO stock_info (ts_code, symbol, name, exchange, is_active) "
+            "VALUES %s ON CONFLICT (ts_code) DO NOTHING",
+            skel_rows,
+            page_size=500,
+        )
+    logger.info(f"[ingest.lhb] 自动补 stock_info 骨架 {len(skel_rows)} 条")
+
+
+def _dedup_same_key(rows: list[dict]) -> list[dict]:
+    """同一 (ts_code, trade_date) 在一天内可能出现多次 (多个上榜原因)。
+    合并策略: 金额字段求和, reason 拼接, 其他字段取第一条。
+    """
+    from collections import OrderedDict
+
+    merged: "OrderedDict[tuple, dict]" = OrderedDict()
+    sum_cols = ("l_buy", "l_sell", "l_net")
+    for r in rows:
+        key = (r.get("ts_code"), r.get("trade_date"))
+        if key not in merged:
+            merged[key] = dict(r)
+            continue
+        base = merged[key]
+        for c in sum_cols:
+            v1 = base.get(c) or 0
+            v2 = r.get(c) or 0
+            try:
+                base[c] = float(v1) + float(v2)
+            except (TypeError, ValueError):
+                pass
+        # 合并 reason (去重)
+        r1 = str(base.get("reason") or "").strip()
+        r2 = str(r.get("reason") or "").strip()
+        if r2 and r2 not in r1:
+            base["reason"] = f"{r1};{r2}" if r1 else r2
+    return list(merged.values())
+
+
 def run(start: str, end: str) -> int:
     mgr = get_manager()
     days = _load_trading_days(start, end) or list(_daterange(start, end))
@@ -73,6 +150,8 @@ def run(start: str, end: str) -> int:
                     continue
                 for r in rows:
                     r["trade_date"] = normalize_date(r.get("trade_date")) or f"{d[:4]}-{d[4:6]}-{d[6:]}"
+                rows = _dedup_same_key(rows)  # 去重避免 ON CONFLICT 二次命中
+                _ensure_stock_info_skel(conn, rows)  # 补齐外键
                 n = upsert_lhb_stock_daily(conn, rows)
                 total += n
                 if idx % 20 == 0:
@@ -80,7 +159,14 @@ def run(start: str, end: str) -> int:
                     logger.info(f"[ingest.lhb] 进度 {idx}/{len(days)}  累计 {total}")
             except Exception as e:
                 fail += 1
+                # 关键: rollback 避免污染后续 day 的 tx
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.warning(f"[ingest.lhb] {d} 失败: {e}")
+
+        conn.commit()  # 最后一轮未达 20 天倍数的批次也要 flush
 
     logger.info(f"[ingest.lhb] 完成: {total} 行, 失败 {fail} 天")
     return total

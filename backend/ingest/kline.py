@@ -90,6 +90,11 @@ def run(start: str, end: str, codes: Optional[List[str]] = None) -> int:
                     r.setdefault("ts_code", code)
                     r["trade_date"] = normalize_date(r.get("trade_date"))
                 _normalize_pct(rows)
+                # 批内去重 (同 ts_code+trade_date 只保留最后一条)
+                dedup: dict = {}
+                for r in rows:
+                    dedup[(r.get("ts_code"), r.get("trade_date"))] = r
+                rows = list(dedup.values())
                 n = upsert_kline_daily(conn, rows)
                 total += n
                 if idx % 100 == 0:
@@ -97,7 +102,13 @@ def run(start: str, end: str, codes: Optional[List[str]] = None) -> int:
                     logger.info(f"[ingest.kline] 进度 {idx}/{len(codes)}  累计 {total} 行")
             except Exception as e:
                 fail += 1
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 logger.warning(f"[ingest.kline] {code} 失败: {e}")
+
+        conn.commit()  # 末轮 flush
 
     logger.info(f"[ingest.kline] 完成: 共 {total} 行, 失败 {fail} 只")
     return total

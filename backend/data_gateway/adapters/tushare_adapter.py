@@ -3,7 +3,7 @@ from typing import Optional
 
 import pandas as pd
 
-from ..base_adapter import BaseDataAdapter
+from ..base_adapter import BaseDataAdapter, AdapterNotConfigured
 from ..category import AdapterName
 
 logger = logging.getLogger(__name__)
@@ -27,32 +27,55 @@ class TuShareAdapter(BaseDataAdapter):
         self._pro = None
 
     def _do_initialize(self):
-        """初始化TuShare连接"""
+        """初始化 TuShare 连接
+
+        策略:
+          - 未配置 token → 抛 AdapterNotConfigured(父类降级为 info, 不报错)
+          - 配置了 skip_ping=True → 不做远程校验, 直接信任 token
+          - 否则用最轻量的 stock_basic 做 ping
+            (120 积分即可调;原 trade_cal 需要 2000 积分, 对小额用户不友好)
+        """
         import tushare as ts
 
         token = self.config.get("token", "")
         if not token:
-            raise ValueError("TuShare token 未配置")
+            raise AdapterNotConfigured("TuShare token 未配置")
 
         ts.set_token(token)
         self._pro = ts.pro_api()
 
-        # 验证token有效性
-        df = self._pro.trade_cal(exchange="SSE", start_date="20240101", end_date="20240102")
-        if df is None or df.empty:
-            raise ConnectionError("TuShare token 验证失败")
+        # 默认 skip_ping=True: TuShare 免费接口限额极低(stock_basic 5次/天),
+        # 每次 init 都 ping 会浪费配额。仅在显式 skip_ping=False 时才做远程校验。
+        if self.config.get("skip_ping", True):
+            logger.info(f"[TuShare] skip_ping, 跳过远程校验, token: {token[:8]}***")
+            return
 
-        logger.info(f"[TuShare] 初始化成功, token: {token[:8]}***")
+        # 轻量 ping: stock_basic (120 积分即可)
+        try:
+            df = self._pro.stock_basic(
+                exchange="", list_status="L",
+                fields="ts_code,symbol,name",
+            )
+        except Exception as e:
+            # 积分/权限问题友好提示
+            raise ConnectionError(f"TuShare ping 失败(stock_basic): {e}") from e
+
+        if df is None or df.empty:
+            raise ConnectionError("TuShare ping 返回空(stock_basic)")
+
+        logger.info(
+            f"[TuShare] 初始化成功, token: {token[:8]}***, "
+            f"stock_basic 返回 {len(df)} 行"
+        )
 
     def health_check(self) -> bool:
-        """健康检查"""
+        """健康检查(stock_basic 最轻量, 120 积分即可)"""
         try:
             if self._pro is None:
                 return False
-            df = self._pro.trade_cal(
-                exchange="SSE",
-                start_date="20240101",
-                end_date="20240102"
+            df = self._pro.stock_basic(
+                exchange="", list_status="L",
+                fields="ts_code,name",
             )
             return df is not None and not df.empty
         except Exception:

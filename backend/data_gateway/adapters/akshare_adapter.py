@@ -51,48 +51,116 @@ class AKShareAdapter(BaseDataAdapter):
     def get_daily_kline(
             self, ts_code: str, start_date: str, end_date: str
     ) -> Optional[pd.DataFrame]:
-        """获取日K线"""
+        """获取日K线
+
+        源优先级(在京东云国内机房实测可用性):
+          主源: 新浪 stock_zh_a_daily (字段最全, 含 volume/turnover/outstanding_share)
+          降级1: 东财 stock_zh_a_hist (字段全, 但网络抖动时 RemoteDisconnected)
+          降级2: 腾讯 stock_zh_a_hist_tx (只有 OHLC+amount, 补算 pct_change)
+        """
 
         def _fetch():
             import akshare as ak
 
-            # ts_code转换: 000001.SZ → sz000001 / 600000.SH → sh600000
-            symbol = self._convert_code(ts_code)
+            symbol = self._convert_code(ts_code)  # sz000001
+            pure_symbol = symbol.replace("sz", "").replace("sh", "")
+            start_dash = f"{start_date[:4]}-{start_date[4:6]}-{start_date[6:]}"
+            end_dash = f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}"
 
-            df = ak.stock_zh_a_hist(
-                symbol=symbol.replace("sz", "").replace("sh", ""),
-                period="daily",
-                start_date=start_date[:4] + "-" + start_date[4:6] + "-" + start_date[6:],
-                end_date=end_date[:4] + "-" + end_date[4:6] + "-" + end_date[6:],
-                adjust="qfq"  # 前复权
-            )
+            # ---------- 主源: 新浪 ----------
+            df = None
+            try:
+                df = ak.stock_zh_a_daily(
+                    symbol=symbol,
+                    start_date=start_dash,
+                    end_date=end_dash,
+                    adjust="qfq",
+                )
+            except Exception as e:
+                logger.warning(f"[AKShare] 新浪日K失败, 尝试东财: {e}")
+                df = None
+
+            if df is not None and not df.empty:
+                df = df.rename(columns={
+                    "date": "trade_date",
+                    "volume": "vol",
+                    "turnover": "turnover_rate",
+                })
+                df["ts_code"] = ts_code
+                df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
+                if "close" in df.columns:
+                    df = df.sort_values("trade_date").reset_index(drop=True)
+                    df["pre_close"] = df["close"].shift(1)
+                    df["pct_change"] = (df["close"] - df["pre_close"]) / df["pre_close"]
+                    df["price_change"] = df["close"] - df["pre_close"]
+                for col in ["amplitude"]:
+                    if col not in df.columns:
+                        df[col] = None
+                return df
+
+            # ---------- 降级1: 东财 ----------
+            logger.info(f"[AKShare] 新浪无数据, 走东财: {ts_code}")
+            df = None
+            try:
+                df = ak.stock_zh_a_hist(
+                    symbol=pure_symbol,
+                    period="daily",
+                    start_date=start_dash,
+                    end_date=end_dash,
+                    adjust="qfq",
+                )
+            except Exception as e:
+                logger.warning(f"[AKShare] 东财日K失败, 尝试腾讯: {e}")
+                df = None
+
+            if df is not None and not df.empty:
+                df = df.rename(columns={
+                    "日期": "trade_date",
+                    "开盘": "open",
+                    "收盘": "close",
+                    "最高": "high",
+                    "最低": "low",
+                    "成交量": "vol",
+                    "成交额": "amount",
+                    "振幅": "amplitude",
+                    "涨跌幅": "pct_change",
+                    "涨跌额": "price_change",
+                    "换手率": "turnover_rate",
+                })
+                df["ts_code"] = ts_code
+                df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
+                for col in ["pct_change", "turnover_rate", "amplitude"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce") / 100.0
+                return df
+
+            # ---------- 降级2: 腾讯 ----------
+            logger.info(f"[AKShare] 东财也无数据, 走腾讯: {ts_code}")
+            df = None
+            try:
+                df = ak.stock_zh_a_hist_tx(
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust="qfq",
+                )
+            except Exception as e:
+                logger.warning(f"[AKShare] 腾讯日K也失败: {e}")
 
             if df is None or df.empty:
                 return None
-
-            # 统一列名
-            df = df.rename(columns={
-                "日期": "trade_date",
-                "开盘": "open",
-                "收盘": "close",
-                "最高": "high",
-                "最低": "low",
-                "成交量": "vol",
-                "成交额": "amount",
-                "振幅": "amplitude",
-                "涨跌幅": "pct_change",
-                "涨跌额": "price_change",
-                "换手率": "turnover_rate",
-            })
-
+            # 腾讯源列: date, open, close, high, low, amount
+            df = df.rename(columns={"date": "trade_date"})
             df["ts_code"] = ts_code
             df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.strftime("%Y%m%d")
-
-            # 百分比转小数
-            for col in ["pct_change", "turnover_rate", "amplitude"]:
-                if col in df.columns:
-                    df[col] = df[col] / 100.0
-
+            if "close" in df.columns:
+                df = df.sort_values("trade_date").reset_index(drop=True)
+                df["pre_close"] = df["close"].shift(1)
+                df["pct_change"] = (df["close"] - df["pre_close"]) / df["pre_close"]
+                df["price_change"] = df["close"] - df["pre_close"]
+            for col in ["vol", "turnover_rate", "amplitude"]:
+                if col not in df.columns:
+                    df[col] = None
             return df
 
         return self._safe_request(_fetch)
@@ -105,6 +173,9 @@ class AKShareAdapter(BaseDataAdapter):
         """
         获取龙虎榜每日明细
 
+        主源: 东财 stock_lhb_detail_em (字段全)
+        降级: 新浪 stock_lhb_detail_daily_sina (字段少, 做契约化映射)
+
         Args:
             trade_date: 日期, 如 "20240115"
         """
@@ -112,50 +183,71 @@ class AKShareAdapter(BaseDataAdapter):
         def _fetch():
             import akshare as ak
 
-            # 格式化日期: 20240115 → 2024-01-15
-            date_fmt = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:]}"
+            # ---------- 主源: 东财 (API 签名: start_date/end_date, YYYYMMDD) ----------
+            df = None
+            try:
+                df = ak.stock_lhb_detail_em(
+                    start_date=trade_date, end_date=trade_date
+                )
+            except Exception as e:
+                logger.warning(f"[AKShare] 东财龙虎榜失败, 尝试新浪源: {e}")
+                df = None
 
-            df = ak.stock_lhb_detail_em(date=date_fmt)
+            if df is not None and not df.empty:
+                df = df.rename(columns={
+                    "代码": "ts_code",
+                    "名称": "name",
+                    "收盘价": "close_price",
+                    "涨跌幅": "pct_change",
+                    "龙虎榜净买额": "l_net",
+                    "龙虎榜买入额": "l_buy",
+                    "龙虎榜卖出额": "l_sell",
+                    "龙虎榜成交额": "l_amount",
+                    "市场总成交额": "amount",
+                    "净买额占总成交比": "net_pct",
+                    "成交额占总成交比": "amount_pct",
+                    "换手率": "turnover_rate",
+                    "流通市值": "float_market_cap",
+                    "上榜原因": "reason",
+                })
+                df["trade_date"] = trade_date
+                if "ts_code" in df.columns:
+                    df["ts_code"] = df["ts_code"].apply(self._to_ts_code)
+                for col in ["pct_change", "turnover_rate", "net_pct", "amount_pct"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce") / 100.0
+                for col in ["l_net", "l_buy", "l_sell", "l_amount", "amount", "float_market_cap"]:
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                return df
 
+            # ---------- 降级: 新浪 ----------
+            logger.info(f"[AKShare] 东财龙虎榜无数据, 走新浪源: {trade_date}")
+            df = ak.stock_lhb_detail_daily_sina(date=trade_date)
             if df is None or df.empty:
                 return None
 
-            # 统一列名
+            # 新浪列: 序号 股票代码 股票名称 收盘价 对应值 成交量 成交额 指标
             df = df.rename(columns={
-                "代码": "ts_code",
-                # backend/data_gateway/adapters/akshare_adapter.py (续)
-
-                "名称": "name",
+                "股票代码": "ts_code",
+                "股票名称": "name",
                 "收盘价": "close_price",
-                "涨跌幅": "pct_change",
-                "龙虎榜净买额": "l_net",
-                "龙虎榜买入额": "l_buy",
-                "龙虎榜卖出额": "l_sell",
-                "龙虎榜成交额": "l_amount",
-                "市场总成交额": "amount",
-                "净买额占总成交比": "net_pct",
-                "成交额占总成交比": "amount_pct",
-                "换手率": "turnover_rate",
-                "流通市值": "float_market_cap",
-                "上榜原因": "reason",
+                "成交量": "vol",
+                "成交额": "l_amount",
+                "指标": "reason",
             })
-
             df["trade_date"] = trade_date
-
-            # 股票代码标准化: 000001 → 000001.SZ
             if "ts_code" in df.columns:
-                df["ts_code"] = df["ts_code"].apply(self._to_ts_code)
-
-            # 百分比转小数
-            for col in ["pct_change", "turnover_rate", "net_pct", "amount_pct"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce") / 100.0
-
-            # 金额单位统一为万
-            for col in ["l_net", "l_buy", "l_sell", "l_amount", "amount", "float_market_cap"]:
+                df["ts_code"] = df["ts_code"].astype(str).apply(self._to_ts_code)
+            # 新浪源缺失字段置空, 保证下游契约稳定
+            for col in ["pct_change", "l_net", "l_buy", "l_sell",
+                        "amount", "net_pct", "amount_pct",
+                        "turnover_rate", "float_market_cap"]:
+                if col not in df.columns:
+                    df[col] = None
+            for col in ["close_price", "l_amount", "vol"]:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce")
-
             return df
 
         return self._safe_request(_fetch)
@@ -345,26 +437,97 @@ class AKShareAdapter(BaseDataAdapter):
     # ================================================================
 
     def get_stock_info(self) -> Optional[pd.DataFrame]:
-        """获取股票基础信息列表"""
+        """获取股票基础信息列表(含申万一级行业)。
+
+        主表: stock_info_a_code_name (代码+名称, ~5500 只)
+        行业映射: 遍历申万一级 (~31 个) -> sw_index_third_cons(一级代码)
+                 返回的成份股带申万一级行业名, L2/L3 在此调法下会返回占位符 '—'
+                 (已归一为 None, 如需 L2/L3 需按三级代码逐个遍历, 成本更高)
+        任一步失败都降级为 '无行业字段' 主表, 保证主流程不中断。
+        """
 
         def _fetch():
             import akshare as ak
 
-            df = ak.stock_info_a_code_name()
-
-            if df is None or df.empty:
+            base = ak.stock_info_a_code_name()
+            if base is None or base.empty:
                 return None
+            base = base.rename(columns={"code": "symbol", "name": "name"})
+            base["ts_code"] = base["symbol"].apply(self._to_ts_code)
+            base["is_active"] = True
 
-            df = df.rename(columns={
-                "code": "symbol",
-                "name": "name",
-            })
-            df["ts_code"] = df["symbol"].apply(self._to_ts_code)
-            df["is_active"] = True
+            industry_df = self._fetch_sw_industry_map()
 
-            return df
+            if industry_df is not None and not industry_df.empty:
+                merged = base.merge(industry_df, on="ts_code", how="left")
+                merged["industry"] = merged.get("industry_l1")
+                covered = int(merged["industry_l1"].notna().sum())
+                logger.info(
+                    f"[AKShare] stock_info 行业覆盖: {covered}/{len(merged)}"
+                )
+                return merged
+
+            for col in ("industry_l1", "industry_l2", "industry_l3", "industry"):
+                base[col] = None
+            return base
 
         return self._safe_request(_fetch)
+
+    def _fetch_sw_industry_map(self) -> Optional[pd.DataFrame]:
+        """遍历申万一级, 返回 [ts_code, industry_l1, industry_l2, industry_l3] 映射。"""
+        import akshare as ak
+
+        try:
+            sw1 = ak.sw_index_first_info()
+        except Exception as e:
+            logger.warning(f"[AKShare] sw_index_first_info 失败: {e}")
+            return None
+        if sw1 is None or sw1.empty or "行业代码" not in sw1.columns:
+            return None
+
+        import time
+
+        rows: List[pd.DataFrame] = []
+        failed: List[str] = []
+        for sw1_code in sw1["行业代码"].tolist():
+            cons = None
+            for attempt in range(3):
+                try:
+                    cons = ak.sw_index_third_cons(symbol=sw1_code)
+                    if cons is not None and not cons.empty:
+                        break
+                except Exception as e:
+                    logger.debug(
+                        f"[AKShare] 申万一级 {sw1_code} 第{attempt+1}次失败: {e}"
+                    )
+                time.sleep(1.0)
+            if cons is None or cons.empty or "股票代码" not in cons.columns:
+                failed.append(sw1_code)
+                continue
+            keep = [c for c in ["股票代码", "申万1级", "申万2级", "申万3级"] if c in cons.columns]
+            rows.append(cons[keep])
+
+        if failed:
+            logger.warning(
+                f"[AKShare] 申万行业拉取 {len(failed)} 个一级重试后仍失败: {failed[:5]}..."
+            )
+
+        if not rows:
+            return None
+
+        industry_df = pd.concat(rows, ignore_index=True).rename(columns={
+            "股票代码": "ts_code",
+            "申万1级": "industry_l1",
+            "申万2级": "industry_l2",
+            "申万3级": "industry_l3",
+        })
+        # 占位符 '—' 归一为 NaN, 方便下游判空
+        for col in ("industry_l1", "industry_l2", "industry_l3"):
+            if col in industry_df.columns:
+                industry_df[col] = industry_df[col].replace(
+                    {"—": None, "-": None, "": None}
+                )
+        return industry_df.drop_duplicates(subset=["ts_code"], keep="first")
 
     # ================================================================
     # 交易日历
