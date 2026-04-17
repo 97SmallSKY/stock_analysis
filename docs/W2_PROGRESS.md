@@ -1,8 +1,9 @@
 # W2 Data Ingestion — 进度与下一步
 
-> 更新日期: 2026-04-18
-> 状态: **Step A 完成 / Step B 部分完成 / 发现 1 个架构级阻塞**
+> 更新日期: 2026-04-18(补充 main 分支对比)
+> 状态: **Step A 完成 / Step B 部分完成 / 发现 1 个架构级阻塞 / 已对比 main 分支实现**
 > 上游计划: [docs/NEXT_STEPS.md](./NEXT_STEPS.md)
+> main 对比本地路径: `/Users/xiaotian/Develop/personal/stock_analysis_main/stock_analysis`
 
 ---
 
@@ -51,14 +52,14 @@
 
 ### 现象
 
-在 jd 上调用 **东方财富** 任何 API(`push2his.eastmoney.com/api/qt/stock/kline/get` 等):
+在 jd 上调用 **东方财富** K 线 API(`push2his.eastmoney.com/api/qt/stock/kline/get`):
 
 ```
 ConnectionError: ('Connection aborted.',
     RemoteDisconnected('Remote end closed connection without response'))
 ```
 
-### 排查过程
+### 排查过程(阶段一:应用层)
 
 | 试验 | 结果 |
 |---|---|
@@ -70,67 +71,115 @@ ConnectionError: ('Connection aborted.',
 | 测同主机 `http://quote.eastmoney.com` | **200 OK** |
 | 测 `https://push2his.eastmoney.com`(无 path) | 404(至少连上) |
 
-### 根因判定
+### 对比 main 分支实现(关键线索)
 
-**京东云公网 IP 被东方财富在 API 层面加入黑名单**,TCP 层直接 RST,不是 UA / TLS 指纹 / 频率限制问题。
-代理不可用(jd 配的是 SG 出海代理,反而会把国内站劫持掉)。
+> 本地已 clone `main` 分支到 `/Users/xiaotian/Develop/personal/stock_analysis_main/stock_analysis` 做对比。
 
-### 可用替代源
+main 分支的数据采集代码(`modules/data_fetcher.py` / `utils/retry.py`)清楚记录:
 
-AKShare 的**腾讯股票接口可用**:
+> 代理环境说明(京东云 VPS):
+> - VPS 配置了全局代理:HTTP_PROXY/HTTPS_PROXY=http://127.0.0.1:10809(新加坡中转)
+> - AKShare 内部通过 requests 发请求,**默认会走系统代理**
+> - 测试表明:**通过代理访问新浪/东财行情接口均 < 0.5s**
 
-```python
-ak.stock_zh_a_hist_tx(symbol="sz000001", start_date="20240102", end_date="20240108", adjust="")
-```
+**main 分支从未清代理**,启动脚本 `start.sh` / `scripts/start_stock.sh` 均无任何 `unset HTTP_PROXY` 操作。
+换言之:当时 main 分支之所以能采集东财数据,**是因为 jd 的 xray 代理能把出站转到 SG 再回源东财**。
 
-返回字段: `date / open / close / high / low / amount`
-**缺的字段**: `volume / pre_close / pct_change / turnover_rate / pe_ttm / pb / total_mv / circ_mv`
+### 排查过程(阶段二:网络层)
 
-缺的里面:`pct_change` 可从 `close / prev_close` 计算出来;`volume` 可从 amount 反推不出,需要另找源;换手率/PE/PB 这些需要 TuShare 或其它接口补。
+| 试验(在 jd 上用 curl) | 结果 |
+|---|---|
+| `curl -x http://127.0.0.1:10809 https://push2his.eastmoney.com/...` | http=000 time=1.08s → **代理本身现在也出海失败** |
+| `curl --noproxy * https://push2his.eastmoney.com/...` | `(52) Empty reply from server` → **jd IP 直连被东财 RST** |
+| `curl --noproxy * https://proxy.finance.qq.com/...`(腾讯) | **http=200 time=128ms** ✅ |
+| `curl --noproxy * -H 'Referer: https://finance.sina.com.cn' https://hq.sinajs.cn/list=sh600519` | **http=200 time=129ms** ✅ |
+| `curl --noproxy * https://quotes.money.163.com/service/chddata.html?...`(网易) | 502 ❌ |
+| `ps aux | grep xray` | xray 仍在运行,10809/10808 端口都在监听 |
+
+### 根因最终判定
+
+1. **京东云公网 IP 直连东财 API 会被 RST**(TCP 层黑名单)
+2. **jd 的 xray 代理出口现在也不可达东财**(订阅/出海链路问题,不是我们项目能修的)
+3. **main 分支之前能采集成功,是因为那时 xray 代理出海链路还通**
+4. 我们当前分支在 `backend/core/startup.py` 主动清代理,**不是导致问题的原因**(即使不清,现在也挂);但也不应再强行设 `NO_PROXY=*`,失去代理逻辑的灵活性
+
+### 可用替代源(实测)
+
+| 源 | 接口 | 字段 | 可用性 |
+|---|---|---|---|
+| 腾讯财经 | `ak.stock_zh_a_hist_tx(sz000001, ...)` | date / open / close / high / low / amount | ✅ **稳定** |
+| 新浪财经(日 K) | `ak.stock_zh_a_daily(sh000001, ...)` | AKShare 内部解析 bug (pandas Length mismatch) | ⚠️ 暂不可用 |
+| 新浪行情 HTTP | `https://hq.sinajs.cn/list=sh600519` | 实时行情 9 字段 | ✅(main 分支已在用) |
+| 东财 `push2his.eastmoney.com` | K 线 / 龙虎榜 | 完整 | ❌ 直连 RST, 代理出海也挂 |
+
+**腾讯接口字段缺口**: `volume / pre_close / pct_change / turnover_rate / pe_ttm / pb / total_mv / circ_mv`
+- `pct_change` 可由 `close / prev_close - 1` 计算
+- `pre_close` 可取相邻行的 close 填补
+- `volume`、换手率、PE/PB 需另找源;部分需 TuShare 升级到 2000 积分
 
 ---
 
-## 三、已知 Issue 清单
+## 三、已知 Issue 清单(更新)
 
 | 优先级 | # | 问题 | 影响 | 处理建议 |
 |---|---|---|---|---|
-| 🔴 P0 | 1 | **京东云 IP 被东财 API 黑名单** | AKShare 日 K / 龙虎榜等核心品类都挂 | 改 `akshare_adapter.get_daily_kline` 使用 `stock_zh_a_hist_tx`(腾讯)作主源,东财作降级;龙虎榜同理评估 |
-| 🔴 P0 | 2 | **TuShare 120 积分 adapter initialize 被拒绝** | K 线不能走主源 | 改 `tushare_adapter.initialize()`:要么不做 ping,要么 ping 一个 120 积分能用的接口 |
-| 🟡 P1 | 3 | `stock_info` 行业/市场/上市日期缺失 | 按行业选股不能做 | 换 `ak.stock_info_sh_name_code` + `ak.stock_info_sz_name_code`(带行业) |
-| 🟡 P1 | 4 | Sina 日 K 缺 `vol/amount/turnover_rate/pe_ttm` | 回测/评分数据不全 | P0-1 解决后自然好 |
-| 🟢 P2 | 5 | 尚未跑 `ingest-lhb` / `ingest-sentiment` / 全市场 K 线 | W2 未端到端 | P0 解决后按序跑 |
+| 🔴 P0 | 1 | **东财 API 不可达**(直连黑名单 + 代理出海挂) | AKShare 日 K / 龙虎榜主接口失效 | (a)改 `akshare_adapter.get_daily_kline` 使用腾讯 `stock_zh_a_hist_tx` 作主源,东财作降级;(b)龙虎榜改用新浪源 `ak.stock_lhb_detail_daily_sina` / `ak.stock_lhb_jgmx_sina`(main 分支已在用,国内直连可达) |
+| 🔴 P0 | 2 | **TuShare 120 积分 adapter initialize 被拒绝** | K 线不能走主源 | 改 `tushare_adapter.initialize()`:要么不做 ping,要么 ping `pro.daily(...)` 这类 120 积分可用接口 |
+| 🟡 P1 | 3 | `stock_info` 行业/市场/上市日期缺失 | 按行业选股不能做 | 换 `ak.stock_info_sh_name_code` + `ak.stock_info_sz_name_code`(带行业);参考 main 分支 `modules/market_data.py` |
+| 🟡 P1 | 4 | 腾讯日 K 缺 `volume/turnover_rate/pe_ttm/pb` | 回测/评分数据不全 | TuShare 升级后从 TuShare 补;或用 `ak.stock_individual_info_em` 取估值(需验证可达) |
+| 🟡 P1 | 5 | `backend/core/startup.py` 强制 `NO_PROXY=*` | 丢失代理使用灵活性 | 改成**不主动清代理,不设 NO_PROXY**,由系统环境决定;对特定接口在 adapter 内部用 `trust_env=False` 做精细控制 |
+| 🟢 P2 | 6 | 尚未跑 `ingest-lhb` / `ingest-sentiment` / 全市场 K 线 | W2 未端到端 | P0 解决后按序跑 |
+
+## 三 (B)、main 分支关键经验(要借鉴)
+
+基于 `/Users/xiaotian/Develop/personal/stock_analysis_main/stock_analysis` 的对比:
+
+1. **`utils/retry.py::safe_akshare_call`** — 带指数退避重试 + 关键字白名单(含中文"系统繁忙"、"RemoteDisconnected"、"ConnectionError")+ fallback。当前 `backend/data_gateway/base_adapter.py::_safe_request` 有类似机制,但关键字覆盖不全,**建议合并 main 的 RETRY_KEYWORDS**。
+2. **`utils/retry.py::fetch_sina_quote`** — 新浪实时行情的"代理感知双路保障":先走系统代理,失败再直连 `urllib.request.ProxyHandler({})`。当前 `sina_adapter.py` 未做双路,**可作为 W4+ 实时行情参考**。
+3. **龙虎榜新浪优先** — main 分支 `modules/data_fetcher.py` 龙虎榜主源是 `ak.stock_lhb_detail_daily_sina`,东财 `stock_lhb_detail_em` 是次源。**应更新 `backend/data_gateway/router.py::DEFAULT_PRIORITY_CHAINS` 的 LHB_DETAIL 顺序**,让 Sina 优先。
+4. **不清代理** — main 分支几年稳定运行,启动脚本里从未清过代理。佐证了"在 jd 让代理默认工作"是比"主动清代理"更稳的做法。
 
 ---
 
-## 四、下一步执行计划
+## 四、下一步执行计划(按对比后调整)
 
-按优先级 **P0 → P1 → P2**:
+按优先级 **P0 → P1 → P2**,每一项都尽量有 main 分支的成功实现作参照:
 
-### P0-1 改 akshare_adapter 使用腾讯日 K 主源
-- 修改 `get_daily_kline`:优先调 `stock_zh_a_hist_tx`,失败回退到东财 `stock_zh_a_hist`
-- 补 `pct_change` 计算:按日 `close / prev_close - 1`
-- 补 `pre_close` 字段(等于上一行 close)
-- 加对应单测(mock 腾讯接口返回)
+### P0-1 改 akshare_adapter 的数据源选择
+- **日 K 线 `get_daily_kline`**:
+  - 主源改 `ak.stock_zh_a_hist_tx`(腾讯,国内直连)
+  - 降级 1:`ak.stock_zh_a_hist`(东财,当前不可达但未来代理恢复可再用)
+  - 降级 2:Sina(已实现)
+  - 统一输出字段:`date / open / high / low / close / amount`,补算 `pre_close` / `pct_change`
+- **龙虎榜 `get_lhb_detail`**:
+  - 主源改 `ak.stock_lhb_detail_daily_sina`(main 分支在用,稳)
+  - 降级:东财 `ak.stock_lhb_detail_em`
+  - 同步调整 `backend/data_gateway/router.py::DEFAULT_PRIORITY_CHAINS[LHB_DETAIL]`
+- 加单测(mock 腾讯/新浪接口返回)
 
 ### P0-2 修 TuShare initialize ping
 - 读 `tushare_adapter.py::initialize()`,看目前 ping 哪个接口
-- 改用 `pro.daily(ts_code='000001.SZ', start_date='20240102', end_date='20240102', limit=1)` 之类 120 积分可用的接口
+- 改用 `pro.daily(ts_code='000001.SZ', start_date='20240102', end_date='20240102', limit=1)` 之类 120 积分可用接口
 - 或:直接去掉 ping,initialize 只 set_token,首次调用失败再标记不可用
 
-### P1-3 stock_info 补字段
-- 改 `akshare_adapter.get_stock_info` 为:
-  ```python
-  sh = ak.stock_info_sh_name_code()
-  sz = ak.stock_info_sz_name_code()
-  # 合并,补 market/list_date,行业先留空(两个接口也没行业)
-  ```
-- 行业字段可能需另外调 `ak.stock_board_industry_cons_em`,本期可先放一个 TODO
+### P0-3 合并 main 的 retry 关键字白名单
+- 把 `utils/retry.py::RETRY_KEYWORDS` 的中文限流词、网络错误词合并到 `backend/data_gateway/base_adapter.py::_safe_request` 的可重试判定
+- 保证"RemoteDisconnected / 当前系统繁忙 / ReadTimeout"都会触发重试,而不是立即往上抛
 
-### P2-4 跑 ingest-lhb + 扩大 kline
+### P0-4 去掉 `backend/core/startup.py` 对代理的强干预
+- 不再 `os.environ.pop(HTTP_PROXY)`,不再 `NO_PROXY=*`
+- 把日志/启动部分保留
+- 让代理由系统环境决定(jd 默认走 xray,本地默认无代理)
+
+### P1-5 stock_info 补字段
+- 改 `akshare_adapter.get_stock_info`:合并 `ak.stock_info_sh_name_code()` + `ak.stock_info_sz_name_code()`,获取 `market / list_date`
+- 行业字段若接口无,留 TODO;后续用 `ak.stock_board_industry_cons_em` 反查
+
+### P2-6 端到端灌库
 - P0 搞定后:
-  - `make ingest-lhb FROM=20240101`(先 1 年)
+  - `make ingest-lhb FROM=20240101`(先 1 年,新浪源)
   - `make ingest-kline FROM=20240101 TO=<today>`(2024 年全市场,验证稳定性)
-  - 再决定是否进入 `FROM=20200101` 的全量(tmux 里跑)
+  - 再决定是否 `FROM=20200101` 全量(tmux 跑)
 
 ---
 
