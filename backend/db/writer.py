@@ -23,11 +23,14 @@ def _bulk_upsert(
     conflict_cols: Sequence[str],
     update_cols: Sequence[str] | None = None,
     batch_size: int = 1000,
+    coalesce_cols: Sequence[str] | None = None,
 ) -> int:
     """通用 upsert。
 
     rows: list of dict; 缺失列写 NULL。
     update_cols: ON CONFLICT 时要覆盖的列；None → 不覆盖（DO NOTHING）。
+    coalesce_cols: 这些列用 COALESCE(EXCLUDED.c, table.c),
+      即新值为 NULL 时保留旧值。常用于"多轮增量补字段"场景。
     """
     rows = list(rows)
     if not rows:
@@ -35,8 +38,15 @@ def _bulk_upsert(
 
     col_list = ",".join(columns)
     conflict = ",".join(conflict_cols)
+    coalesce_set = set(coalesce_cols or [])
     if update_cols:
-        set_clause = ",".join(f"{c}=EXCLUDED.{c}" for c in update_cols)
+        parts = []
+        for c in update_cols:
+            if c in coalesce_set:
+                parts.append(f"{c}=COALESCE(EXCLUDED.{c}, {table}.{c})")
+            else:
+                parts.append(f"{c}=EXCLUDED.{c}")
+        set_clause = ",".join(parts)
         on_conflict = f"ON CONFLICT ({conflict}) DO UPDATE SET {set_clause}"
     else:
         on_conflict = f"ON CONFLICT ({conflict}) DO NOTHING"
@@ -60,7 +70,14 @@ def upsert_stock_info(conn, rows):
     cols = ["ts_code", "symbol", "name", "area", "industry", "market",
             "list_date", "delist_date", "is_hs", "exchange", "is_active"]
     update = [c for c in cols if c not in ("ts_code",)]
-    return _bulk_upsert(conn, "stock_info", cols, rows, ["ts_code"], update)
+    # industry/area/market/list_date/delist_date/is_hs/exchange 等用 COALESCE
+    # 保留旧值, 避免多轮拉取时新值缺失覆盖掉已有行业
+    coalesce = ["industry", "area", "market", "list_date",
+                "delist_date", "is_hs", "exchange"]
+    return _bulk_upsert(
+        conn, "stock_info", cols, rows, ["ts_code"], update,
+        coalesce_cols=coalesce,
+    )
 
 
 def upsert_trade_calendar(conn, rows):
@@ -102,8 +119,10 @@ def upsert_market_sentiment(conn, rows):
             "sentiment_score", "sentiment_level"]
     dates = sorted({r["trade_date"] for r in rows})
     with conn.cursor() as cur:
+        # 显式 cast, 避免 trade_date(DATE) 与 text[] 类型不匹配
         cur.execute(
-            "DELETE FROM market_sentiment WHERE trade_date = ANY(%s)", (dates,)
+            "DELETE FROM market_sentiment WHERE trade_date = ANY(%s::date[])",
+            (dates,),
         )
     col_list = ",".join(cols)
     sql = f"INSERT INTO market_sentiment ({col_list}) VALUES %s"

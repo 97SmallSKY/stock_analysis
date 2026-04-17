@@ -315,3 +315,77 @@ ssh jd "PGPASSWORD=lhb_quant_2024 psql -h 127.0.0.1 -U lhb_admin -d lhb_quant -c
 - 全市场龙虎榜历史(`make ingest-lhb FROM=20240101`)
 - `market_sentiment` 灌库验证
 - 申万 L2/L3 行业补全(离线批跑 258 次 `sw_index_third_cons(三级代码)`)
+
+---
+
+## 八、已知外部源问题 → 详见独立手册
+
+外部源可达性、curl 复现、缓解策略已集中到独立文档:
+
+📄 [docs/EXTERNAL_SOURCES_ISSUES.md](./EXTERNAL_SOURCES_ISSUES.md)
+
+涵盖:
+- 东方财富 push2his/push2/push2ex 全线不通(京东云)
+- 乐咕乐股申万成份反爬 `No tables found`
+- TuShare 120 积分权限受限
+- `get_market_sentiment` 历史空洞 & DB 反算方案
+- `market_sentiment` DELETE 类型不匹配(已修复)
+
+发现新问题请直接在该手册最后一节"新增:<日期>"下追加条目。
+
+---
+
+## 九、2026-04-18 第三轮成果(sentiment + 全年龙虎榜)
+
+### 9.1 P1 sentiment 从 kline_daily 反算
+
+`ingest/sentiment.py`:
+- `_calc_from_kline()` 当外部 adapter 返回空壳(limit_up/limit_down/ratio/avg 全 NULL)时,自动从本地 `kline_daily` 反算
+- **零外网依赖**,历史全日期可用,与 K 线同一口径
+
+**验证**(2024/10/08-18,仅 10 只龙头有 kline):
+
+| 日期 | limit_up | up_down_ratio | avg_pct | score | level |
+|---|---|---|---|---|---|
+| 10/08(十一后首日) | 3 | 9.0 | +8.7% | 100 | HOT ✅ |
+| 10/09(集体杀跌) | 1(+3 跌停) | 0.25 | -5.2% | 2.6 | COLD ✅ |
+| 10/18 | 2 | 9.0 | +5.7% | 100 | HOT ✅ |
+
+口径合理。全市场 kline 灌库后 score 将自动转为全市场口径。
+
+### 9.2 P1 stock_info industry 覆盖率优化
+
+`db/writer.py · _bulk_upsert()`:新增 `coalesce_cols` 参数,对指定列使用 `COALESCE(EXCLUDED.c, table.c)`,
+即"新值为 NULL 时保留旧值"。
+
+`upsert_stock_info()` 对 `industry / area / market / list_date / delist_date / is_hs / exchange` 启用该策略。
+
+**效果**:4 轮累积拉取,行业覆盖率 **70% → 94% (5192/5546)**,31 种申万一级。
+
+### 9.3 P2 全年龙虎榜灌库
+
+```bash
+make ingest-lhb FROM=20240101 TO=20241231
+```
+
+**结果**:
+- 18111 行 / 242 个交易日 / 3534 只股票 / **0 失败**
+- 自动补 stock_info 骨架 283 条(可转债/退市股)
+- 耗时 ~4 分钟
+
+### 9.4 本轮任务完成状态
+
+| 任务 | 状态 |
+|---|---|
+| P2 sentiment 灌库验证(外部源空壳) | ✅ 暴露问题 → 记入手册 |
+| P1 sentiment DB 反算 | ✅ 9/9 天反算成功 |
+| P1 stock_info industry 94% 覆盖 | ✅ COALESCE 多轮累积 |
+| P2 全年龙虎榜灌库 | ✅ 18111 行 0 失败 |
+| 外部源问题文档化 | ✅ docs/EXTERNAL_SOURCES_ISSUES.md |
+
+### 9.5 下一轮优先级建议
+
+1. **P2 全市场 K 线灌库**(tmux 跑): `make ingest-kline FROM=20240101 TO=20241231 CODES=all` —— 建议 30-90 分钟
+2. 完成后重跑全年 `ingest-sentiment`,score 转为全市场口径
+3. 申万 L2/L3 行业补全(离线批跑 258 次 `sw_index_third_cons(三级代码)`)
+4. ingest-kline / ingest-lhb 的**增量模式**(只拉最近 1 天,cron 定时)
