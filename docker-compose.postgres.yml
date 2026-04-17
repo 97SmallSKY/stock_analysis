@@ -1,64 +1,31 @@
-# ============================================================
 # docker-compose.postgres.yml
-#
 # 龙虎榜量化系统 - PostgreSQL + pgAdmin
-# 服务器: CentOS 8.2 | 2核 4GB | SSD
-#
-# 使用:
-#   cp .env.example .env        # 修改密码
-#   bash setup.sh               # 创建目录和配置文件
-#   docker-compose -f docker-compose.postgres.yml up -d
-#
-# 访问:
-#   PostgreSQL: localhost:5432
-#   pgAdmin:    http://<服务器IP>:5050
-# ============================================================
-
-version: "3.9"
+# 服务器: CentOS 8.2 | 2核4G
 
 services:
-  # ============================================================
-  # PostgreSQL 15
-  # ============================================================
   postgres:
     image: postgres:15-alpine
     container_name: lhb-postgres
     restart: unless-stopped
-
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-lhb_admin}
+      POSTGRES_USER: lhb_admin
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lhb_quant_2024}
-      POSTGRES_DB: ${POSTGRES_DB:-lhb_quant}
+      POSTGRES_DB: lhb_quant
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
       TZ: Asia/Shanghai
-
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
-
     volumes:
-      # 数据持久化
       - pgdata:/var/lib/postgresql/data
-      # 初始化脚本(首次启动按文件名顺序执行)
-      - ./db/init:/docker-entrypoint-initdb.d:ro
-      # 自定义配置
-      - ./db/conf/postgresql.conf:/etc/postgresql/postgresql.conf:ro
-      - ./db/conf/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
-      # 日志输出
-      - ./db/log:/var/log/postgresql
-
-    command: >
-      postgres
-        -c config_file=/etc/postgresql/postgresql.conf
-        -c hba_file=/etc/postgresql/pg_hba.conf
-
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lhb_admin} -d ${POSTGRES_DB:-lhb_quant}"]
+      test: ["CMD-SHELL", "pg_isready -U lhb_admin -d lhb_quant"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
-
-    # 2核4G服务器资源限制
     deploy:
       resources:
         limits:
@@ -67,76 +34,50 @@ services:
         reservations:
           cpus: "0.5"
           memory: 1G
-
-    # 共享内存(不能超过物理内存的25%)
     shm_size: 512m
-
     networks:
       - lhb-network
-
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
         max-size: "50m"
         max-file: "3"
 
-  # ============================================================
-  # pgAdmin 4
-  # ============================================================
   pgadmin:
     image: dpage/pgadmin4:8.14
     container_name: lhb-pgadmin
     restart: unless-stopped
-
     environment:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@lhb-quant.com}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123456}
       PGADMIN_LISTEN_PORT: 80
       TZ: Asia/Shanghai
-      # 低内存优化: 减少后台进程
-      PGADMIN_CONFIG_MAX_LOGIN_ATTEMPTS: "10"
-      PGADMIN_CONFIG_SESSION_EXPIRATION_TIME: "24"
-      PGADMIN_CONFIG_CONSOLE_LOG_LEVEL: "30"
-
     ports:
       - "${PGADMIN_PORT:-5050}:80"
-
     volumes:
       - pgadmin_data:/var/lib/pgadmin
-      - ./db/conf/pgadmin-servers.json:/pgadmin4/servers.json:ro
-
     depends_on:
       postgres:
         condition: service_healthy
-
-    # pgAdmin 限制资源(低优先级服务)
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: 512M
-        reservations:
-          cpus: "0.1"
-          memory: 128M
-
     networks:
       - lhb-network
-
     logging:
-      driver: "json-file"
+      driver: json-file
       options:
         max-size: "20m"
         max-file: "2"
 
 volumes:
   pgdata:
-    driver: local
     name: lhb_pgdata
   pgadmin_data:
-    driver: local
     name: lhb_pgadmin_data
 
 networks:
   lhb-network:
-    driver: bridge
     name: lhb-network
