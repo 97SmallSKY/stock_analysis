@@ -1,7 +1,3 @@
-# docker-compose.postgres.yml
-# 龙虎榜量化系统 - PostgreSQL + pgAdmin
-# 服务器: CentOS 8.2 | 2核4G
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -9,23 +5,24 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: lhb_admin
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lhb_quant_2024}
+      POSTGRES_PASSWORD: lhb_quant_2024
       POSTGRES_DB: lhb_quant
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
       TZ: Asia/Shanghai
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
-      - ./db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./db/conf/postgresql.conf:/etc/postgresql/postgresql.conf:ro
     command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U lhb_admin -d lhb_quant"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    shm_size: 512m
     deploy:
       resources:
         limits:
@@ -33,51 +30,27 @@ services:
           memory: 2560M
         reservations:
           cpus: "0.5"
-          memory: 1G
-    shm_size: 512m
-    networks:
-      - lhb-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "50m"
-        max-file: "3"
+          memory: 512M
 
   pgadmin:
     image: dpage/pgadmin4:8.14
     container_name: lhb-pgadmin
     restart: unless-stopped
     environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@lhb-quant.com}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin123456}
+      PGADMIN_DEFAULT_EMAIL: admin@lhb-quant.com
+      PGADMIN_DEFAULT_PASSWORD: admin123456
       PGADMIN_LISTEN_PORT: 80
       TZ: Asia/Shanghai
     ports:
-      - "${PGADMIN_PORT:-5050}:80"
+      - "5050:80"
     volumes:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
       postgres:
-        condition: service_healthy
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 512M
-    networks:
-      - lhb-network
-    logging:
-      driver: json-file
-      options:
-        max-size: "20m"
-        max-file: "2"
+        condition: service_started
 
 volumes:
   pgdata:
     name: lhb_pgdata
   pgadmin_data:
     name: lhb_pgadmin_data
-
-networks:
-  lhb-network:
-    name: lhb-network
