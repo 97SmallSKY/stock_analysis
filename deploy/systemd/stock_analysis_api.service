@@ -1,0 +1,23 @@
+[Unit]
+Description=Stock Analysis FastAPI
+After=network.target postgresql.service redis-server.service
+Wants=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=xiaotian
+WorkingDirectory=/home/xiaotian/stock_analysis
+EnvironmentFile=/home/xiaotian/stock_analysis/.env
+# 显式清除代理（双保险）
+Environment="HTTP_PROXY="
+Environment="HTTPS_PROXY="
+Environment="NO_PROXY=*"
+ExecStart=/home/xiaotian/stock_analysis/.venv/bin/uvicorn backend.api.main:app \
+    --host 0.0.0.0 --port 8000 --workers 2
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
