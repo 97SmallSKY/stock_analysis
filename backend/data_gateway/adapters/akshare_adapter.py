@@ -367,6 +367,60 @@ class AKShareAdapter(BaseDataAdapter):
         return self._safe_request(_fetch)
 
     # ================================================================
+    # 交易日历
+    # ================================================================
+
+    def get_trade_calendar(
+        self,
+        exchange: str = "SSE",
+        start_date: str = "20200101",
+        end_date: str = "20261231",
+    ) -> Optional[pd.DataFrame]:
+        """交易日历。
+
+        AKShare 的 `tool_trade_date_hist_sina()` 返回 A 股所有历史交易日
+        (single column DataFrame: trade_date)。
+        我们在此基础上:
+          1. 按 [start_date, end_date] 过滤
+          2. 扩展为每天一行,标记 is_open,并补 pretrade_date
+          3. 输出字段: exchange / cal_date / is_open / pretrade_date
+        A 股两所交易日同步,故 exchange 参数仅做标签用。
+        """
+
+        def _fetch():
+            import akshare as ak
+
+            raw = ak.tool_trade_date_hist_sina()
+            if raw is None or raw.empty:
+                return None
+
+            # AKShare 返回列名固定为 trade_date
+            td = pd.to_datetime(raw["trade_date"]).dt.date
+            open_set = set(td)
+
+            start = pd.to_datetime(start_date).date()
+            end = pd.to_datetime(end_date).date()
+
+            rows = []
+            prev_open = None
+            cur = start
+            while cur <= end:
+                is_open = cur in open_set
+                rows.append({
+                    "exchange": exchange,
+                    "cal_date": cur,
+                    "is_open": is_open,
+                    "pretrade_date": prev_open,
+                })
+                if is_open:
+                    prev_open = cur
+                cur += pd.Timedelta(days=1)
+
+            return pd.DataFrame(rows)
+
+        return self._safe_request(_fetch)
+
+    # ================================================================
     # 工具方法
     # ================================================================
 
