@@ -1,2444 +1,1279 @@
+-- ============================================================
+-- 龙虎榜量化系统 数据库初始化脚本
+-- 数据库: PostgreSQL 15+
+-- 编码: UTF-8
+-- 约定: 百分比统一存小数形式 (5.23% → 0.0523)
+--       金额统一 DECIMAL(16,2)
+--       价格统一 DECIMAL(12,4)
+-- ============================================================
+
+-- 清理旧对象(开发环境用，生产环境请注释掉)
+-- DROP SCHEMA public CASCADE;
+-- CREATE SCHEMA public;
 
 -- ============================================================
--- ============================================================
--- 第五部分: 视图
--- ============================================================
+-- 0. 枚举类型定义
 -- ============================================================
 
+-- 机器人状态
+DO $$ BEGIN
+    CREATE TYPE robot_status AS ENUM ('IDLE', 'RUNNING', 'PAUSED', 'STOPPED', 'ERROR');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
--- ============================================================
--- 5.1 机器人持仓视图(实时计算)
--- ============================================================
-CREATE OR REPLACE VIEW v_robot_positions AS
-WITH buy_trades AS (
-    -- 找到所有未完全卖出的买入记录
-    SELECT
-        bt.robot_id,
-        bt.ts_code,
-        bt.name,
-        bt.shares AS buy_shares,
-        bt.price AS cost_price,
-        bt.amount AS cost_amount,
-        bt.signal_score,
-        bt.trade_date AS open_date,
-        bt.id AS buy_trade_id,
-        bt.lhb_daily_id,
-        COALESCE(
-            (SELECT SUM(st.shares)
-             FROM robot_trades st
-             WHERE st.paired_trade_id = bt.id AND st.direction = 'SELL'),
-            0
-        ) AS sold_shares
-    FROM robot_trades bt
-    WHERE bt.direction = 'BUY'
-),
-open_positions AS (
-    SELECT *,
-        (buy_shares - sold_shares) AS remaining_shares
-    FROM buy_trades
-    WHERE (buy_shares - sold_shares) > 0
-)
-SELECT
-    op.robot_id,
-    op.ts_code,
-    op.name,
-    op.remaining_shares AS shares,
-    op.cost_price,
-    op.cost_amount,
-    op.signal_score,
-    op.open_date,
-    op.buy_trade_id,
-    op.lhb_daily_id,
-    -- 持仓天数(需要在应用层用当前交易日计算)
-    (CURRENT_DATE - op.open_date) AS hold_calendar_days,
-    -- 注意: current_price 需在应用层通过行情API填充
-    r.status AS robot_status
-FROM open_positions op
-JOIN robots r ON r.id = op.robot_id;
-COMMENT ON VIEW v_robot_positions IS '机器人当前持仓视图，基于买卖配对计算剩余股数。current_price需应用层填充';
+-- 交易方向
+DO $$ BEGIN
+    CREATE TYPE trade_direction AS ENUM ('BUY', 'SELL');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
+-- 交易阶段
+DO $$ BEGIN
+    CREATE TYPE trade_phase AS ENUM ('PHASE_A', 'PHASE_B', 'MANUAL', 'STOP_LOSS', 'TAKE_PROFIT', 'MONITOR');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
--- ============================================================
--- 5.2 机器人概览视图
--- ============================================================
-CREATE OR REPLACE VIEW v_robot_overview AS
-SELECT
-    r.id,
-    r.name,
-    r.status,
-    r.initial_capital,
-    r.current_capital,
-    r.cash,
-    r.total_assets,
-    r.total_pnl,
-    r.total_pnl_pct,
-    r.total_trades,
-    r.win_count,
-    r.lose_count,
-    CASE
-        WHEN r.total_trades > 0
-        THEN ROUND(r.win_count::DECIMAL / r.total_trades, 4)
-        ELSE 0
-    END AS win_rate,
-    r.max_drawdown,
-    r.ahs_score,
+-- 交易执行状态
+DO $$ BEGIN
+    CREATE TYPE exec_status AS ENUM ('PENDING', 'FILLED', 'PARTIAL', 'REJECTED', 'CANCELLED');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-    -- 策略信息
-    s.name AS strategy_name,
-    s.category AS strategy_category,
+-- 资金流水类型
+DO $$ BEGIN
+    CREATE TYPE ledger_type AS ENUM ('DEPOSIT', 'WITHDRAW', 'BUY_FREEZE', 'SELL_RETURN', 'COMMISSION', 'SLIPPAGE', 'DIVIDEND');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-    -- 持仓统计
-    (SELECT COUNT(*) FROM v_robot_positions vp WHERE vp.robot_id = r.id) AS position_count,
-    r.max_positions,
+-- 模拟交易状态
+DO $$ BEGIN
+    CREATE TYPE sim_trade_status AS ENUM ('OPEN', 'CLOSED', 'STOP_LOSS', 'TAKE_PROFIT', 'EXPIRED');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-    -- 最近净值
-    (SELECT net_value FROM daily_nav dn WHERE dn.robot_id = r.id ORDER BY trade_date DESC LIMIT 1) AS latest_nav,
-    (SELECT pnl_daily_pct FROM daily_nav dn WHERE dn.robot_id = r.id ORDER BY trade_date DESC LIMIT 1) AS latest_daily_pnl_pct,
+-- 回测状态
+DO $$ BEGIN
+    CREATE TYPE backtest_status AS ENUM ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-    -- 最近交易
-    r.last_trade_date,
-    r.started_at,
-    r.created_at,
-    r.updated_at
+-- 龙虎榜席位方向
+DO $$ BEGIN
+    CREATE TYPE seat_direction AS ENUM ('BUY', 'SELL');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-FROM robots r
-LEFT JOIN strategies s ON s.id = r.strategy_id;
+-- 熔断器状态
+DO $$ BEGIN
+    CREATE TYPE circuit_state AS ENUM ('CLOSED', 'OPEN', 'HALF_OPEN');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-COMMENT ON VIEW v_robot_overview IS '机器人概览视图，汇总机器人状态/持仓/净值/策略等关键信息';
+-- 审计操作类型
+DO $$ BEGIN
+    CREATE TYPE audit_action AS ENUM ('CREATE', 'UPDATE', 'DELETE', 'START', 'STOP', 'PAUSE', 'RESUME', 'EXECUTE', 'ERROR');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
-
--- ============================================================
--- 5.3 龙虎榜信号视图(决策辅助)
--- ============================================================
-CREATE OR REPLACE VIEW v_lhb_signals AS
-SELECT
-    lsd.id,
-    lsd.ts_code,
-    lsd.trade_date,
-    lsd.name,
-    lsd.close_price,
-    lsd.pct_change,
-    lsd.turnover_rate,
-    lsd.amount,
-    lsd.l_buy,
-    lsd.l_sell,
-    lsd.l_net,
-    lsd.reason,
-    lsd.reason_type,
-    lsd.industry,
-    lsd.market_cap,
-    lsd.float_market_cap,
-
-    -- 评分
-    lsd.score,
-    lsd.score_tech,
-    lsd.score_fund,
-    lsd.score_hist,
-    lsd.score_detail,
-
-    -- 席位汇总
-    (SELECT COUNT(*) FROM lhb_seats ls
-     WHERE ls.stock_daily_id = lsd.id AND ls.direction = 'BUY') AS buy_seat_count,
-    (SELECT COUNT(*) FROM lhb_seats ls
-     WHERE ls.stock_daily_id = lsd.id AND ls.direction = 'SELL') AS sell_seat_count,
-    (SELECT COUNT(*) FROM lhb_seats ls
-     WHERE ls.stock_daily_id = lsd.id AND ls.is_institution = TRUE) AS inst_seat_count,
-
-    -- 机构净买入
-    (SELECT COALESCE(SUM(ls.net_amount), 0) FROM lhb_seats ls
-     WHERE ls.stock_daily_id = lsd.id AND ls.is_institution = TRUE) AS inst_net_amount,
-
-    -- T+N收益(关联查询)
-    tn1.pnl_pct AS pnl_1d,
-    tn2.pnl_pct AS pnl_2d,
-    tn3.pnl_pct AS pnl_3d,
-    tn5.pnl_pct AS pnl_5d,
-    tn10.pnl_pct AS pnl_10d,
-
-    -- 历史统计
-    agg.lhb_count AS hist_lhb_count,
-    agg.win_rate_1d AS hist_win_rate_1d,
-    agg.avg_pnl_1d AS hist_avg_pnl_1d,
-
-    -- 市场情绪
-    ms.sentiment_score AS market_sentiment,
-    ms.sentiment_level AS market_level
-
-FROM lhb_stock_daily lsd
-LEFT JOIN lhb_tn_price tn1  ON tn1.stock_daily_id = lsd.id AND tn1.n_day = 1
-LEFT JOIN lhb_tn_price tn2  ON tn2.stock_daily_id = lsd.id AND tn2.n_day = 2
-LEFT JOIN lhb_tn_price tn3  ON tn3.stock_daily_id = lsd.id AND tn3.n_day = 3
-LEFT JOIN lhb_tn_price tn5  ON tn5.stock_daily_id = lsd.id AND tn5.n_day = 5
-LEFT JOIN lhb_tn_price tn10 ON tn10.stock_daily_id = lsd.id AND tn10.n_day = 10
-LEFT JOIN lhb_agg_stats agg ON agg.stat_type = 'STOCK' AND agg.stat_key = lsd.ts_code AND agg.stat_period = '90D'
-LEFT JOIN market_sentiment ms ON ms.trade_date = lsd.trade_date;
-
-COMMENT ON VIEW v_lhb_signals IS '龙虎榜信号综合视图，包含评分/席位/T+N收益/历史统计/市场情绪';
-
-
--- ============================================================
--- 5.4 营业部画像视图
--- ============================================================
-CREATE OR REPLACE VIEW v_broker_profile AS
-SELECT
-    agg.stat_key AS broker_name,
-    agg.lhb_count,
-    agg.buy_count,
-    agg.sell_count,
-    agg.total_buy_amount,
-    agg.total_sell_amount,
-    agg.total_net_amount,
-    agg.win_rate_1d,
-    agg.win_rate_3d,
-    agg.win_rate_5d,
-    agg.avg_pnl_1d,
-    agg.avg_pnl_3d,
-    agg.avg_pnl_5d,
-    agg.max_pnl,
-    agg.min_pnl,
-    agg.top_industries,
-    agg.top_stocks,
-    agg.style_tag,
-    agg.active_rank,
-    agg.stat_period,
-    agg.updated_at,
-
-    -- 最近操作(最近5条)
-    (SELECT jsonb_agg(recent ORDER BY recent_date DESC)
-     FROM (
-         SELECT jsonb_build_object(
-             'ts_code', ls.ts_code,
-             'trade_date', ls.trade_date,
-             'direction', ls.direction,
-             'net_amount', ls.net_amount
-         ) AS recent,
-         ls.trade_date AS recent_date
-         FROM lhb_seats ls
-         WHERE ls.broker_name = agg.stat_key
-         ORDER BY ls.trade_date DESC
-         LIMIT 5
-     ) sub
-    ) AS recent_trades
-
-FROM lhb_agg_stats agg
-WHERE agg.stat_type = 'BROKER';
-
-COMMENT ON VIEW v_broker_profile IS '营业部画像视图，展示营业部的历史战绩和操作风格';
-
-
--- ============================================================
--- 5.5 每日盈亏分析视图
--- ============================================================
-CREATE OR REPLACE VIEW v_daily_pnl_analysis AS
-SELECT
-    lsd.trade_date,
-    COUNT(*) AS stock_count,
-
-    -- 评分分布
-    ROUND(AVG(lsd.score), 2) AS avg_score,
-    ROUND(MIN(lsd.score), 2) AS min_score,
-    ROUND(MAX(lsd.score), 2) AS max_score,
-    COUNT(*) FILTER (WHERE lsd.score >= 80) AS high_score_count,
-    COUNT(*) FILTER (WHERE lsd.score >= 60 AND lsd.score < 80) AS mid_score_count,
-    COUNT(*) FILTER (WHERE lsd.score < 60) AS low_score_count,
-
-    -- T+1收益
-    ROUND(AVG(tn1.pnl_pct), 4) AS avg_pnl_1d,
-    COUNT(*) FILTER (WHERE tn1.pnl_pct > 0) AS win_count_1d,
-    COUNT(*) FILTER (WHERE tn1.pnl_pct <= 0) AS lose_count_1d,
-    CASE
-        WHEN COUNT(*) FILTER (WHERE tn1.pnl_pct IS NOT NULL) > 0
-        THEN ROUND(
-            COUNT(*) FILTER (WHERE tn1.pnl_pct > 0)::DECIMAL /
-            COUNT(*) FILTER (WHERE tn1.pnl_pct IS NOT NULL), 4
-        )
-        ELSE NULL
-    END AS win_rate_1d,
-
-    -- T+3收益
-    ROUND(AVG(tn3.pnl_pct), 4) AS avg_pnl_3d,
-    CASE
-        WHEN COUNT(*) FILTER (WHERE tn3.pnl_pct IS NOT NULL) > 0
-        THEN ROUND(
-            COUNT(*) FILTER (WHERE tn3.pnl_pct > 0)::DECIMAL /
-            COUNT(*) FILTER (WHERE tn3.pnl_pct IS NOT NULL), 4
-        )
-        ELSE NULL
-    END AS win_rate_3d,
-
-    -- T+5收益
-    ROUND(AVG(tn5.pnl_pct), 4) AS avg_pnl_5d,
-
-    -- 龙虎榜资金
-    ROUND(SUM(lsd.l_net), 2) AS total_net,
-    ROUND(AVG(lsd.l_net), 2) AS avg_net,
-
-    -- 市场情绪
-    ms.sentiment_score,
-    ms.sentiment_level
-
-FROM lhb_stock_daily lsd
-LEFT JOIN lhb_tn_price tn1 ON tn1.stock_daily_id = lsd.id AND tn1.n_day = 1
-LEFT JOIN lhb_tn_price tn3 ON tn3.stock_daily_id = lsd.id AND tn3.n_day = 3
-LEFT JOIN lhb_tn_price tn5 ON tn5.stock_daily_id = lsd.id AND tn5.n_day = 5
-LEFT JOIN market_sentiment ms ON ms.trade_date = lsd.trade_date
-GROUP BY lsd.trade_date, ms.sentiment_score, ms.sentiment_level
-ORDER BY lsd.trade_date DESC;
-
-COMMENT ON VIEW v_daily_pnl_analysis IS '每日龙虎榜盈亏分析视图，按日聚合评分/胜率/收益/资金';
+-- 数据类别
+DO $$ BEGIN
+    CREATE TYPE data_category AS ENUM (
+        'DAILY_KLINE', 'LHB_DETAIL', 'LHB_BROKER', 'INSTITUTION',
+        'REALTIME_QUOTE', 'MARKET_SENTIMENT', 'FINANCIAL_DATA'
+    );
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 
 -- ============================================================
 -- ============================================================
--- 第六部分: 常用函数
+-- 第一部分: 基础配置表 (9张)
 -- ============================================================
 -- ============================================================
 
 
 -- ============================================================
--- 6.1 计算交易成本
+-- 1.1 股票基础信息
 -- ============================================================
-CREATE OR REPLACE FUNCTION fn_calc_trade_cost(
-    p_direction     trade_direction,
-    p_amount        DECIMAL(16,2),
-    p_commission_rate DECIMAL(8,6) DEFAULT 0.000300,
-    p_slippage_rate DECIMAL(8,6) DEFAULT 0.001000,
-    p_stamp_tax_rate DECIMAL(8,6) DEFAULT 0.001000,
-    p_min_commission DECIMAL(10,2) DEFAULT 5.00
-)
-RETURNS TABLE (
-    commission      DECIMAL(10,2),
-    slippage        DECIMAL(10,2),
-    stamp_tax       DECIMAL(10,2),
-    total_cost      DECIMAL(10,2)
-)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_commission    DECIMAL(10,2);
-    v_slippage      DECIMAL(10,2);
-    v_stamp_tax     DECIMAL(10,2);
-BEGIN
-    -- 佣金(双向收取，有最低5元)
-    v_commission := GREATEST(p_amount * p_commission_rate, p_min_commission);
+CREATE TABLE IF NOT EXISTS stock_info (
+    ts_code             VARCHAR(16)     PRIMARY KEY,                     -- 000001.SZ
+    symbol              VARCHAR(10)     NOT NULL,                        -- 000001
+    name                VARCHAR(32)     NOT NULL,                        -- 平安银行
+    area                VARCHAR(16),                                     -- 深圳
+    industry            VARCHAR(32),                                     -- 银行
+    market              VARCHAR(16),                                     -- 主板/创业板/科创板/北交所
+    list_date           DATE,                                            -- 上市日期
+    delist_date         DATE,                                            -- 退市日期
+    is_hs               VARCHAR(4)      DEFAULT 'N',                     -- 沪深港通标的 N/H/S
+    exchange            VARCHAR(8),                                      -- SSE/SZSE/BSE
+    curr_type           VARCHAR(8)      DEFAULT 'CNY',
+    is_active           BOOLEAN         DEFAULT TRUE,
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW()
+);
 
-    -- 滑点(双向)
-    v_slippage := p_amount * p_slippage_rate;
+COMMENT ON TABLE stock_info IS '股票基础信息表';
+COMMENT ON COLUMN stock_info.ts_code IS '股票代码，如 000001.SZ';
+COMMENT ON COLUMN stock_info.is_hs IS '沪深港通标的: N-否 H-沪股通 S-深股通';
 
-    -- 印花税(仅卖出)
-    IF p_direction = 'SELL' THEN
-        v_stamp_tax := p_amount * p_stamp_tax_rate;
-    ELSE
-        v_stamp_tax := 0;
-    END IF;
-
-    RETURN QUERY SELECT
-        v_commission,
-        v_slippage,
-        v_stamp_tax,
-        (v_commission + v_slippage + v_stamp_tax);
-END;
-$$;
-
-COMMENT ON FUNCTION fn_calc_trade_cost IS '计算交易成本(佣金+滑点+印花税)';
+CREATE INDEX IF NOT EXISTS idx_stock_info_industry ON stock_info(industry);
+CREATE INDEX IF NOT EXISTS idx_stock_info_market ON stock_info(market);
+CREATE INDEX IF NOT EXISTS idx_stock_info_name ON stock_info(name);
 
 
 -- ============================================================
--- 6.2 计算机器人净值
+-- 1.2 交易日历
 -- ============================================================
-CREATE OR REPLACE FUNCTION fn_calc_robot_nav(
-    p_robot_id      BIGINT,
-    p_trade_date    DATE
-)
-RETURNS DECIMAL(12,6)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_initial_capital   DECIMAL(16,2);
-    v_total_assets      DECIMAL(16,2);
-    v_cash              DECIMAL(16,2);
-    v_nav               DECIMAL(12,6);
-BEGIN
-    SELECT initial_capital, cash
-    INTO v_initial_capital, v_cash
-    FROM robots WHERE id = p_robot_id;
+CREATE TABLE IF NOT EXISTS trade_calendar (
+    id                  BIGSERIAL       PRIMARY KEY,
+    exchange            VARCHAR(8)      NOT NULL DEFAULT 'SSE',          -- SSE/SZSE
+    cal_date            DATE            NOT NULL,                        -- 日历日期
+    is_open             BOOLEAN         NOT NULL DEFAULT FALSE,          -- 是否交易日
+    pretrade_date       DATE,                                            -- 上一交易日
+    created_at          TIMESTAMP       DEFAULT NOW(),
 
-    IF v_initial_capital IS NULL OR v_initial_capital = 0 THEN
-        RETURN 1.000000;
-    END IF;
+    CONSTRAINT uk_trade_calendar UNIQUE(exchange, cal_date)
+);
 
-    -- 总资产 = 现金 + 持仓市值(需应用层传入或从行情API获取)
-    -- 这里简化为从 daily_nav 获取，如果没有则返回 cash/initial
-    SELECT total_assets INTO v_total_assets
-    FROM daily_nav
-    WHERE robot_id = p_robot_id AND trade_date = p_trade_date;
+COMMENT ON TABLE trade_calendar IS '交易日历';
 
-    IF v_total_assets IS NOT NULL THEN
-        v_nav := v_total_assets / v_initial_capital;
-    ELSE
-        v_nav := v_cash / v_initial_capital;
-    END IF;
-
-    RETURN ROUND(v_nav, 6);
-END;
-$$;
-
-COMMENT ON FUNCTION fn_calc_robot_nav IS '计算机器人指定日期的单位净值';
+CREATE INDEX IF NOT EXISTS idx_calendar_date ON trade_calendar(cal_date);
+CREATE INDEX IF NOT EXISTS idx_calendar_open ON trade_calendar(exchange, cal_date) WHERE is_open = TRUE;
 
 
 -- ============================================================
--- 6.3 获取下一个交易日
+-- 1.3 应用配置
 -- ============================================================
-CREATE OR REPLACE FUNCTION fn_next_trade_date(
-    p_date      DATE,
-    p_n         INT DEFAULT 1,
-    p_exchange  VARCHAR(8) DEFAULT 'SSE'
-)
-RETURNS DATE
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_result    DATE;
-    v_count     INT := 0;
-BEGIN
-    IF p_n = 0 THEN
-        -- 返回当日或当日之后最近的交易日
-        SELECT cal_date INTO v_result
-        FROM trade_calendar
-        WHERE exchange = p_exchange
-          AND cal_date >= p_date
-          AND is_open = TRUE
-        ORDER BY cal_date ASC
-        LIMIT 1;
-        RETURN v_result;
-    END IF;
+CREATE TABLE IF NOT EXISTS app_config (
+    id                  BIGSERIAL       PRIMARY KEY,
+    config_key          VARCHAR(128)    NOT NULL UNIQUE,                 -- 配置键
+    config_value        TEXT,                                            -- 配置值
+    value_type          VARCHAR(16)     DEFAULT 'STRING',                -- STRING/INT/FLOAT/BOOL/JSON
+    category            VARCHAR(64)     DEFAULT 'SYSTEM',                -- 分类: SYSTEM/TRADING/DATA/DISPLAY
+    description         TEXT,                                            -- 配置说明
+    is_active           BOOLEAN         DEFAULT TRUE,
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW()
+);
 
-    IF p_n > 0 THEN
-        -- 未来第N个交易日
-        SELECT cal_date INTO v_result
-        FROM trade_calendar
-        WHERE exchange = p_exchange
-          AND cal_date > p_date
-          AND is_open = TRUE
-        ORDER BY cal_date ASC
-        LIMIT 1 OFFSET (p_n - 1);
-    ELSE
-        -- 过去第N个交易日
-        SELECT cal_date INTO v_result
-        FROM trade_calendar
-        WHERE exchange = p_exchange
-          AND cal_date < p_date
-          AND is_open = TRUE
-        ORDER BY cal_date DESC
-        LIMIT 1 OFFSET (ABS(p_n) - 1);
-    END IF;
+COMMENT ON TABLE app_config IS '应用全局配置表';
 
-    RETURN v_result;
-END;
-$$;
-
-COMMENT ON FUNCTION fn_next_trade_date IS '获取相对于指定日期的第N个交易日，N>0未来，N<0过去，N=0当日或最近交易日';
+-- 插入默认配置
+INSERT INTO app_config (config_key, config_value, value_type, category, description) VALUES
+    ('trading.commission_rate', '0.0003', 'FLOAT', 'TRADING', '佣金费率(万三)'),
+    ('trading.stamp_tax_rate', '0.001', 'FLOAT', 'TRADING', '印花税费率(千一，仅卖出)'),
+    ('trading.slippage_rate', '0.001', 'FLOAT', 'TRADING', '滑点估算费率'),
+    ('trading.min_commission', '5', 'FLOAT', 'TRADING', '最低佣金(元)'),
+    ('trading.phase_a_time', '18:50', 'STRING', 'TRADING', 'Phase A 执行时间'),
+    ('trading.phase_b_time', '09:35', 'STRING', 'TRADING', 'Phase B 执行时间'),
+    ('scoring.tech_weight', '0.40', 'FLOAT', 'TRADING', '技术面评分权重'),
+    ('scoring.fund_weight', '0.35', 'FLOAT', 'TRADING', '资金面评分权重'),
+    ('scoring.hist_weight', '0.25', 'FLOAT', 'TRADING', '历史胜率评分权重'),
+    ('data.sync_time', '17:00', 'STRING', 'DATA', '每日数据同步时间'),
+    ('data.retry_count', '3', 'INT', 'DATA', '数据拉取重试次数'),
+    ('circuit_breaker.failure_threshold', '5', 'INT', 'DATA', '熔断器失败阈值'),
+    ('circuit_breaker.reset_timeout', '300', 'INT', 'DATA', '熔断器重置超时(秒)')
+ON CONFLICT (config_key) DO NOTHING;
 
 
 -- ============================================================
--- 6.4 判断是否为交易日
+-- 1.4 策略配置
 -- ============================================================
-CREATE OR REPLACE FUNCTION fn_is_trade_date(
-    p_date      DATE,
-    p_exchange  VARCHAR(8) DEFAULT 'SSE'
-)
-RETURNS BOOLEAN
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_is_open BOOLEAN;
-BEGIN
-    SELECT is_open INTO v_is_open
-    FROM trade_calendar
-    WHERE exchange = p_exchange AND cal_date = p_date;
+CREATE TABLE IF NOT EXISTS strategies (
+    id                  BIGSERIAL       PRIMARY KEY,
+    name                VARCHAR(64)     NOT NULL,
+    description         TEXT,
+    category            VARCHAR(32)     DEFAULT 'LHB',                   -- LHB/MOMENTUM/CUSTOM
 
-    RETURN COALESCE(v_is_open, FALSE);
-END;
-$$;
+    -- 规则定义 (JSONB)
+    entry_rules         JSONB           NOT NULL DEFAULT '[]'::jsonb,    -- 入场规则
+    exit_rules          JSONB           NOT NULL DEFAULT '[]'::jsonb,    -- 出场规则
+    risk_rules          JSONB           NOT NULL DEFAULT '[]'::jsonb,    -- 风控规则
+    params              JSONB           NOT NULL DEFAULT '{}'::jsonb,    -- 默认参数
 
-COMMENT ON FUNCTION fn_is_trade_date IS '判断指定日期是否为交易日';
+    -- 元信息
+    version             INT             DEFAULT 1,
+    is_active           BOOLEAN         DEFAULT TRUE,
+    author              VARCHAR(32),
+    tags                VARCHAR(128)[],                                   -- 标签数组
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW(),
 
+    -- JSONB 基础校验
+    CONSTRAINT chk_entry_rules CHECK (jsonb_typeof(entry_rules) = 'array'),
+    CONSTRAINT chk_exit_rules CHECK (jsonb_typeof(exit_rules) = 'array'),
+    CONSTRAINT chk_risk_rules CHECK (jsonb_typeof(risk_rules) = 'array'),
+    CONSTRAINT chk_params CHECK (jsonb_typeof(params) = 'object')
+);
 
--- ============================================================
--- 6.5 计算区间交易日数量
--- ============================================================
-CREATE OR REPLACE FUNCTION fn_trade_days_between(
-    p_start_date    DATE,
-    p_end_date      DATE,
-    p_exchange      VARCHAR(8) DEFAULT 'SSE'
-)
-RETURNS INT
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_count INT;
-BEGIN
-    SELECT COUNT(*) INTO v_count
-    FROM trade_calendar
-    WHERE exchange = p_exchange
-      AND cal_date > p_start_date
-      AND cal_date <= p_end_date
-      AND is_open = TRUE;
+COMMENT ON TABLE strategies IS '策略配置表';
+COMMENT ON COLUMN strategies.entry_rules IS '入场规则JSON数组，如 [{"type":"score_above","value":70}]';
+COMMENT ON COLUMN strategies.params IS '策略默认参数，如 {"lookback_days":20,"max_hold_days":5}';
 
-    RETURN v_count;
-END;
-$$;
-
-COMMENT ON FUNCTION fn_trade_days_between IS '计算两个日期之间的交易日数量(不含起始日，含结束日)';
+CREATE INDEX IF NOT EXISTS idx_strategies_active ON strategies(is_active, category);
 
 
 -- ============================================================
--- 6.6 更新机器人统计(触发器辅助函数)
+-- 1.5 策略参数 (运行时参数覆盖)
 -- ============================================================
-CREATE OR REPLACE FUNCTION fn_update_robot_stats()
-RETURNS TRIGGER
-LANGUAGE plpgsql AS $$
-BEGIN
-    -- 仅在卖出(平仓)时更新统计
-    IF NEW.direction = 'SELL' AND NEW.pnl_amount IS NOT NULL THEN
-        UPDATE robots SET
-            total_trades = total_trades + 1,
-            win_count = win_count + CASE WHEN NEW.pnl_amount > 0 THEN 1 ELSE 0 END,
-            lose_count = lose_count + CASE WHEN NEW.pnl_amount <= 0 THEN 1 ELSE 0 END,
-            total_pnl = total_pnl + NEW.pnl_amount,
-            total_pnl_pct = CASE
-                WHEN initial_capital > 0
-                THEN (total_pnl + NEW.pnl_amount) / initial_capital
-                ELSE 0
-            END,
-            last_trade_date = NEW.trade_date,
-            updated_at = NOW()
-        WHERE id = NEW.robot_id;
-    ELSIF NEW.direction = 'BUY' THEN
-        UPDATE robots SET
-            last_trade_date = NEW.trade_date,
-            updated_at = NOW()
-        WHERE id = NEW.robot_id;
-    END IF;
+CREATE TABLE IF NOT EXISTS strategy_params (
+    id                  BIGSERIAL       PRIMARY KEY,
+    strategy_id         BIGINT          NOT NULL REFERENCES strategies(id) ON DELETE CASCADE,
+    param_key           VARCHAR(64)     NOT NULL,                        -- 参数名
+    param_value         TEXT            NOT NULL,                        -- 参数值
+    value_type          VARCHAR(16)     DEFAULT 'STRING',                -- STRING/INT/FLOAT/BOOL/JSON
+    description         TEXT,
+    is_active           BOOLEAN         DEFAULT TRUE,
+    updated_at          TIMESTAMP       DEFAULT NOW(),
 
-    RETURN NEW;
-END;
-$$;
+    CONSTRAINT uk_strategy_param UNIQUE(strategy_id, param_key)
+);
 
-COMMENT ON FUNCTION fn_update_robot_stats IS '交易记录插入后自动更新机器人统计字段';
+COMMENT ON TABLE strategy_params IS '策略运行时参数覆盖表，优先级高于 strategies.params 中的默认值';
 
 
 -- ============================================================
+-- 1.6 数据源配置
 -- ============================================================
--- 第七部分: 触发器
--- ============================================================
--- ============================================================
+CREATE TABLE IF NOT EXISTS datasource_config (
+    id                  BIGSERIAL       PRIMARY KEY,
+    category            data_category   NOT NULL,                        -- 数据类别
+    adapter_name        VARCHAR(32)     NOT NULL,                        -- tushare/akshare/sina/crawler
+    priority            SMALLINT        NOT NULL DEFAULT 1,              -- 优先级(越小越高)
+    is_enabled          BOOLEAN         DEFAULT TRUE,
+    config_json         JSONB           DEFAULT '{}'::jsonb,             -- 连接配置(token等)
+    rate_limit          INT             DEFAULT 60,                      -- 每分钟请求上限
+    timeout_seconds     INT             DEFAULT 30,                      -- 超时时间(秒)
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW(),
 
+    CONSTRAINT uk_datasource UNIQUE(category, adapter_name)
+);
 
--- ============================================================
--- 7.1 交易记录插入后更新机器人统计
--- ============================================================
-DROP TRIGGER IF EXISTS trg_robot_trades_stats ON robot_trades;
-CREATE TRIGGER trg_robot_trades_stats
-    AFTER INSERT ON robot_trades
-    FOR EACH ROW
-    EXECUTE FUNCTION fn_update_robot_stats();
+COMMENT ON TABLE datasource_config IS '数据源配置与优先级路由';
 
-
--- ============================================================
--- 7.2 通用 updated_at 自动更新触发器
--- ============================================================
-CREATE OR REPLACE FUNCTION fn_auto_update_timestamp()
-RETURNS TRIGGER
-LANGUAGE plpgsql AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$;
-
--- 为需要 updated_at 的表添加触发器
-DO $$
-DECLARE
-    tbl TEXT;
-BEGIN
-    FOR tbl IN
-        SELECT unnest(ARRAY[
-            'stock_info',
-            'app_config',
-            'strategies',
-            'strategy_params',
-            'datasource_config',
-            'robots',
-            'sim_trades',
-            'lhb_stock_daily',
-            'lhb_tn_price',
-            'lhb_agg_stats',
-            'lhb_institution_stat',
-            'market_sentiment'
-        ])
-    LOOP
-        EXECUTE format(
-            'DROP TRIGGER IF EXISTS trg_%s_updated_at ON %I;
-             CREATE TRIGGER trg_%s_updated_at
-                 BEFORE UPDATE ON %I
-                 FOR EACH ROW
-                 EXECUTE FUNCTION fn_auto_update_timestamp();',
-            tbl, tbl, tbl, tbl
-        );
-    END LOOP;
-END;
-$$;
+-- 默认数据源配置
+INSERT INTO datasource_config (category, adapter_name, priority) VALUES
+    ('DAILY_KLINE', 'tushare', 1),
+    ('DAILY_KLINE', 'akshare', 2),
+    ('DAILY_KLINE', 'sina', 3),
+    ('LHB_DETAIL', 'akshare', 1),
+    ('LHB_DETAIL', 'sina', 2),
+    ('LHB_DETAIL', 'crawler', 3),
+    ('LHB_BROKER', 'akshare', 1),
+    ('LHB_BROKER', 'crawler', 2),
+    ('REALTIME_QUOTE', 'akshare', 1),
+    ('REALTIME_QUOTE', 'sina', 2),
+    ('MARKET_SENTIMENT', 'akshare', 1),
+    ('MARKET_SENTIMENT', 'sina', 2),
+    ('FINANCIAL_DATA', 'tushare', 1),
+    ('FINANCIAL_DATA', 'akshare', 2)
+ON CONFLICT (category, adapter_name) DO NOTHING;
 
 
 -- ============================================================
--- 7.3 资金流水余额校验触发器
+-- 1.7 数据源熔断日志
 -- ============================================================
-CREATE OR REPLACE FUNCTION fn_validate_cash_ledger()
-RETURNS TRIGGER
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_current_cash DECIMAL(16,2);
-BEGIN
-    -- 获取机器人当前现金
-    SELECT cash INTO v_current_cash FROM robots WHERE id = NEW.robot_id;
+CREATE TABLE IF NOT EXISTS datasource_circuit_log (
+    id                  BIGSERIAL       PRIMARY KEY,
+    config_id           BIGINT          NOT NULL REFERENCES datasource_config(id),
+    state               circuit_state   NOT NULL DEFAULT 'CLOSED',
+    failure_count       INT             DEFAULT 0,
+    success_count       INT             DEFAULT 0,
+    last_failure_time   TIMESTAMP,
+    last_success_time   TIMESTAMP,
+    opened_at           TIMESTAMP,                                       -- 熔断打开时间
+    half_opened_at      TIMESTAMP,                                       -- 半开时间
+    closed_at           TIMESTAMP,                                       -- 恢复关闭时间
+    error_message       TEXT,
+    created_at          TIMESTAMP       DEFAULT NOW()
+);
 
-    -- 出金方向校验: 余额不能为负
-    IF NEW.direction = 'OUT' AND (v_current_cash - NEW.amount) < 0 THEN
-        RAISE EXCEPTION '资金不足: 当前现金 %, 出金 %, 机器人ID %',
-            v_current_cash, NEW.amount, NEW.robot_id;
-    END IF;
+COMMENT ON TABLE datasource_circuit_log IS '数据源熔断器状态变更日志';
 
-    -- 自动填充 balance_before
-    IF NEW.balance_before IS NULL THEN
-        NEW.balance_before := v_current_cash;
-    END IF;
+CREATE INDEX IF NOT EXISTS idx_circuit_log_config ON datasource_circuit_log(config_id, created_at DESC);
 
-    -- 自动填充 balance_after
-    IF NEW.balance_after IS NULL THEN
-        IF NEW.direction = 'IN' THEN
-            NEW.balance_after := v_current_cash + NEW.amount;
-        ELSE
-            NEW.balance_after := v_current_cash - NEW.amount;
-        END IF;
-    END IF;
 
-    -- 同步更新机器人现金
-    UPDATE robots SET
-        cash = NEW.balance_after,
-        updated_at = NOW()
-    WHERE id = NEW.robot_id;
+-- ============================================================
+-- 1.8 采集器错误日志
+-- ============================================================
+CREATE TABLE IF NOT EXISTS collector_error_log (
+    id                  BIGSERIAL       PRIMARY KEY,
+    adapter_name        VARCHAR(32)     NOT NULL,                        -- 适配器名称
+    category            data_category,                                   -- 数据类别
+    api_name            VARCHAR(128),                                    -- 调用的API名称
+    request_params      JSONB,                                           -- 请求参数
+    error_type          VARCHAR(64),                                     -- 错误类型: TIMEOUT/RATE_LIMIT/AUTH/PARSE/NETWORK
+    error_message       TEXT,
+    error_stack         TEXT,                                            -- 异常堆栈
+    retry_count         SMALLINT        DEFAULT 0,                       -- 已重试次数
+    is_resolved         BOOLEAN         DEFAULT FALSE,                   -- 是否已解决
+    resolved_at         TIMESTAMP,
+    created_at          TIMESTAMP       DEFAULT NOW()
+);
 
-    RETURN NEW;
-END;
-$$;
+COMMENT ON TABLE collector_error_log IS '数据采集器错误日志，用于排障和监控';
 
-DROP TRIGGER IF EXISTS trg_cash_ledger_validate ON cash_ledger;
-CREATE TRIGGER trg_cash_ledger_validate
-    BEFORE INSERT ON cash_ledger
-    FOR EACH ROW
-    EXECUTE FUNCTION fn_validate_cash_ledger();
+CREATE INDEX IF NOT EXISTS idx_collector_err_adapter ON collector_error_log(adapter_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_collector_err_type ON collector_error_log(error_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_collector_err_unresolved ON collector_error_log(is_resolved, created_at DESC) WHERE is_resolved = FALSE;
+
+
+-- ============================================================
+-- 1.9 审计日志
+-- ============================================================
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id                  BIGSERIAL       PRIMARY KEY,
+    action              audit_action    NOT NULL,
+    entity_type         VARCHAR(32)     NOT NULL,                        -- robot/strategy/trade/datasource
+    entity_id           BIGINT,                                          -- 关联实体ID
+    operator            VARCHAR(32)     DEFAULT 'SYSTEM',                -- 操作者
+    detail              JSONB,                                           -- 操作详情
+    old_value           JSONB,                                           -- 变更前值
+    new_value           JSONB,                                           -- 变更后值
+    ip_address          VARCHAR(48),
+    created_at          TIMESTAMP       DEFAULT NOW()
+);
+
+COMMENT ON TABLE audit_logs IS '系统审计日志';
+
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_logs(action, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs(created_at DESC);
 
 
 -- ============================================================
 -- ============================================================
--- 第八部分: 分区表(大数据量优化)
+-- 第二部分: 市场数据表 (8张)
 -- ============================================================
 -- ============================================================
 
 
 -- ============================================================
--- 8.1 K线数据按年分区
+-- 2.1 日K线数据
 -- ============================================================
-
--- 注意: 如果数据量不大(单表<5000万行)，可不启用分区
--- 以下为启用分区的示例模板，需要将 kline_daily 改为分区表
-
--- 如需启用，先删除原表并重建为分区表:
-/*
-DROP TABLE IF EXISTS kline_daily CASCADE;
-CREATE TABLE kline_daily (
-    id                  BIGSERIAL,
-    ts_code             VARCHAR(16)     NOT NULL,
+CREATE TABLE IF NOT EXISTS kline_daily (
+    id                  BIGSERIAL       PRIMARY KEY,
+    ts_code             VARCHAR(16)     NOT NULL REFERENCES stock_info(ts_code),
     trade_date          DATE            NOT NULL,
     open                DECIMAL(12,4),
     high                DECIMAL(12,4),
     low                 DECIMAL(12,4),
     close               DECIMAL(12,4)   NOT NULL,
-    pre_close           DECIMAL(12,4),
-    pct_change          DECIMAL(8,4),
-    vol                 DECIMAL(18,2),
-    amount              DECIMAL(18,2),
-    turnover_rate       DECIMAL(8,4),
-    turnover_rate_f     DECIMAL(8,4),
-    volume_ratio        DECIMAL(8,4),
-    pe_ttm              DECIMAL(12,4),
-    pb                  DECIMAL(12,4),
-    total_mv            DECIMAL(18,2),
-    circ_mv             DECIMAL(18,2),
-    is_st               BOOLEAN         DEFAULT FALSE,
-    is_limit_up         BOOLEAN         DEFAULT FALSE,
-    is_limit_down       BOOLEAN         DEFAULT FALSE,
+    pre_close           DECIMAL(12,4),                                   -- 昨收价
+    pct_change          DECIMAL(8,4),                                    -- 涨跌幅(小数形式 0.0523=5.23%)
+    vol                 DECIMAL(18,2),                                   -- 成交量(手)
+    amount              DECIMAL(18,2),                                   -- 成交额(千元)
+    turnover_rate       DECIMAL(8,4),                                    -- 换手率(小数形式)
+    turnover_rate_f     DECIMAL(8,4),                                    -- 自由流通换手率
+    volume_ratio        DECIMAL(8,4),                                    -- 量比
+    pe_ttm              DECIMAL(12,4),                                   -- 市盈率TTM
+    pb                  DECIMAL(12,4),                                   -- 市净率
+    total_mv            DECIMAL(18,2),                                   -- 总市值(万元)
+    circ_mv             DECIMAL(18,2),                                   -- 流通市值(万元)
+    is_st               BOOLEAN         DEFAULT FALSE,                   -- 是否ST
+    is_limit_up         BOOLEAN         DEFAULT FALSE,                   -- 是否涨停
+    is_limit_down       BOOLEAN         DEFAULT FALSE,                   -- 是否跌停
     created_at          TIMESTAMP       DEFAULT NOW(),
 
-    CONSTRAINT pk_kline_daily PRIMARY KEY (id, trade_date),
-    CONSTRAINT uk_kline_daily UNIQUE (ts_code, trade_date)
-) PARTITION BY RANGE (trade_date);
+    CONSTRAINT uk_kline_daily UNIQUE(ts_code, trade_date)
+);
 
--- 按年创建分区
-CREATE TABLE kline_daily_2020 PARTITION OF kline_daily FOR VALUES FROM ('2020-01-01') TO ('2021-01-01');
-CREATE TABLE kline_daily_2021 PARTITION OF kline_daily FOR VALUES FROM ('2021-01-01') TO ('2022-01-01');
-CREATE TABLE kline_daily_2022 PARTITION OF kline_daily FOR VALUES FROM ('2022-01-01') TO ('2023-01-01');
-CREATE TABLE kline_daily_2023 PARTITION OF kline_daily FOR VALUES FROM ('2023-01-01') TO ('2024-01-01');
-CREATE TABLE kline_daily_2024 PARTITION OF kline_daily FOR VALUES FROM ('2024-01-01') TO ('2025-01-01');
-CREATE TABLE kline_daily_2025 PARTITION OF kline_daily FOR VALUES FROM ('2025-01-01') TO ('2026-01-01');
-CREATE TABLE kline_daily_default PARTITION OF kline_daily DEFAULT;
-*/
+COMMENT ON TABLE kline_daily IS '股票日K线数据';
+COMMENT ON COLUMN kline_daily.pct_change IS '涨跌幅，小数形式，0.0523表示5.23%';
+COMMENT ON COLUMN kline_daily.total_mv IS '总市值，单位万元';
+
+CREATE INDEX IF NOT EXISTS idx_kline_code_date ON kline_daily(ts_code, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_kline_date ON kline_daily(trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_kline_date_pct ON kline_daily(trade_date DESC, pct_change DESC);
+CREATE INDEX IF NOT EXISTS idx_kline_limit_up ON kline_daily(trade_date, is_limit_up) WHERE is_limit_up = TRUE;
 
 
 -- ============================================================
--- 8.2 龙虎榜数据按年分区 (模板)
+-- 2.2 龙虎榜股票汇总
 -- ============================================================
-/*
--- 同理，lhb_stock_daily 可按年分区
--- 仅当数据量较大时启用
-*/
+CREATE TABLE IF NOT EXISTS lhb_stock_daily (
+    id                  BIGSERIAL       PRIMARY KEY,
+    ts_code             VARCHAR(16)     NOT NULL REFERENCES stock_info(ts_code),
+    trade_date          DATE            NOT NULL,
+    name                VARCHAR(32),                                     -- 股票名称(冗余方便查询)
+    close_price         DECIMAL(12,4),
+    pct_change          DECIMAL(8,4),                                    -- 涨跌幅(小数形式)
+    turnover_rate       DECIMAL(8,4),
+    amount              DECIMAL(16,2),                                   -- 成交额(万元)
+
+    -- 龙虎榜资金
+    l_buy               DECIMAL(16,2)   DEFAULT 0,                       -- 龙虎榜买入额(万)
+    l_sell              DECIMAL(16,2)   DEFAULT 0,                       -- 龙虎榜卖出额(万)
+    l_net               DECIMAL(16,2)   DEFAULT 0,                       -- 龙虎榜净买入(万)
+
+    -- 上榜信息
+    reason              VARCHAR(256),                                    -- 上榜原因
+    reason_type         VARCHAR(64),                                     -- 原因分类: 涨幅偏离/换手率/连续三日
+
+    -- 冗余的股票属性(避免频繁JOIN)
+    industry            VARCHAR(32),
+    market_cap          DECIMAL(18,2),                                   -- 总市值(万元)
+    float_market_cap    DECIMAL(18,2),                                   -- 流通市值(万元)
+
+    -- 评分
+    score               DECIMAL(6,2)    DEFAULT 0,                       -- 综合评分(0-100)
+    score_tech          DECIMAL(6,2)    DEFAULT 0,                       -- 技术面评分
+    score_fund          DECIMAL(6,2)    DEFAULT 0,                       -- 资金面评分
+    score_hist          DECIMAL(6,2)    DEFAULT 0,                       -- 历史胜率评分
+    score_detail        JSONB           DEFAULT '{}'::jsonb,             -- 评分明细
+
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW(),
+
+    CONSTRAINT uk_lhb_stock_daily UNIQUE(ts_code, trade_date)
+);
+
+COMMENT ON TABLE lhb_stock_daily IS '龙虎榜每日股票汇总';
+COMMENT ON COLUMN lhb_stock_daily.score IS '综合评分 0-100，技术面*0.4 + 资金面*0.35 + 历史*0.25';
+COMMENT ON COLUMN lhb_stock_daily.reason_type IS '上榜原因分类: PRICE_DEV(涨跌幅偏离)/TURNOVER(换手率)/CONSECUTIVE(连续三日)/AMPLITUDE(振幅)';
+
+CREATE INDEX IF NOT EXISTS idx_lhb_daily_date_score ON lhb_stock_daily(trade_date DESC, score DESC);
+CREATE INDEX IF NOT EXISTS idx_lhb_daily_code_date ON lhb_stock_daily(ts_code, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_lhb_daily_reason_type ON lhb_stock_daily(reason_type, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_lhb_daily_industry ON lhb_stock_daily(industry, trade_date DESC);
+
+
+-- ============================================================
+-- 2.3 龙虎榜席位明细
+-- ============================================================
+CREATE TABLE IF NOT EXISTS lhb_seats (
+    id                  BIGSERIAL       PRIMARY KEY,
+    stock_daily_id      BIGINT          NOT NULL REFERENCES lhb_stock_daily(id) ON DELETE CASCADE,
+    ts_code             VARCHAR(16)     NOT NULL,                        -- 冗余方便查询
+    trade_date          DATE            NOT NULL,                        -- 冗余方便查询
+
+    -- 营业部信息
+    broker_name         VARCHAR(128)    NOT NULL,                        -- 营业部名称
+    broker_type         VARCHAR(16)     DEFAULT 'UNKNOWN',               -- INSTITUTION(机构)/HOT_MONEY(游资)/UNKNOWN
+    is_institution      BOOLEAN         DEFAULT FALSE,                   -- 是否机构专用席位
+
+    -- 交易数据
+    buy_amount          DECIMAL(16,2)   DEFAULT 0,                       -- 买入额(万)
+    sell_amount         DECIMAL(16,2)   DEFAULT 0,                       -- 卖出额(万)
+    net_amount          DECIMAL(16,2)   DEFAULT 0,                       -- 净买入(万)
+    buy_pct             DECIMAL(8,4),                                    -- 买入占总成交比
+    sell_pct            DECIMAL(8,4),                                    -- 卖出占总成交比
+    direction           seat_direction  NOT NULL,                        -- BUY/SELL
+    rank                SMALLINT,                                        -- 排名 1-5
+
+    created_at          TIMESTAMP       DEFAULT NOW(),
+
+    CONSTRAINT uk_lhb_seats UNIQUE(ts_code, trade_date, broker_name, direction)
+);
+
+COMMENT ON TABLE lhb_seats IS '龙虎榜营业部席位明细';
+COMMENT ON COLUMN lhb_seats.broker_type IS '席位类型: INSTITUTION-机构专用 HOT_MONEY-知名游资 UNKNOWN-未分类';
+
+CREATE INDEX IF NOT EXISTS idx_seats_broker_date ON lhb_seats(broker_name, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_seats_date_net ON lhb_seats(trade_date DESC, net_amount DESC);
+CREATE INDEX IF NOT EXISTS idx_seats_daily_id ON lhb_seats(stock_daily_id);
+CREATE INDEX IF NOT EXISTS idx_seats_institution ON lhb_seats(trade_date, is_institution) WHERE is_institution = TRUE;
+
+
+-- ============================================================
+-- 2.4 龙虎榜T+N价格追踪
+-- ============================================================
+CREATE TABLE IF NOT EXISTS lhb_tn_price (
+    id                  BIGSERIAL       PRIMARY KEY,
+    stock_daily_id      BIGINT          NOT NULL REFERENCES lhb_stock_daily(id) ON DELETE CASCADE,
+    ts_code             VARCHAR(16)     NOT NULL,
+    trade_date          DATE            NOT NULL,                        -- 上榜日期(基准日)
+    n_day               SMALLINT        NOT NULL,                        -- T+N 的 N (1,2,3,5,10)
+
+    -- T+N日价格
+    target_date         DATE,                                            -- T+N 对应的实际交易日
+    close_price         DECIMAL(12,4),                                   -- T+N 收盘价
+    pnl_pct             DECIMAL(8,4),                                    -- 相对上榜日涨跌幅(小数)
+
+    -- 区间极值
+    high_price          DECIMAL(12,4),                                   -- T到T+N最高价
+    low_price           DECIMAL(12,4),                                   -- T到T+N最低价
+    high_pct            DECIMAL(8,4),                                    -- 区间最大涨幅(小数)
+    low_pct             DECIMAL(8,4),                                    -- 区间最大跌幅(小数)
+
+    -- 标记
+    is_limit_up         BOOLEAN         DEFAULT FALSE,                   -- T+N是否涨停
+    is_limit_down       BOOLEAN         DEFAULT FALSE,                   -- T+N是否跌停
+
+    -- 计算状态
+    calc_status         VARCHAR(16)     DEFAULT 'PENDING',               -- PENDING/DONE/SKIP(停牌等)
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW(),
+
+    CONSTRAINT uk_lhb_tn_price UNIQUE(stock_daily_id, n_day)
+);
+
+COMMENT ON TABLE lhb_tn_price IS '龙虎榜T+N日价格追踪，用于盈亏回测分析';
+COMMENT ON COLUMN lhb_tn_price.pnl_pct IS '相对上榜日收盘价的涨跌幅，小数形式';
+
+CREATE INDEX IF NOT EXISTS idx_tn_daily_n ON lhb_tn_price(stock_daily_id, n_day);
+CREATE INDEX IF NOT EXISTS idx_tn_code_date ON lhb_tn_price(ts_code, trade_date DESC, n_day);
+CREATE INDEX IF NOT EXISTS idx_tn_calc_status ON lhb_tn_price(calc_status) WHERE calc_status = 'PENDING';
+
+
+-- ============================================================
+-- 2.5 龙虎榜聚合统计
+-- ============================================================
+CREATE TABLE IF NOT EXISTS lhb_agg_stats (
+    id                  BIGSERIAL       PRIMARY KEY,
+
+    -- 统计维度
+    stat_type           VARCHAR(16)     NOT NULL,                        -- STOCK(按股票)/BROKER(按营业部)/INDUSTRY(按行业)
+    stat_key            VARCHAR(128)    NOT NULL,                        -- ts_code 或 broker_name 或 industry
+    stat_period         VARCHAR(16)     NOT NULL,                        -- 7D/30D/90D/ALL
+
+    -- 基础统计
+    lhb_count           INT             DEFAULT 0,                       -- 上榜次数
+    buy_count           INT             DEFAULT 0,                       -- 作为买方次数
+    sell_count          INT             DEFAULT 0,                       -- 作为卖方次数
+    total_buy_amount    DECIMAL(18,2)   DEFAULT 0,                       -- 总买入额
+    total_sell_amount   DECIMAL(18,2)   DEFAULT 0,                       -- 总卖出额
+    total_net_amount    DECIMAL(18,2)   DEFAULT 0,                       -- 总净额
+
+    -- 收益统计
+    avg_score           DECIMAL(6,2),
+    win_rate_1d         DECIMAL(8,4),                                    -- T+1胜率(小数)
+    win_rate_3d         DECIMAL(8,4),
+    win_rate_5d         DECIMAL(8,4),
+    avg_pnl_1d          DECIMAL(8,4),                                    -- T+1平均收益(小数)
+    avg_pnl_3d          DECIMAL(8,4),
+    avg_pnl_5d          DECIMAL(8,4),
+    max_pnl             DECIMAL(8,4),                                    -- 最大单次收益
+    min_pnl             DECIMAL(8,4),                                    -- 最大单次亏损
+
+    -- 偏好分析(仅stat_type=BROKER时有意义)
+    top_industries      JSONB           DEFAULT '[]'::jsonb,             -- 偏好行业 [{"industry":"半导体","count":15}]
+    top_stocks          JSONB           DEFAULT '[]'::jsonb,             -- 偏好标的 [{"ts_code":"000001.SZ","count":8}]
+    style_tag           VARCHAR(64),                                     -- 游资风格标签: 打板/低吸/趋势/机构
+    active_rank         INT,                                             -- 活跃度排名
+
+    updated_at          TIMESTAMP       DEFAULT NOW(),
+
+    CONSTRAINT uk_lhb_agg_stats UNIQUE(stat_type, stat_key, stat_period)
+);
+
+COMMENT ON TABLE lhb_agg_stats IS '龙虎榜聚合统计表，按股票/营业部/行业多维度汇总';
+COMMENT ON COLUMN lhb_agg_stats.stat_type IS 'STOCK-按股票聚合 BROKER-按营业部聚合 INDUSTRY-按行业聚合';
+COMMENT ON COLUMN lhb_agg_stats.stat_period IS '统计周期: 7D/30D/90D/ALL';
+
+CREATE INDEX IF NOT EXISTS idx_agg_stats_type_period ON lhb_agg_stats(stat_type, stat_period);
+CREATE INDEX IF NOT EXISTS idx_agg_stats_key ON lhb_agg_stats(stat_key, stat_period);
+CREATE INDEX IF NOT EXISTS idx_agg_stats_winrate ON lhb_agg_stats(stat_type, stat_period, win_rate_1d DESC);
+
+
+-- ============================================================
+-- 2.6 机构统计
+-- ============================================================
+CREATE TABLE IF NOT EXISTS lhb_institution_stat (
+    id                  BIGSERIAL       PRIMARY KEY,
+    ts_code             VARCHAR(16)     NOT NULL REFERENCES stock_info(ts_code),
+    trade_date          DATE            NOT NULL,
+    name                VARCHAR(32),
+
+    -- 机构买卖汇总
+    inst_buy_count      SMALLINT        DEFAULT 0,                       -- 机构买入席位数
+    inst_sell_count     SMALLINT        DEFAULT 0,                       -- 机构卖出席位数
+    inst_buy_amount     DECIMAL(16,2)   DEFAULT 0,                       -- 机构买入总额(万)
+    inst_sell_amount    DECIMAL(16,2)   DEFAULT 0,                       -- 机构卖出总额(万)
+    inst_net_amount     DECIMAL(16,2)   DEFAULT 0,                       -- 机构净买入(万)
+    inst_buy_pct        DECIMAL(8,4),                                    -- 机构买入占比(小数)
+
+    -- 关联龙虎榜
+    stock_daily_id      BIGINT          REFERENCES lhb_stock_daily(id),
+
+    -- 后续追踪
+    pnl_1d              DECIMAL(8,4),
+    pnl_3d              DECIMAL(8,4),
+    pnl_5d              DECIMAL(8,4),
+
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW(),
+
+    CONSTRAINT uk_inst_stat UNIQUE(ts_code, trade_date)
+);
+
+COMMENT ON TABLE lhb_institution_stat IS '龙虎榜机构席位统计，汇总每日每只股票的机构买卖情况';
+
+CREATE INDEX IF NOT EXISTS idx_inst_stat_date ON lhb_institution_stat(trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_inst_stat_net ON lhb_institution_stat(trade_date DESC, inst_net_amount DESC);
+CREATE INDEX IF NOT EXISTS idx_inst_stat_code ON lhb_institution_stat(ts_code, trade_date DESC);
+
+
+-- ============================================================
+-- 2.7 市场快照
+-- ============================================================
+CREATE TABLE IF NOT EXISTS market_snapshots (
+    id                  BIGSERIAL       PRIMARY KEY,
+    trade_date          DATE            NOT NULL,
+    snapshot_time       TIMESTAMP,                                       -- 快照时间(盘中可多次)
+    snapshot_type       VARCHAR(16)     DEFAULT 'CLOSE',                 -- OPEN/MIDDAY/CLOSE/REALTIME
+
+    -- 四大指数
+    sh_index            DECIMAL(12,4),                                   -- 上证指数
+    sh_pct_change       DECIMAL(8,4),
+    sz_index            DECIMAL(12,4),                                   -- 深证成指
+    sz_pct_change       DECIMAL(8,4),
+    cyb_index           DECIMAL(12,4),                                   -- 创业板指
+    cyb_pct_change      DECIMAL(8,4),
+    kcb_index           DECIMAL(12,4),                                   -- 科创50
+    kcb_pct_change      DECIMAL(8,4),
+
+    -- 市场宽度
+    up_count            INT             DEFAULT 0,                       -- 上涨家数
+    down_count          INT             DEFAULT 0,                       -- 下跌家数
+    flat_count          INT             DEFAULT 0,                       -- 平盘家数
+    limit_up_count      INT             DEFAULT 0,                       -- 涨停数
+    limit_down_count    INT             DEFAULT 0,                       -- 跌停数
+
+    -- 成交数据
+    total_volume        DECIMAL(18,2),                                   -- 两市总成交量(亿股)
+    total_amount        DECIMAL(18,2),                                   -- 两市总成交额(亿元)
+
+    -- 资金流向
+    north_net_amount    DECIMAL(16,2),                                   -- 北向资金净流入(亿元)
+    north_buy_amount    DECIMAL(16,2),                                   -- 北向买入额
+    north_sell_amount   DECIMAL(16,2),                                   -- 北向卖出额
+    margin_balance      DECIMAL(18,2),                                   -- 两融余额(亿元)
+    margin_buy_amount   DECIMAL(16,2),                                   -- 融资买入额(亿元)
+
+    created_at          TIMESTAMP       DEFAULT NOW(),
+
+    CONSTRAINT uk_market_snapshot UNIQUE(trade_date, snapshot_type)
+);
+
+COMMENT ON TABLE market_snapshots IS '市场快照，记录四大指数和市场宽度数据';
+COMMENT ON COLUMN market_snapshots.snapshot_type IS 'OPEN-开盘 MIDDAY-午盘 CLOSE-收盘 REALTIME-实时';
+
+CREATE INDEX IF NOT EXISTS idx_market_snap_date ON market_snapshots(trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_market_snap_type ON market_snapshots(snapshot_type, trade_date DESC);
+
+
+-- ============================================================
+-- 2.8 市场情绪指标
+-- ============================================================
+CREATE TABLE IF NOT EXISTS market_sentiment (
+    id                  BIGSERIAL       PRIMARY KEY,
+    trade_date          DATE            NOT NULL,
+
+    -- 涨跌停分析
+    limit_up_count      INT             DEFAULT 0,                       -- 涨停数(不含ST)
+    limit_down_count    INT             DEFAULT 0,                       -- 跌停数(不含ST)
+    st_limit_up         INT             DEFAULT 0,                       -- ST涨停数
+    st_limit_down       INT             DEFAULT 0,                       -- ST跌停数
+    first_limit_up      INT             DEFAULT 0,                       -- 首板数量
+    cont_limit_up       INT             DEFAULT 0,                       -- 连板数量(2板+)
+    max_cont_board      SMALLINT        DEFAULT 0,                       -- 最高连板数
+    open_limit_up_pct   DECIMAL(8,4),                                    -- 涨停开板率(小数)
+
+    -- 连板梯队
+    board_2             INT             DEFAULT 0,                       -- 2连板数量
+    board_3             INT             DEFAULT 0,                       -- 3连板
+    board_4             INT             DEFAULT 0,                       -- 4连板
+    board_5_plus        INT             DEFAULT 0,                       -- 5板及以上
+
+    -- 情绪指标
+    up_down_ratio       DECIMAL(8,4),                                    -- 涨跌比(上涨数/下跌数)
+    avg_pct_change      DECIMAL(8,4),                                    -- 全市场平均涨幅(小数)
+    median_pct_change   DECIMAL(8,4),                                    -- 中位数涨幅
+    strong_stock_count  INT             DEFAULT 0,                       -- 强势股数量(涨幅>5%)
+    weak_stock_count    INT             DEFAULT 0,                       -- 弱势股数量(跌幅>5%)
+
+    -- 龙虎榜统计
+    lhb_stock_count     INT             DEFAULT 0,                       -- 当日龙虎榜上榜股票数
+    lhb_total_net       DECIMAL(16,2),                                   -- 龙虎榜总净买入(万)
+    lhb_avg_score       DECIMAL(6,2),                                    -- 龙虎榜平均评分
+
+    -- 综合情绪评分
+    sentiment_score     DECIMAL(6,2),                                    -- 综合情绪(0-100)
+    sentiment_level     VARCHAR(16),                                     -- ICE_COLD/COLD/NEUTRAL/WARM/HOT/EXTREME
+    sentiment_change    DECIMAL(6,2),                                    -- 相比昨日变化
+
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW(),
+
+    CONSTRAINT uk_market_sentiment UNIQUE(trade_date)
+);
+
+COMMENT ON TABLE market_sentiment IS '市场情绪指标，每日一条';
+COMMENT ON COLUMN market_sentiment.sentiment_level IS '情绪级别: ICE_COLD(极寒)/COLD(冷)/NEUTRAL(中性)/WARM(温)/HOT(热)/EXTREME(极热)';
+
+CREATE INDEX IF NOT EXISTS idx_sentiment_date ON market_sentiment(trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sentiment_level ON market_sentiment(sentiment_level, trade_date DESC);
 
 
 -- ============================================================
 -- ============================================================
--- 第九部分: 初始化数据
+-- 第三部分: 交易相关表 (7张)
 -- ============================================================
 -- ============================================================
 
 
 -- ============================================================
--- 9.1 默认策略
+-- 3.1 交易机器人
 -- ============================================================
-INSERT INTO strategies (name, description, category, entry_rules, exit_rules, risk_rules, params) VALUES
-(
-    '龙虎榜高分策略',
-    '基于龙虎榜综合评分的选股策略，选择评分>=75的标的，结合市场情绪和资金面综合判断',
-    'LHB',
-    '[
-        {"type": "score_above", "field": "score", "value": 75, "desc": "综合评分>=75"},
-        {"type": "net_buy_positive", "field": "l_net", "value": 0, "desc": "龙虎榜净买入>0"},
-        {"type": "turnover_range", "field": "turnover_rate", "min": 0.03, "max": 0.25, "desc": "换手率3%-25%"},
-        {"type": "market_cap_range", "field": "float_market_cap", "min": 200000, "max": 10000000, "desc": "流通市值20亿-1000亿"}
-    ]'::jsonb,
-    '[
-        {"type": "take_profit", "value": 0.15, "desc": "止盈15%"},
-        {"type": "stop_loss", "value": -0.07, "desc": "止损7%"},
-        {"type": "max_hold_days", "value": 10, "desc": "最大持仓10天"},
-        {"type": "trailing_stop", "value": 0.05, "desc": "从最高点回撤5%止盈"}
-    ]'::jsonb,
-    '[
-        {"type": "max_positions", "value": 5, "desc": "最大持仓5只"},
-        {"type": "single_position_pct", "value": 0.20, "desc": "单票仓位<=20%"},
-        {"type": "daily_loss_limit", "value": -0.05, "desc": "单日亏损熔断5%"},
-        {"type": "sentiment_filter", "min_level": "COLD", "desc": "极寒行情不开仓"}
-    ]'::jsonb,
-    '{
-        "lookback_days": 20,
-        "score_weights": {"tech": 0.40, "fund": 0.35, "hist": 0.25},
-        "prefer_industries": [],
-        "exclude_st": true,
-        "exclude_new_stock_days": 60
-    }'::jsonb
-),
-(
-    '机构席位跟踪策略',
-    '跟踪机构专用席位净买入标的，适合中线持有',
-    'LHB',
-    '[
-        {"type": "inst_net_positive", "field": "inst_net_amount", "value": 500, "desc": "机构净买入>=500万"},
-        {"type": "inst_count", "field": "inst_buy_count", "value": 2, "desc": ">=2家机构买入"},
-        {"type": "score_above", "field": "score", "value": 65, "desc": "综合评分>=65"}
-    ]'::jsonb,
-    '[
-        {"type": "take_profit", "value": 0.20, "desc": "止盈20%"},
-        {"type": "stop_loss", "value": -0.08, "desc": "止损8%"},
-        {"type": "max_hold_days", "value": 20, "desc": "最大持仓20天"}
-    ]'::jsonb,
-    '[
-        {"type": "max_positions", "value": 3, "desc": "最大持仓3只"},
-        {"type": "single_position_pct", "value": 0.30, "desc": "单票仓位<=30%"},
-        {"type": "daily_loss_limit", "value": -0.05, "desc": "单日亏损熔断5%"}
-    ]'::jsonb,
-    '{
-        "lookback_days": 30,
-        "score_weights": {"tech": 0.30, "fund": 0.45, "hist": 0.25},
-        "prefer_industries": ["半导体", "新能源", "医药生物"],
-        "exclude_st": true,
-        "exclude_new_stock_days": 90,
-        "min_market_cap": 500000
-    }'::jsonb
-),
-(
-    '游资打板策略',
-    '跟踪知名游资席位涨停板标的，短线快进快出',
-    'LHB',
-    '[
-        {"type": "is_limit_up", "value": true, "desc": "当日涨停"},
-        {"type": "hot_money_seat", "value": true, "desc": "知名游资席位买入"},
-        {"type": "score_above", "field": "score", "value": 70, "desc": "综合评分>=70"},
-        {"type": "turnover_range", "field": "turnover_rate", "min": 0.05, "max": 0.30, "desc": "换手率5%-30%"},
-        {"type": "market_cap_range", "field": "float_market_cap", "min": 100000, "max": 5000000, "desc": "流通市值10亿-500亿"}
-    ]'::jsonb,
-    '[
-        {"type": "take_profit", "value": 0.10, "desc": "止盈10%"},
-        {"type": "stop_loss", "value": -0.05, "desc": "止损5%"},
-        {"type": "max_hold_days", "value": 3, "desc": "最大持仓3天"},
-        {"type": "open_limit_sell", "value": true, "desc": "次日未封板则卖出"}
-    ]'::jsonb,
-    '[
-        {"type": "max_positions", "value": 3, "desc": "最大持仓3只"},
-        {"type": "single_position_pct", "value": 0.25, "desc": "单票仓位<=25%"},
-        {"type": "daily_loss_limit", "value": -0.06, "desc": "单日亏损熔断6%"},
-        {"type": "sentiment_filter", "min_level": "NEUTRAL", "desc": "情绪低于中性不开仓"}
-    ]'::jsonb,
-    '{
-        "lookback_days": 10,
-        "score_weights": {"tech": 0.45, "fund": 0.35, "hist": 0.20},
-        "prefer_industries": [],
-        "exclude_st": true,
-        "exclude_new_stock_days": 30,
-        "hot_money_list": ["赵老哥", "章盟主", "炒股养家", "小鳄鱼"]
-    }'::jsonb
-)
-ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS robots (
+    id                  BIGSERIAL       PRIMARY KEY,
+    name                VARCHAR(64)     NOT NULL,
+    description         TEXT,
+    strategy_id         BIGINT          REFERENCES strategies(id) ON DELETE SET NULL,
 
+    -- 资金
+    initial_capital     DECIMAL(16,2)   NOT NULL DEFAULT 1000000.00,
+    current_capital     DECIMAL(16,2)   NOT NULL DEFAULT 1000000.00,     -- 总资产
+    cash                DECIMAL(16,2)   NOT NULL DEFAULT 1000000.00,     -- 可用现金
+    total_assets        DECIMAL(16,2)   NOT NULL DEFAULT 1000000.00,     -- 总资产(cash+持仓市值)
+    frozen_amount       DECIMAL(16,2)   DEFAULT 0,                       -- 冻结资金
 
--- ============================================================
--- 9.2 默认机器人
--- ============================================================
-INSERT INTO robots (name, description, strategy_id, initial_capital, current_capital, cash, total_assets, status, max_positions, per_position_pct, risk_config)
-SELECT
-    '默认模拟机器人',
-    '基于龙虎榜高分策略的模拟交易机器人，初始资金100万',
-    s.id,
-    1000000.00,
-    1000000.00,
-    1000000.00,
-    1000000.00,
-    'IDLE',
-    5,
-    0.20,
-    '{
+    -- 累计统计(冗余字段，避免频繁聚合)
+    total_pnl           DECIMAL(16,2)   DEFAULT 0,                       -- 累计盈亏金额
+    total_pnl_pct       DECIMAL(8,4)    DEFAULT 0,                       -- 累计收益率(小数)
+    total_trades        INT             DEFAULT 0,                       -- 总交易笔数
+    win_count           INT             DEFAULT 0,                       -- 盈利笔数
+    lose_count          INT             DEFAULT 0,                       -- 亏损笔数
+    max_drawdown        DECIMAL(8,4)    DEFAULT 0,                       -- 历史最大回撤(小数)
+    max_drawdown_amount DECIMAL(16,2)   DEFAULT 0,                       -- 最大回撤金额
+
+    -- 状态与配置
+    status              robot_status    DEFAULT 'IDLE',
+    max_positions       SMALLINT        DEFAULT 5,                       -- 最大持仓数
+    per_position_pct    DECIMAL(4,2)    DEFAULT 0.20,                    -- 单票仓位上限(小数)
+
+    -- 风控配置
+    risk_config         JSONB           DEFAULT '{
         "stop_loss_pct": -0.07,
         "take_profit_pct": 0.15,
         "daily_loss_limit": -0.05,
-        "trailing_stop_pct": 0.05,
+        "trailing_stop_pct": null,
         "max_hold_days": 10,
-        "score_threshold": 75,
+        "score_threshold": 70,
         "max_single_loss": -0.10,
         "circuit_break_daily_pct": -0.08
-    }'::jsonb
-FROM strategies s
-WHERE s.name = '龙虎榜高分策略'
-LIMIT 1
-ON CONFLICT DO NOTHING;
+    }'::jsonb,
+
+    -- 账户健康度评分
+    ahs_score           DECIMAL(6,2)    DEFAULT 50.00,                   -- Account Health Score (0-100)
+    ahs_detail          JSONB           DEFAULT '{}'::jsonb,             -- AHS 各维度明细
+
+    -- 运行信息
+    last_trade_date     DATE,                                            -- 最后交易日
+    last_signal_date    DATE,                                            -- 最后信号日
+    started_at          TIMESTAMP,                                       -- 启动时间
+    stopped_at          TIMESTAMP,                                       -- 停止时间
+    error_message       TEXT,                                            -- 最近错误信息
+
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW(),
+
+    -- 风控JSONB基础校验
+    CONSTRAINT chk_risk_config CHECK (
+        risk_config ? 'stop_loss_pct' AND
+        risk_config ? 'take_profit_pct'
+    ),
+    CONSTRAINT chk_capital CHECK (cash >= 0 AND initial_capital > 0)
+);
+
+COMMENT ON TABLE robots IS '模拟交易机器人';
+COMMENT ON COLUMN robots.ahs_score IS '账户健康度评分 0-100，综合资金利用率/胜率/回撤等';
+COMMENT ON COLUMN robots.per_position_pct IS '单票仓位上限，小数形式，0.20表示20%';
+
+CREATE INDEX IF NOT EXISTS idx_robots_status ON robots(status);
+CREATE INDEX IF NOT EXISTS idx_robots_strategy ON robots(strategy_id);
 
 
 -- ============================================================
--- 9.3 交易日历初始化说明
+-- 3.2 交易记录
 -- ============================================================
--- 交易日历数据需通过数据同步任务从 TuShare/AKShare 拉取
--- 以下为手动插入示例模板(实际需完整数据)
-/*
-INSERT INTO trade_calendar (exchange, cal_date, is_open, pretrade_date) VALUES
-    ('SSE', '2025-01-01', FALSE, '2024-12-31'),
-    ('SSE', '2025-01-02', TRUE, '2024-12-31'),
-    ('SSE', '2025-01-03', TRUE, '2025-01-02'),
-    ...
-*/
+CREATE TABLE IF NOT EXISTS robot_trades (
+    id                  BIGSERIAL       PRIMARY KEY,
+    robot_id            BIGINT          NOT NULL REFERENCES robots(id) ON DELETE CASCADE,
+    ts_code             VARCHAR(16)     NOT NULL REFERENCES stock_info(ts_code),
+    name                VARCHAR(32),                                     -- 股票名称(冗余)
 
+    -- 交易信息
+    direction           trade_direction NOT NULL,                        -- BUY/SELL
+    price               DECIMAL(12,4)   NOT NULL,                        -- 委托价格
+    shares              INT             NOT NULL,                        -- 委托股数
+    amount              DECIMAL(16,2)   NOT NULL,                        -- 委托金额
 
--- ============================================================
--- ============================================================
--- 第十部分: 权限与安全
--- ============================================================
--- ============================================================
+    -- 成本(摩擦成本)
+    commission          DECIMAL(10,2)   DEFAULT 0,                       -- 手续费
+    slippage            DECIMAL(10,2)   DEFAULT 0,                       -- 滑点成本
+    stamp_tax           DECIMAL(10,2)   DEFAULT 0,                       -- 印花税(仅卖出)
+    total_cost          DECIMAL(10,2)   DEFAULT 0,                       -- 总交易成本
 
+    -- 盈亏(仅卖出时计算)
+    pnl_amount          DECIMAL(16,2),                                   -- 本笔盈亏金额
+    pnl_pct             DECIMAL(8,4),                                    -- 本笔盈亏比例(小数)
+    hold_days           INT,                                             -- 持仓天数(卖出时填)
+    cost_price          DECIMAL(12,4),                                   -- 持仓成本价(卖出时填)
 
--- ============================================================
--- 10.1 创建应用用户(生产环境)
--- ============================================================
-/*
--- 只读用户(用于报表/分析)
-CREATE ROLE lhb_readonly WITH LOGIN PASSWORD 'your_readonly_password';
-GRANT CONNECT ON DATABASE lhb_quant TO lhb_readonly;
-GRANT USAGE ON SCHEMA public TO lhb_readonly;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO lhb_readonly;
-GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO lhb_readonly;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO lhb_readonly;
+    -- 信号与阶段
+    phase               trade_phase     NOT NULL,                        -- PHASE_A/PHASE_B/MANUAL/STOP_LOSS/TAKE_PROFIT/MONITOR
+    signal_score        DECIMAL(6,2),                                    -- 触发时的评分
+    signal_detail       JSONB,                                           -- 信号明细
+    lhb_daily_id        BIGINT          REFERENCES lhb_stock_daily(id),  -- 关联龙虎榜记录
+    sim_trade_id        BIGINT,                                          -- 关联模拟交易(后续添加FK)
 
--- 应用用户(用于后端服务)
-CREATE ROLE lhb_app WITH LOGIN PASSWORD 'your_app_password';
-GRANT CONNECT ON DATABASE lhb_quant TO lhb_app;
-GRANT USAGE ON SCHEMA public TO lhb_app;
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO lhb_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO lhb_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO lhb_app;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO lhb_app;
+    -- 关联
+    paired_trade_id     BIGINT,                                          -- 配对交易ID(买→卖关联)
+    reason              VARCHAR(256),                                    -- 交易原因描述
 
--- 管理员用户(用于DDL变更)
-CREATE ROLE lhb_admin WITH LOGIN PASSWORD 'your_admin_password' CREATEDB;
-GRANT ALL PRIVILEGES ON DATABASE lhb_quant TO lhb_admin;
-GRANT ALL PRIVILEGES ON SCHEMA public TO lhb_admin;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO lhb_admin;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO lhb_admin;
-GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO lhb_admin;
-*/
+    trade_time          TIMESTAMP       NOT NULL,                        -- 交易时间
+    trade_date          DATE            NOT NULL,                        -- 交易日期
+    created_at          TIMESTAMP       DEFAULT NOW(),
 
+    CONSTRAINT chk_shares CHECK (shares > 0),
+    CONSTRAINT chk_price CHECK (price > 0)
+);
 
--- ============================================================
--- 10.2 行级安全策略(可选，多租户时启用)
--- ============================================================
-/*
--- 如果未来支持多用户各自管理自己的机器人
-ALTER TABLE robots ENABLE ROW LEVEL SECURITY;
+COMMENT ON TABLE robot_trades IS '机器人交易记录';
+COMMENT ON COLUMN robot_trades.paired_trade_id IS '配对交易ID，卖出时指向对应的买入记录ID';
+COMMENT ON COLUMN robot_trades.phase IS '交易阶段: PHASE_A-盘后选股 PHASE_B-盘中执行 MANUAL-手动 STOP_LOSS-止损 TAKE_PROFIT-止盈 MONITOR-监控触发';
 
-CREATE POLICY robot_user_policy ON robots
-    USING (owner_id = current_setting('app.current_user_id')::BIGINT);
-*/
+CREATE INDEX IF NOT EXISTS idx_trades_robot_time ON robot_trades(robot_id, trade_time DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_robot_date ON robot_trades(robot_id, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_code_time ON robot_trades(ts_code, trade_time DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_phase ON robot_trades(phase, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_direction ON robot_trades(robot_id, direction, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_trades_lhb ON robot_trades(lhb_daily_id) WHERE lhb_daily_id IS NOT NULL;
 
 
 -- ============================================================
+-- 3.3 交易执行记录
 -- ============================================================
--- 第十一部分: 维护用存储过程
--- ============================================================
--- ============================================================
+CREATE TABLE IF NOT EXISTS trade_executions (
+    id                  BIGSERIAL       PRIMARY KEY,
+    trade_id            BIGINT          NOT NULL REFERENCES robot_trades(id) ON DELETE CASCADE,
+    robot_id            BIGINT          NOT NULL REFERENCES robots(id),
 
+    -- 执行信息
+    exec_price          DECIMAL(12,4)   NOT NULL,                        -- 实际成交价
+    exec_shares         INT             NOT NULL,                        -- 实际成交股数
+    exec_amount         DECIMAL(16,2)   NOT NULL,                        -- 实际成交金额
 
--- ============================================================
--- 11.1 T+N价格批量计算
--- ============================================================
-CREATE OR REPLACE PROCEDURE sp_calc_tn_prices(
-    p_trade_date    DATE DEFAULT NULL
-)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_rec           RECORD;
-    v_n             INT;
-    v_target_date   DATE;
-    v_close         DECIMAL(12,4);
-    v_high          DECIMAL(12,4);
-    v_low           DECIMAL(12,4);
-    v_base_close    DECIMAL(12,4);
-    v_count         INT := 0;
-BEGIN
-    -- 遍历需要计算的龙虎榜记录
-    FOR v_rec IN
-        SELECT
-            lsd.id AS stock_daily_id,
-            lsd.ts_code,
-            lsd.trade_date,
-            lsd.close_price AS base_close
-        FROM lhb_stock_daily lsd
-        WHERE (p_trade_date IS NULL OR lsd.trade_date = p_trade_date)
-          AND lsd.close_price IS NOT NULL
-          AND lsd.close_price > 0
-    LOOP
-        v_base_close := v_rec.base_close;
+    -- 成本明细
+    commission          DECIMAL(10,2)   DEFAULT 0,
+    slippage            DECIMAL(10,2)   DEFAULT 0,
+    stamp_tax           DECIMAL(10,2)   DEFAULT 0,
 
-        -- 对每个N值计算
-        FOREACH v_n IN ARRAY ARRAY[1, 2, 3, 5, 10]
-        LOOP
-            -- 获取T+N交易日
-            v_target_date := fn_next_trade_date(v_rec.trade_date, v_n);
+    -- 状态
+    status              exec_status     NOT NULL DEFAULT 'PENDING',      -- PENDING/FILLED/PARTIAL/REJECTED/CANCELLED
+    reject_reason       VARCHAR(256),                                    -- 拒绝/取消原因
+    error_message       TEXT,                                            -- 执行失败错误信息
 
-            IF v_target_date IS NULL THEN
-                CONTINUE;
-            END IF;
+    -- 市场快照(执行时刻)
+    market_price        DECIMAL(12,4),                                   -- 执行时市场价
+    bid_price           DECIMAL(12,4),                                   -- 买一价
+    ask_price           DECIMAL(12,4),                                   -- 卖一价
 
-            -- 获取T+N日收盘价
-            SELECT close INTO v_close
-            FROM kline_daily
-            WHERE ts_code = v_rec.ts_code AND trade_date = v_target_date;
+    executed_at         TIMESTAMP,                                       -- 实际执行时间
+    created_at          TIMESTAMP       DEFAULT NOW()
+);
 
-            -- 获取 T 到 T+N 区间极值
-            SELECT MAX(high), MIN(low) INTO v_high, v_low
-            FROM kline_daily
-            WHERE ts_code = v_rec.ts_code
-              AND trade_date > v_rec.trade_date
-              AND trade_date <= v_target_date;
+COMMENT ON TABLE trade_executions IS '交易执行明细，一笔 trade 可能有多次部分成交';
 
-            IF v_close IS NOT NULL THEN
-                INSERT INTO lhb_tn_price (
-                    stock_daily_id, ts_code, trade_date, n_day,
-                    target_date, close_price, pnl_pct,
-                    high_price, low_price, high_pct, low_pct,
-                    is_limit_up, is_limit_down, calc_status
-                ) VALUES (
-                    v_rec.stock_daily_id,
-                    v_rec.ts_code,
-                    v_rec.trade_date,
-                    v_n,
-                    v_target_date,
-                    v_close,
-                    ROUND((v_close - v_base_close) / v_base_close, 4),
-                    v_high,
-                    v_low,
-                    CASE WHEN v_high IS NOT NULL THEN ROUND((v_high - v_base_close) / v_base_close, 4) ELSE NULL END,
-                    CASE WHEN v_low IS NOT NULL THEN ROUND((v_low - v_base_close) / v_base_close, 4) ELSE NULL END,
-                    EXISTS(SELECT 1 FROM kline_daily WHERE ts_code = v_rec.ts_code AND trade_date = v_target_date AND is_limit_up = TRUE),
-                    EXISTS(SELECT 1 FROM kline_daily WHERE ts_code = v_rec.ts_code AND trade_date = v_target_date AND is_limit_down = TRUE),
-                    'DONE'
-                )
-                ON CONFLICT (stock_daily_id, n_day) DO UPDATE SET
-                    target_date = EXCLUDED.target_date,
-                    close_price = EXCLUDED.close_price,
-                    pnl_pct = EXCLUDED.pnl_pct,
-                    high_price = EXCLUDED.high_price,
-                    low_price = EXCLUDED.low_price,
-                    high_pct = EXCLUDED.high_pct,
-                    low_pct = EXCLUDED.low_pct,
-                    is_limit_up = EXCLUDED.is_limit_up,
-                    is_limit_down = EXCLUDED.is_limit_down,
-                    calc_status = EXCLUDED.calc_status,
-                    updated_at = NOW();
-
-                v_count := v_count + 1;
-            END IF;
-        END LOOP;
-    END LOOP;
-
-    RAISE NOTICE 'T+N价格计算完成，共处理 % 条记录', v_count;
-END;
-$$;
-
-COMMENT ON PROCEDURE sp_calc_tn_prices IS '批量计算龙虎榜T+N日价格，可指定日期或全量计算';
+CREATE INDEX IF NOT EXISTS idx_exec_trade ON trade_executions(trade_id);
+CREATE INDEX IF NOT EXISTS idx_exec_robot ON trade_executions(robot_id, executed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_exec_status ON trade_executions(status) WHERE status != 'FILLED';
 
 
 -- ============================================================
--- 11.2 龙虎榜聚合统计刷新
+-- 3.4 资金流水
 -- ============================================================
-CREATE OR REPLACE PROCEDURE sp_refresh_lhb_agg_stats(
-    p_stat_type     VARCHAR(16) DEFAULT 'ALL',     -- STOCK/BROKER/INDUSTRY/ALL
-    p_stat_period   VARCHAR(16) DEFAULT 'ALL'      -- 7D/30D/90D/ALL
-)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_periods       VARCHAR(16)[];
-    v_period        VARCHAR(16);
-    v_cutoff_date   DATE;
-    v_count         INT := 0;
-BEGIN
-    -- 确定要计算的周期
-    IF p_stat_period = 'ALL' THEN
-        v_periods := ARRAY['7D', '30D', '90D', 'ALL'];
-    ELSE
-        v_periods := ARRAY[p_stat_period];
-    END IF;
+CREATE TABLE IF NOT EXISTS cash_ledger (
+    id                  BIGSERIAL       PRIMARY KEY,
+    robot_id            BIGINT          NOT NULL REFERENCES robots(id) ON DELETE CASCADE,
+    trade_id            BIGINT          REFERENCES robot_trades(id),     -- 关联交易(可空，如入金)
 
-    FOREACH v_period IN ARRAY v_periods
-    LOOP
-        -- 计算截止日期
-        v_cutoff_date := CASE v_period
-            WHEN '7D'  THEN CURRENT_DATE - INTERVAL '7 days'
-            WHEN '30D' THEN CURRENT_DATE - INTERVAL '30 days'
-            WHEN '90D' THEN CURRENT_DATE - INTERVAL '90 days'
-            ELSE '2000-01-01'::DATE
-        END;
+    -- 流水信息
+    ledger_type         ledger_type     NOT NULL,                        -- DEPOSIT/WITHDRAW/BUY_FREEZE/SELL_RETURN/COMMISSION/SLIPPAGE/DIVIDEND
+    direction           VARCHAR(4)      NOT NULL,                        -- IN(入金)/OUT(出金)
+    amount              DECIMAL(16,2)   NOT NULL,                        -- 金额(正数)
+    balance_before      DECIMAL(16,2)   NOT NULL,                        -- 变动前余额
+    balance_after       DECIMAL(16,2)   NOT NULL,                        -- 变动后余额
 
-        -- 按股票聚合
-        IF p_stat_type IN ('STOCK', 'ALL') THEN
-            INSERT INTO lhb_agg_stats (
-                stat_type, stat_key, stat_period,
-                lhb_count, buy_count, sell_count,
-                total_buy_amount, total_sell_amount, total_net_amount,
-                avg_score, win_rate_1d, win_rate_3d, win_rate_5d,
-                avg_pnl_1d, avg_pnl_3d, avg_pnl_5d,
-                max_pnl, min_pnl, updated_at
-            )
-            SELECT
-                'STOCK',
-                lsd.ts_code,
-                v_period,
-                COUNT(*),
-                COUNT(*) FILTER (WHERE lsd.l_net > 0),
-                COUNT(*) FILTER (WHERE lsd.l_net <= 0),
-                COALESCE(SUM(lsd.l_buy), 0),
-                COALESCE(SUM(lsd.l_sell), 0),
-                COALESCE(SUM(lsd.l_net), 0),
-                ROUND(AVG(lsd.score), 2),
-                ROUND(COUNT(*) FILTER (WHERE tn1.pnl_pct > 0)::DECIMAL /
-                      NULLIF(COUNT(*) FILTER (WHERE tn1.pnl_pct IS NOT NULL), 0), 4),
-                ROUND(COUNT(*) FILTER (WHERE tn3.pnl_pct > 0)::DECIMAL /
-                      NULLIF(COUNT(*) FILTER (WHERE tn3.pnl_pct IS NOT NULL), 0), 4),
-                ROUND(COUNT(*) FILTER (WHERE tn5.pnl_pct > 0)::DECIMAL /
-                      NULLIF(COUNT(*) FILTER (WHERE tn5.pnl_pct IS NOT NULL), 0), 4),
-                ROUND(AVG(tn1.pnl_pct), 4),
-                ROUND(AVG(tn3.pnl_pct), 4),
-                ROUND(AVG(tn5.pnl_pct), 4),
-                MAX(tn1.pnl_pct),
-                MIN(tn1.pnl_pct),
-                NOW()
-            FROM lhb_stock_daily lsd
-            LEFT JOIN lhb_tn_price tn1 ON tn1.stock_daily_id = lsd.id AND tn1.n_day = 1
-            LEFT JOIN lhb_tn_price tn3 ON tn3.stock_daily_id = lsd.id AND tn3.n_day = 3
-            LEFT JOIN lhb_tn_price tn5 ON tn5.stock_daily_id = lsd.id AND tn5.n_day = 5
-            WHERE lsd.trade_date >= v_cutoff_date
-            GROUP BY lsd.ts_code
-            ON CONFLICT (stat_type, stat_key, stat_period) DO UPDATE SET
-                lhb_count = EXCLUDED.lhb_count,
-                buy_count = EXCLUDED.buy_count,
-                sell_count = EXCLUDED.sell_count,
-                total_buy_amount = EXCLUDED.total_buy_amount,
-                total_sell_amount = EXCLUDED.total_sell_amount,
-                total_net_amount = EXCLUDED.total_net_amount,
-                avg_score = EXCLUDED.avg_score,
-                win_rate_1d = EXCLUDED.win_rate_1d,
-                win_rate_3d = EXCLUDED.win_rate_3d,
-                win_rate_5d = EXCLUDED.win_rate_5d,
-                avg_pnl_1d = EXCLUDED.avg_pnl_1d,
-                avg_pnl_3d = EXCLUDED.avg_pnl_3d,
-                avg_pnl_5d = EXCLUDED.avg_pnl_5d,
-                max_pnl = EXCLUDED.max_pnl,
-                min_pnl = EXCLUDED.min_pnl,
-                updated_at = NOW();
+    -- 关联信息
+    ts_code             VARCHAR(16),                                     -- 关联股票(交易流水时)
+    description         VARCHAR(256),                                    -- 流水描述
 
-            GET DIAGNOSTICS v_count = ROW_COUNT;
-            RAISE NOTICE '按股票聚合(%): 更新 % 条', v_period, v_count;
-        END IF;
+    -- 日期
+    biz_date            DATE            NOT NULL,                        -- 业务日期
+    created_at          TIMESTAMP       DEFAULT NOW(),
 
-        -- 按营业部聚合
-        IF p_stat_type IN ('BROKER', 'ALL') THEN
-            INSERT INTO lhb_agg_stats (
-                stat_type, stat_key, stat_period,
-                lhb_count, buy_count, sell_count,
-                total_buy_amount, total_sell_amount, total_net_amount,
-                avg_score, win_rate_1d, win_rate_3d, win_rate_5d,
-                avg_pnl_1d, avg_pnl_3d, avg_pnl_5d,
-                max_pnl, min_pnl,
-                top_industries, top_stocks, style_tag,
-                updated_at
-            )
-            SELECT
-                'BROKER',
-                ls.broker_name,
-                v_period,
-                COUNT(DISTINCT (ls.ts_code, ls.trade_date)),
-                COUNT(*) FILTER (WHERE ls.direction = 'BUY'),
-                COUNT(*) FILTER (WHERE ls.direction = 'SELL'),
-                COALESCE(SUM(ls.buy_amount), 0),
-                COALESCE(SUM(ls.sell_amount), 0),
-                COALESCE(SUM(ls.net_amount), 0),
-                ROUND(AVG(lsd.score), 2),
-                -- T+1胜率: 仅计算买入方向
-                ROUND(
-                    COUNT(*) FILTER (WHERE ls.direction = 'BUY' AND tn1.pnl_pct > 0)::DECIMAL /
-                    NULLIF(COUNT(*) FILTER (WHERE ls.direction = 'BUY' AND tn1.pnl_pct IS NOT NULL), 0),
-                    4
-                ),
-                ROUND(
-                    COUNT(*) FILTER (WHERE ls.direction = 'BUY' AND tn3.pnl_pct > 0)::DECIMAL /
-                    NULLIF(COUNT(*) FILTER (WHERE ls.direction = 'BUY' AND tn3.pnl_pct IS NOT NULL), 0),
-                    4
-                ),
-                ROUND(
-                    COUNT(*) FILTER (WHERE ls.direction = 'BUY' AND tn5.pnl_pct > 0)::DECIMAL /
-                    NULLIF(COUNT(*) FILTER (WHERE ls.direction = 'BUY' AND tn5.pnl_pct IS NOT NULL), 0),
-                    4
-                ),
-                ROUND(AVG(CASE WHEN ls.direction = 'BUY' THEN tn1.pnl_pct END), 4),
-                ROUND(AVG(CASE WHEN ls.direction = 'BUY' THEN tn3.pnl_pct END), 4),
-                ROUND(AVG(CASE WHEN ls.direction = 'BUY' THEN tn5.pnl_pct END), 4),
-                MAX(CASE WHEN ls.direction = 'BUY' THEN tn1.pnl_pct END),
-                MIN(CASE WHEN ls.direction = 'BUY' THEN tn1.pnl_pct END),
-                -- Top行业(子查询)
-                (
-                    SELECT jsonb_agg(jsonb_build_object('industry', sub.industry, 'count', sub.cnt) ORDER BY sub.cnt DESC)
-                    FROM (
-                        SELECT lsd2.industry, COUNT(*) AS cnt
-                        FROM lhb_seats ls2
-                        JOIN lhb_stock_daily lsd2 ON lsd2.id = ls2.stock_daily_id
-                        WHERE ls2.broker_name = ls.broker_name
-                          AND lsd2.trade_date >= v_cutoff_date
-                          AND lsd2.industry IS NOT NULL
-                        GROUP BY lsd2.industry
-                        ORDER BY cnt DESC
-                        LIMIT 5
-                    ) sub
-                ),
-                -- Top标的(子查询)
-                (
-                    SELECT jsonb_agg(jsonb_build_object('ts_code', sub.ts_code, 'name', sub.name, 'count', sub.cnt) ORDER BY sub.cnt DESC)
-                    FROM (
-                        SELECT ls2.ts_code, MAX(lsd2.name) AS name, COUNT(*) AS cnt
-                        FROM lhb_seats ls2
-                        JOIN lhb_stock_daily lsd2 ON lsd2.id = ls2.stock_daily_id
-                        WHERE ls2.broker_name = ls.broker_name
-                          AND lsd2.trade_date >= v_cutoff_date
-                        GROUP BY ls2.ts_code
-                        ORDER BY cnt DESC
-                        LIMIT 10
-                    ) sub
-                ),
-                -- 风格标签
-                CASE
-                    WHEN AVG(CASE WHEN ls.direction = 'BUY' THEN lsd.pct_change END) > 0.08 THEN '打板型'
-                    WHEN AVG(CASE WHEN ls.direction = 'BUY' THEN lsd.pct_change END) < 0.02 THEN '低吸型'
-                    WHEN ls.is_institution THEN '机构型'
-                    ELSE '综合型'
-                END,
-                NOW()
-            FROM lhb_seats ls
-            JOIN lhb_stock_daily lsd ON lsd.id = ls.stock_daily_id
-            LEFT JOIN lhb_tn_price tn1 ON tn1.stock_daily_id = lsd.id AND tn1.n_day = 1
-            LEFT JOIN lhb_tn_price tn3 ON tn3.stock_daily_id = lsd.id AND tn3.n_day = 3
-            LEFT JOIN lhb_tn_price tn5 ON tn5.stock_daily_id = lsd.id AND tn5.n_day = 5
-            WHERE lsd.trade_date >= v_cutoff_date
-            GROUP BY ls.broker_name, ls.is_institution
-            ON CONFLICT (stat_type, stat_key, stat_period) DO UPDATE SET
-                lhb_count = EXCLUDED.lhb_count,
-                buy_count = EXCLUDED.buy_count,
-                sell_count = EXCLUDED.sell_count,
-                total_buy_amount = EXCLUDED.total_buy_amount,
-                total_sell_amount = EXCLUDED.total_sell_amount,
-                total_net_amount = EXCLUDED.total_net_amount,
-                avg_score = EXCLUDED.avg_score,
-                win_rate_1d = EXCLUDED.win_rate_1d,
-                win_rate_3d = EXCLUDED.win_rate_3d,
-                win_rate_5d = EXCLUDED.win_rate_5d,
-                avg_pnl_1d = EXCLUDED.avg_pnl_1d,
-                avg_pnl_3d = EXCLUDED.avg_pnl_3d,
-                avg_pnl_5d = EXCLUDED.avg_pnl_5d,
-                max_pnl = EXCLUDED.max_pnl,
-                min_pnl = EXCLUDED.min_pnl,
-                top_industries = EXCLUDED.top_industries,
-                top_stocks = EXCLUDED.top_stocks,
-                style_tag = EXCLUDED.style_tag,
-                updated_at = NOW();
+    CONSTRAINT chk_amount CHECK (amount >= 0),
+    CONSTRAINT chk_direction CHECK (direction IN ('IN', 'OUT'))
+);
 
-            GET DIAGNOSTICS v_count = ROW_COUNT;
-            RAISE NOTICE '按营业部聚合(%): 更新 % 条', v_period, v_count;
-        END IF;
+COMMENT ON TABLE cash_ledger IS '资金流水账本，记录每一笔资金变动';
+COMMENT ON COLUMN cash_ledger.ledger_type IS '流水类型: DEPOSIT-入金 WITHDRAW-出金 BUY_FREEZE-买入冻结 SELL_RETURN-卖出回款 COMMISSION-佣金 SLIPPAGE-滑点 DIVIDEND-分红';
 
-        -- 按行业聚合
-        IF p_stat_type IN ('INDUSTRY', 'ALL') THEN
-            INSERT INTO lhb_agg_stats (
-                stat_type, stat_key, stat_period,
-                lhb_count,
-                total_buy_amount, total_sell_amount, total_net_amount,
-                avg_score,
-                win_rate_1d, avg_pnl_1d,
-                win_rate_3d, avg_pnl_3d,
-                updated_at
-            )
-            SELECT
-                'INDUSTRY',
-                COALESCE(lsd.industry, '未知'),
-                v_period,
-                COUNT(*),
-                COALESCE(SUM(lsd.l_buy), 0),
-                COALESCE(SUM(lsd.l_sell), 0),
-                COALESCE(SUM(lsd.l_net), 0),
-                ROUND(AVG(lsd.score), 2),
-                ROUND(COUNT(*) FILTER (WHERE tn1.pnl_pct > 0)::DECIMAL /
-                      NULLIF(COUNT(*) FILTER (WHERE tn1.pnl_pct IS NOT NULL), 0), 4),
-                ROUND(AVG(tn1.pnl_pct), 4),
-                ROUND(COUNT(*) FILTER (WHERE tn3.pnl_pct > 0)::DECIMAL /
-                      NULLIF(COUNT(*) FILTER (WHERE tn3.pnl_pct IS NOT NULL), 0), 4),
-                ROUND(AVG(tn3.pnl_pct), 4),
-                NOW()
-            FROM lhb_stock_daily lsd
-            LEFT JOIN lhb_tn_price tn1 ON tn1.stock_daily_id = lsd.id AND tn1.n_day = 1
-            LEFT JOIN lhb_tn_price tn3 ON tn3.stock_daily_id = lsd.id AND tn3.n_day = 3
-            WHERE lsd.trade_date >= v_cutoff_date
-            GROUP BY COALESCE(lsd.industry, '未知')
-            ON CONFLICT (stat_type, stat_key, stat_period) DO UPDATE SET
-                lhb_count = EXCLUDED.lhb_count,
-                total_buy_amount = EXCLUDED.total_buy_amount,
-                total_sell_amount = EXCLUDED.total_sell_amount,
-                total_net_amount = EXCLUDED.total_net_amount,
-                avg_score = EXCLUDED.avg_score,
-                win_rate_1d = EXCLUDED.win_rate_1d,
-                avg_pnl_1d = EXCLUDED.avg_pnl_1d,
-                win_rate_3d = EXCLUDED.win_rate_3d,
-                avg_pnl_3d = EXCLUDED.avg_pnl_3d,
-                updated_at = NOW();
-
-            GET DIAGNOSTICS v_count = ROW_COUNT;
-            RAISE NOTICE '按行业聚合(%): 更新 % 条', v_period, v_count;
-        END IF;
-
-    END LOOP;
-
-    -- 更新营业部活跃度排名
-    IF p_stat_type IN ('BROKER', 'ALL') THEN
-        WITH ranked AS (
-            SELECT
-                id,
-                ROW_NUMBER() OVER (
-                    PARTITION BY stat_period
-                    ORDER BY lhb_count DESC, total_net_amount DESC
-                ) AS rk
-            FROM lhb_agg_stats
-            WHERE stat_type = 'BROKER'
-        )
-        UPDATE lhb_agg_stats a
-        SET active_rank = r.rk
-        FROM ranked r
-        WHERE a.id = r.id;
-
-        RAISE NOTICE '营业部活跃度排名更新完成';
-    END IF;
-
-    RAISE NOTICE '聚合统计刷新全部完成';
-END;
-$$;
-
-COMMENT ON PROCEDURE sp_refresh_lhb_agg_stats IS '刷新龙虎榜聚合统计，支持按类型(STOCK/BROKER/INDUSTRY)和周期(7D/30D/90D/ALL)刷新';
+CREATE INDEX IF NOT EXISTS idx_ledger_robot_date ON cash_ledger(robot_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_robot_biz ON cash_ledger(robot_id, biz_date DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_type ON cash_ledger(robot_id, ledger_type, biz_date DESC);
+CREATE INDEX IF NOT EXISTS idx_ledger_trade ON cash_ledger(trade_id) WHERE trade_id IS NOT NULL;
 
 
 -- ============================================================
--- 11.3 每日结算(机器人净值快照)
+-- 3.5 每日净值快照
 -- ============================================================
-CREATE OR REPLACE PROCEDURE sp_daily_settlement(
-    p_trade_date    DATE DEFAULT CURRENT_DATE,
-    p_robot_id      BIGINT DEFAULT NULL              -- NULL表示所有运行中的机器人
-)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_robot         RECORD;
-    v_position_val  DECIMAL(16,2);
-    v_total_assets  DECIMAL(16,2);
-    v_nav           DECIMAL(12,6);
-    v_prev_nav      DECIMAL(12,6);
-    v_prev_assets   DECIMAL(16,2);
-    v_max_nav       DECIMAL(12,6);
-    v_pnl_daily     DECIMAL(16,2);
-    v_pnl_daily_pct DECIMAL(8,4);
-    v_pnl_total     DECIMAL(16,2);
-    v_pnl_total_pct DECIMAL(8,4);
-    v_drawdown      DECIMAL(8,4);
-    v_max_drawdown  DECIMAL(8,4);
-    v_pos_count     INT;
-    v_buy_amt       DECIMAL(16,2);
-    v_sell_amt      DECIMAL(16,2);
-    v_trade_count   INT;
-    v_benchmark_pct DECIMAL(8,4);
-    v_count         INT := 0;
-BEGIN
-    -- 检查是否交易日
-    IF NOT fn_is_trade_date(p_trade_date) THEN
-        RAISE NOTICE '% 非交易日，跳过结算', p_trade_date;
-        RETURN;
-    END IF;
+CREATE TABLE IF NOT EXISTS daily_nav (
+    id                  BIGSERIAL       PRIMARY KEY,
+    robot_id            BIGINT          NOT NULL REFERENCES robots(id) ON DELETE CASCADE,
+    trade_date          DATE            NOT NULL,
 
-    -- 遍历需要结算的机器人
-    FOR v_robot IN
-        SELECT * FROM robots
-        WHERE status IN ('RUNNING', 'PAUSED')
-          AND (p_robot_id IS NULL OR id = p_robot_id)
-    LOOP
-        -- 1. 计算持仓市值
-        --    注意: 实际应用中 current_price 需从行情API获取
-        --    这里从 kline_daily 获取当日收盘价
-        SELECT
-            COALESCE(SUM(vp.shares * COALESCE(kd.close, vp.cost_price)), 0),
-            COUNT(*)
-        INTO v_position_val, v_pos_count
-        FROM v_robot_positions vp
-        LEFT JOIN kline_daily kd ON kd.ts_code = vp.ts_code AND kd.trade_date = p_trade_date
-        WHERE vp.robot_id = v_robot.id;
+    -- 净值
+    net_value           DECIMAL(12,6)   NOT NULL,                        -- 单位净值(初始1.000000)
+    cumulative_nav      DECIMAL(12,6),                                   -- 累计净值(含分红)
 
-        -- 2. 计算总资产
-        v_total_assets := v_robot.cash + v_position_val;
+    -- 资产明细
+    total_assets        DECIMAL(16,2)   NOT NULL,                        -- 总资产
+    cash                DECIMAL(16,2)   NOT NULL,                        -- 现金
+    frozen_amount       DECIMAL(16,2)   DEFAULT 0,                       -- 冻结资金
+    position_value      DECIMAL(16,2)   DEFAULT 0,                       -- 持仓市值
+    position_count      SMALLINT        DEFAULT 0,                       -- 持仓股票数
 
-        -- 3. 计算单位净值
-        IF v_robot.initial_capital > 0 THEN
-            v_nav := ROUND(v_total_assets / v_robot.initial_capital, 6);
-        ELSE
-            v_nav := 1.000000;
-        END IF;
+    -- 当日盈亏
+    pnl_daily           DECIMAL(16,2)   DEFAULT 0,                       -- 当日盈亏金额
+    pnl_daily_pct       DECIMAL(8,4)    DEFAULT 0,                       -- 当日收益率(小数)
 
-        -- 4. 获取前一日净值
-        SELECT net_value, total_assets, max_net_value
-        INTO v_prev_nav, v_prev_assets, v_max_nav
-        FROM daily_nav
-        WHERE robot_id = v_robot.id AND trade_date < p_trade_date
-        ORDER BY trade_date DESC
-        LIMIT 1;
+    -- 累计盈亏
+    pnl_total           DECIMAL(16,2)   DEFAULT 0,                       -- 累计盈亏金额
+    pnl_total_pct       DECIMAL(8,4)    DEFAULT 0,                       -- 累计收益率(小数)
 
-        -- 首次结算默认值
-        v_prev_nav := COALESCE(v_prev_nav, 1.000000);
-        v_prev_assets := COALESCE(v_prev_assets, v_robot.initial_capital);
-        v_max_nav := COALESCE(v_max_nav, 1.000000);
+    -- 回撤
+    drawdown            DECIMAL(8,4)    DEFAULT 0,                       -- 当前回撤(小数)
+    max_drawdown        DECIMAL(8,4)    DEFAULT 0,                       -- 历史最大回撤(小数)
+    max_net_value       DECIMAL(12,6),                                   -- 历史最高净值
 
-        -- 5. 计算当日盈亏
-        v_pnl_daily := v_total_assets - v_prev_assets;
-        v_pnl_daily_pct := CASE
-            WHEN v_prev_assets > 0 THEN ROUND(v_pnl_daily / v_prev_assets, 4)
-            ELSE 0
-        END;
+    -- 当日交易统计
+    trade_count         SMALLINT        DEFAULT 0,                       -- 当日交易笔数
+    buy_amount          DECIMAL(16,2)   DEFAULT 0,                       -- 当日买入额
+    sell_amount         DECIMAL(16,2)   DEFAULT 0,                       -- 当日卖出额
 
-        -- 6. 计算累计盈亏
-        v_pnl_total := v_total_assets - v_robot.initial_capital;
-        v_pnl_total_pct := CASE
-            WHEN v_robot.initial_capital > 0 THEN ROUND(v_pnl_total / v_robot.initial_capital, 4)
-            ELSE 0
-        END;
+    -- 基准对比
+    benchmark_pct       DECIMAL(8,4),                                    -- 基准(沪深300)当日涨跌
+    excess_return       DECIMAL(8,4),                                    -- 超额收益(小数)
 
-        -- 7. 更新最高净值
-        IF v_nav > v_max_nav THEN
-            v_max_nav := v_nav;
-        END IF;
+    created_at          TIMESTAMP       DEFAULT NOW(),
 
-        -- 8. 计算回撤
-        v_drawdown := CASE
-            WHEN v_max_nav > 0 THEN ROUND((v_nav - v_max_nav) / v_max_nav, 4)
-            ELSE 0
-        END;
+    CONSTRAINT uk_daily_nav UNIQUE(robot_id, trade_date)
+);
 
-        -- 9. 历史最大回撤
-        SELECT LEAST(
-            COALESCE(MIN(drawdown), 0),
-            v_drawdown
-        ) INTO v_max_drawdown
-        FROM daily_nav
-        WHERE robot_id = v_robot.id;
+COMMENT ON TABLE daily_nav IS '机器人每日净值快照，每个交易日收盘后生成一条';
 
-        -- 10. 当日交易统计
-        SELECT
-            COALESCE(COUNT(*), 0),
-            COALESCE(SUM(CASE WHEN direction = 'BUY' THEN amount ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN direction = 'SELL' THEN amount ELSE 0 END), 0)
-        INTO v_trade_count, v_buy_amt, v_sell_amt
-        FROM robot_trades
-        WHERE robot_id = v_robot.id AND trade_date = p_trade_date;
-
-        -- 11. 获取基准收益(沪深300)
-        SELECT pct_change INTO v_benchmark_pct
-        FROM kline_daily
-        WHERE ts_code = '000300.SH' AND trade_date = p_trade_date;
-
-        -- 12. 写入净值快照
-        INSERT INTO daily_nav (
-            robot_id, trade_date,
-            net_value, cumulative_nav,
-            total_assets, cash, frozen_amount, position_value, position_count,
-            pnl_daily, pnl_daily_pct,
-            pnl_total, pnl_total_pct,
-            drawdown, max_drawdown, max_net_value,
-            trade_count, buy_amount, sell_amount,
-            benchmark_pct, excess_return
-        ) VALUES (
-            v_robot.id, p_trade_date,
-            v_nav, v_nav,  -- cumulative_nav 暂等于 nav(无分红场景)
-            v_total_assets, v_robot.cash, v_robot.frozen_amount, v_position_val, v_pos_count,
-            v_pnl_daily, v_pnl_daily_pct,
-            v_pnl_total, v_pnl_total_pct,
-            v_drawdown, v_max_drawdown, v_max_nav,
-            v_trade_count, v_buy_amt, v_sell_amt,
-            v_benchmark_pct,
-            CASE WHEN v_benchmark_pct IS NOT NULL THEN v_pnl_daily_pct - v_benchmark_pct ELSE NULL END
-        )
-        ON CONFLICT (robot_id, trade_date) DO UPDATE SET
-            net_value = EXCLUDED.net_value,
-            cumulative_nav = EXCLUDED.cumulative_nav,
-            total_assets = EXCLUDED.total_assets,
-            cash = EXCLUDED.cash,
-            frozen_amount = EXCLUDED.frozen_amount,
-            position_value = EXCLUDED.position_value,
-            position_count = EXCLUDED.position_count,
-            pnl_daily = EXCLUDED.pnl_daily,
-            pnl_daily_pct = EXCLUDED.pnl_daily_pct,
-            pnl_total = EXCLUDED.pnl_total,
-            pnl_total_pct = EXCLUDED.pnl_total_pct,
-            drawdown = EXCLUDED.drawdown,
-            max_drawdown = EXCLUDED.max_drawdown,
-            max_net_value = EXCLUDED.max_net_value,
-            trade_count = EXCLUDED.trade_count,
-            buy_amount = EXCLUDED.buy_amount,
-            sell_amount = EXCLUDED.sell_amount,
-            benchmark_pct = EXCLUDED.benchmark_pct,
-            excess_return = EXCLUDED.excess_return;
-
-        -- 13. 同步更新机器人主表
-        UPDATE robots SET
-            current_capital = v_total_assets,
-            total_assets = v_total_assets,
-            total_pnl = v_pnl_total,
-            total_pnl_pct = v_pnl_total_pct,
-            max_drawdown = v_max_drawdown,
-            max_drawdown_amount = CASE
-                WHEN v_robot.initial_capital > 0
-                THEN ROUND(v_max_drawdown * v_robot.initial_capital, 2)
-                ELSE 0
-            END,
-            updated_at = NOW()
-        WHERE id = v_robot.id;
-
-        v_count := v_count + 1;
-        RAISE NOTICE '机器人[%] % 结算完成: 净值=%, 日收益=%%, 总收益=%%',
-            v_robot.id, v_robot.name, v_nav,
-            ROUND(v_pnl_daily_pct * 100, 2),
-            ROUND(v_pnl_total_pct * 100, 2);
-
-    END LOOP;
-
-    RAISE NOTICE '每日结算完成，共处理 % 个机器人', v_count;
-END;
-$$;
-
-COMMENT ON PROCEDURE sp_daily_settlement IS '每日收盘后结算，计算机器人净值/盈亏/回撤并生成快照';
+CREATE INDEX IF NOT EXISTS idx_nav_robot_date ON daily_nav(robot_id, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_nav_date ON daily_nav(trade_date DESC);
 
 
 -- ============================================================
--- 11.4 数据清理(历史数据归档)
+-- 3.6 模拟交易(观察仓)
 -- ============================================================
-CREATE OR REPLACE PROCEDURE sp_cleanup_old_data(
-    p_keep_days     INT DEFAULT 365,                  -- 保留天数
-    p_dry_run       BOOLEAN DEFAULT TRUE              -- 试运行(不实际删除)
-)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_cutoff_date   DATE;
-    v_count         BIGINT;
-BEGIN
-    v_cutoff_date := CURRENT_DATE - (p_keep_days || ' days')::INTERVAL;
+CREATE TABLE IF NOT EXISTS sim_trades (
+    id                  BIGSERIAL       PRIMARY KEY,
+    robot_id            BIGINT          NOT NULL REFERENCES robots(id) ON DELETE CASCADE,
+    ts_code             VARCHAR(16)     NOT NULL REFERENCES stock_info(ts_code),
+    name                VARCHAR(32),
 
-    RAISE NOTICE '清理截止日期: %, 模式: %',
-        v_cutoff_date,
-        CASE WHEN p_dry_run THEN '试运行(DRY RUN)' ELSE '正式执行' END;
+    -- 入场信息
+    entry_date          DATE            NOT NULL,
+    entry_price         DECIMAL(12,4)   NOT NULL,
+    entry_score         DECIMAL(6,2),                                    -- 入场时评分
+    entry_reason        VARCHAR(256),                                    -- 入场原因
+    shares              INT             NOT NULL DEFAULT 0,              -- 模拟股数
 
-    -- 1. 采集器错误日志(保留较短时间)
-    SELECT COUNT(*) INTO v_count
-    FROM collector_error_log WHERE created_at < v_cutoff_date - INTERVAL '30 days';
-    RAISE NOTICE '  collector_error_log: 将清理 % 条', v_count;
-    IF NOT p_dry_run THEN
-        DELETE FROM collector_error_log WHERE created_at < v_cutoff_date - INTERVAL '30 days';
-    END IF;
+    -- 目标与止损
+    target_price        DECIMAL(12,4),                                   -- 目标价
+    stop_loss_price     DECIMAL(12,4),                                   -- 止损价
+    max_hold_days       INT             DEFAULT 10,                      -- 最大持仓天数
 
-    -- 2. 数据源熔断日志
-    SELECT COUNT(*) INTO v_count
-    FROM datasource_circuit_log WHERE created_at < v_cutoff_date - INTERVAL '30 days';
-    RAISE NOTICE '  datasource_circuit_log: 将清理 % 条', v_count;
-    IF NOT p_dry_run THEN
-        DELETE FROM datasource_circuit_log WHERE created_at < v_cutoff_date - INTERVAL '30 days';
-    END IF;
+    -- 出场信息
+    exit_date           DATE,
+    exit_price          DECIMAL(12,4),
+    exit_reason         VARCHAR(256),                                    -- 出场原因
 
-    -- 3. 审计日志(保留较长)
-    SELECT COUNT(*) INTO v_count
-    FROM audit_logs WHERE created_at < v_cutoff_date;
-    RAISE NOTICE '  audit_logs: 将清理 % 条', v_count;
-    IF NOT p_dry_run THEN
-        DELETE FROM audit_logs WHERE created_at < v_cutoff_date;
-    END IF;
+    -- 盈亏
+    realized_pnl        DECIMAL(16,2),                                   -- 已实现盈亏
+    realized_pnl_pct    DECIMAL(8,4),                                    -- 已实现收益率(小数)
+    max_profit_pct      DECIMAL(8,4),                                    -- 持仓期间最大浮盈(小数)
+    max_loss_pct        DECIMAL(8,4),                                    -- 持仓期间最大浮亏(小数)
+    hold_days           INT,                                             -- 实际持仓天数
 
-    -- 4. 交易事件(已读+已处理的)
-    SELECT COUNT(*) INTO v_count
-    FROM trade_events
-    WHERE created_at < v_cutoff_date
-      AND is_read = TRUE
-      AND is_handled = TRUE;
-    RAISE NOTICE '  trade_events(已处理): 将清理 % 条', v_count;
-    IF NOT p_dry_run THEN
-        DELETE FROM trade_events
-        WHERE created_at < v_cutoff_date
-          AND is_read = TRUE
-          AND is_handled = TRUE;
-    END IF;
+    -- 关联
+    lhb_daily_id        BIGINT          REFERENCES lhb_stock_daily(id),  -- 关联龙虎榜记录
+    converted_trade_id  BIGINT,                                          -- 转为真实交易后的trade_id
 
-    -- 5. 模拟交易快照(已关闭的模拟交易)
-    SELECT COUNT(*) INTO v_count
-    FROM sim_trade_snapshots sts
-    JOIN sim_trades st ON st.id = sts.sim_trade_id
-    WHERE st.status != 'OPEN'
-      AND sts.snapshot_date < v_cutoff_date - INTERVAL '90 days';
-    RAISE NOTICE '  sim_trade_snapshots(已关闭): 将清理 % 条', v_count;
-    IF NOT p_dry_run THEN
-        DELETE FROM sim_trade_snapshots
-        WHERE sim_trade_id IN (
-            SELECT id FROM sim_trades WHERE status != 'OPEN'
-        )
-        AND snapshot_date < v_cutoff_date - INTERVAL '90 days';
-    END IF;
+    -- 状态
+    status              sim_trade_status DEFAULT 'OPEN',                 -- OPEN/CLOSED/STOP_LOSS/TAKE_PROFIT/EXPIRED
 
-    -- 6. 市场快照(只保留 CLOSE 类型，删除盘中快照)
-    SELECT COUNT(*) INTO v_count
-    FROM market_snapshots
-    WHERE snapshot_type = 'REALTIME'
-      AND trade_date < v_cutoff_date - INTERVAL '7 days';
-    RAISE NOTICE '  market_snapshots(REALTIME): 将清理 % 条', v_count;
-    IF NOT p_dry_run THEN
-        DELETE FROM market_snapshots
-        WHERE snapshot_type = 'REALTIME'
-          AND trade_date < v_cutoff_date - INTERVAL '7 days';
-    END IF;
+    created_at          TIMESTAMP       DEFAULT NOW(),
+    updated_at          TIMESTAMP       DEFAULT NOW(),
 
-    RAISE NOTICE '数据清理%完成',
-        CASE WHEN p_dry_run THEN '(试运行)' ELSE '' END;
-END;
-$$;
+    CONSTRAINT chk_sim_entry CHECK (entry_price > 0)
+);
 
-COMMENT ON PROCEDURE sp_cleanup_old_data IS '清理历史数据，支持试运行模式。p_keep_days控制保留天数';
+COMMENT ON TABLE sim_trades IS '模拟交易(观察仓)，用于追踪未实际入场的信号表现';
+COMMENT ON COLUMN sim_trades.converted_trade_id IS '如果模拟交易确认入场，关联到 robot_trades.id';
+
+CREATE INDEX IF NOT EXISTS idx_sim_robot_status ON sim_trades(robot_id, status);
+CREATE INDEX IF NOT EXISTS idx_sim_robot_date ON sim_trades(robot_id, entry_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sim_code ON sim_trades(ts_code, entry_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sim_open ON sim_trades(status, updated_at DESC) WHERE status = 'OPEN';
+CREATE INDEX IF NOT EXISTS idx_sim_lhb ON sim_trades(lhb_daily_id) WHERE lhb_daily_id IS NOT NULL;
+
+-- 添加robot_trades的sim_trade_id外键(延迟添加，因为两表互相引用)
+ALTER TABLE robot_trades
+    ADD CONSTRAINT fk_trades_sim FOREIGN KEY (sim_trade_id) REFERENCES sim_trades(id) ON DELETE SET NULL;
 
 
 -- ============================================================
--- 11.5 AHS(账户健康度)计算
+-- 3.7 模拟交易快照
 -- ============================================================
-CREATE OR REPLACE PROCEDURE sp_calc_ahs_score(
-    p_robot_id      BIGINT DEFAULT NULL
-)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_robot         RECORD;
-    v_ahs           DECIMAL(6,2);
-    v_detail        JSONB;
-    -- 各维度分数(0-100)
-    v_capital_util  DECIMAL(6,2);    -- 资金利用率得分
-    v_win_rate_s    DECIMAL(6,2);    -- 胜率得分
-    v_drawdown_s    DECIMAL(6,2);    -- 回撤得分
-    v_consistency_s DECIMAL(6,2);    -- 稳定性得分
-    v_risk_s        DECIMAL(6,2);    -- 风控得分
-    -- 中间变量
-    v_util_pct      DECIMAL(8,4);
-    v_win_rate      DECIMAL(8,4);
-    v_recent_pnl    DECIMAL(8,4)[];
-    v_std_dev       DECIMAL(8,4);
-    v_count         INT := 0;
-BEGIN
-    FOR v_robot IN
-        SELECT * FROM robots
-        WHERE (p_robot_id IS NULL OR id = p_robot_id)
-          AND status IN ('RUNNING', 'PAUSED')
-    LOOP
-        -- 1. 资金利用率 (仓位太低或太高都不好)
-        --    最优区间: 40%-80%
-        v_util_pct := CASE
-            WHEN v_robot.total_assets > 0
-            THEN 1.0 - (v_robot.cash / v_robot.total_assets)
-            ELSE 0
-        END;
-        v_capital_util := CASE
-            WHEN v_util_pct BETWEEN 0.40 AND 0.80 THEN 100
-            WHEN v_util_pct BETWEEN 0.20 AND 0.40 THEN 60 + (v_util_pct - 0.20) / 0.20 * 40
-            WHEN v_util_pct BETWEEN 0.80 AND 0.95 THEN 100 - (v_util_pct - 0.80) / 0.15 * 30
-            WHEN v_util_pct > 0.95 THEN 40  -- 满仓风险
-            WHEN v_util_pct < 0.20 THEN 40  -- 空仓效率低
-            ELSE 50
-        END;
+CREATE TABLE IF NOT EXISTS sim_trade_snapshots (
+    id                  BIGSERIAL       PRIMARY KEY,
+    sim_trade_id        BIGINT          NOT NULL REFERENCES sim_trades(id) ON DELETE CASCADE,
+    robot_id            BIGINT          NOT NULL REFERENCES robots(id),
+    snapshot_date       DATE            NOT NULL,
 
-        -- 2. 胜率得分
-        v_win_rate := CASE
-            WHEN v_robot.total_trades > 0
-            THEN v_robot.win_count::DECIMAL / v_robot.total_trades
-            ELSE 0.5  -- 无交易默认50%
-        END;
-        v_win_rate_s := CASE
-            WHEN v_win_rate >= 0.60 THEN 100
-            WHEN v_win_rate >= 0.50 THEN 70 + (v_win_rate - 0.50) / 0.10 * 30
-            WHEN v_win_rate >= 0.40 THEN 40 + (v_win_rate - 0.40) / 0.10 * 30
-            WHEN v_win_rate >= 0.30 THEN 20 + (v_win_rate - 0.30) / 0.10 * 20
-            ELSE 10
-        END;
+    -- 价格快照
+    current_price       DECIMAL(12,4)   NOT NULL,
+    open_price          DECIMAL(12,4),
+    high_price          DECIMAL(12,4),
+    low_price           DECIMAL(12,4),
+    pct_change          DECIMAL(8,4),                                    -- 当日涨跌幅(小数)
 
-        -- 3. 回撤得分 (回撤越小分数越高)
-        v_drawdown_s := CASE
-            WHEN ABS(v_robot.max_drawdown) <= 0.05 THEN 100
-            WHEN ABS(v_robot.max_drawdown) <= 0.10 THEN 80
-            WHEN ABS(v_robot.max_drawdown) <= 0.15 THEN 60
-            WHEN ABS(v_robot.max_drawdown) <= 0.20 THEN 40
-            WHEN ABS(v_robot.max_drawdown) <= 0.30 THEN 20
-            ELSE 5
-        END;
+    -- 浮动盈亏
+    unrealized_pnl      DECIMAL(16,2),                                   -- 浮动盈亏金额
+    unrealized_pnl_pct  DECIMAL(8,4),                                    -- 浮动盈亏比例(小数)
 
-        -- 4. 稳定性得分 (近10日收益波动率)
-        SELECT ARRAY_AGG(pnl_daily_pct ORDER BY trade_date DESC)
-        INTO v_recent_pnl
-        FROM (
-            SELECT pnl_daily_pct, trade_date
-            FROM daily_nav
-            WHERE robot_id = v_robot.id
-            ORDER BY trade_date DESC
-            LIMIT 10
-        ) sub;
+    -- 区间极值(从入场至今)
+    max_price_since     DECIMAL(12,4),                                   -- 入场以来最高价
+    min_price_since     DECIMAL(12,4),                                   -- 入场以来最低价
+    max_pnl_pct         DECIMAL(8,4),                                    -- 入场以来最大浮盈(小数)
+    min_pnl_pct         DECIMAL(8,4),                                    -- 入场以来最大浮亏(小数)
 
-        IF v_recent_pnl IS NOT NULL AND array_length(v_recent_pnl, 1) >= 3 THEN
-            -- 计算标准差
-            SELECT STDDEV(val) INTO v_std_dev
-            FROM unnest(v_recent_pnl) AS val;
+    -- 持仓信息
+    hold_days           INT             NOT NULL DEFAULT 0,              -- 已持仓天数
+    distance_to_target  DECIMAL(8,4),                                    -- 距目标价比例(小数)
+    distance_to_stop    DECIMAL(8,4),                                    -- 距止损价比例(小数)
 
-            v_consistency_s := CASE
-                WHEN v_std_dev IS NULL THEN 50
-                WHEN v_std_dev <= 0.01 THEN 100     -- 日波动<1%
-                WHEN v_std_dev <= 0.02 THEN 80
-                WHEN v_std_dev <= 0.03 THEN 60
-                WHEN v_std_dev <= 0.05 THEN 40
-                ELSE 20
-            END;
-        ELSE
-            v_consistency_s := 50;  -- 数据不足默认50
-        END IF;
+    -- 市场环境(快照时刻)
+    market_sentiment    DECIMAL(6,2),                                    -- 当日市场情绪评分
 
-        -- 5. 风控得分 (综合判断)
-        v_risk_s := 100;
+    created_at          TIMESTAMP       DEFAULT NOW(),
 
-        -- 5a. 检查是否触发过止损
-        IF EXISTS (
-            SELECT 1 FROM robot_trades
-            WHERE robot_id = v_robot.id
-              AND phase = 'STOP_LOSS'
-              AND trade_date >= CURRENT_DATE - INTERVAL '30 days'
-        ) THEN
-            v_risk_s := v_risk_s - 15;  -- 近30日有止损扣分
-        END IF;
+    CONSTRAINT uk_sim_snapshot UNIQUE(sim_trade_id, snapshot_date)
+);
 
-        -- 5b. 检查单笔最大亏损
-        DECLARE
-            v_max_single_loss DECIMAL(8,4);
-        BEGIN
-            SELECT MIN(pnl_pct) INTO v_max_single_loss
-            FROM robot_trades
-            WHERE robot_id = v_robot.id
-              AND direction = 'SELL'
-              AND pnl_pct IS NOT NULL
-              AND trade_date >= CURRENT_DATE - INTERVAL '30 days';
+COMMENT ON TABLE sim_trade_snapshots IS '模拟交易每日快照，追踪观察仓每日表现';
 
-            IF v_max_single_loss IS NOT NULL AND v_max_single_loss < -0.10 THEN
-                v_risk_s := v_risk_s - 20;  -- 单笔亏损超10%
-            ELSIF v_max_single_loss IS NOT NULL AND v_max_single_loss < -0.07 THEN
-                v_risk_s := v_risk_s - 10;  -- 单笔亏损超7%
-            END IF;
-        END;
-
-        -- 5c. 检查持仓集中度
-        DECLARE
-            v_max_position_pct DECIMAL(8,4);
-        BEGIN
-            SELECT MAX(
-                CASE WHEN v_robot.total_assets > 0
-                THEN (vp.shares * COALESCE(kd.close, vp.cost_price)) / v_robot.total_assets
-                ELSE 0 END
-            ) INTO v_max_position_pct
-            FROM v_robot_positions vp
-            LEFT JOIN kline_daily kd ON kd.ts_code = vp.ts_code
-                AND kd.trade_date = (SELECT MAX(trade_date) FROM kline_daily WHERE ts_code = vp.ts_code)
-            WHERE vp.robot_id = v_robot.id;
-
-            IF v_max_position_pct IS NOT NULL AND v_max_position_pct > 0.35 THEN
-                v_risk_s := v_risk_s - 15;  -- 单票仓位超35%
-            END IF;
-        END;
-
-        -- 5d. 连续亏损检查
-        DECLARE
-            v_consecutive_loss INT := 0;
-        BEGIN
-            SELECT COUNT(*) INTO v_consecutive_loss
-            FROM (
-                SELECT pnl_daily_pct,
-                    ROW_NUMBER() OVER (ORDER BY trade_date DESC) AS rn
-                FROM daily_nav
-                WHERE robot_id = v_robot.id
-                ORDER BY trade_date DESC
-                LIMIT 10
-            ) sub
-            WHERE rn <= (
-                -- 找到第一个非亏损日之前的连续亏损天数
-                SELECT COALESCE(MIN(rn) - 1, 10)
-                FROM (
-                    SELECT pnl_daily_pct,
-                        ROW_NUMBER() OVER (ORDER BY trade_date DESC) AS rn
-                    FROM daily_nav
-                    WHERE robot_id = v_robot.id
-                    ORDER BY trade_date DESC
-                    LIMIT 10
-                ) inner_sub
-                WHERE pnl_daily_pct >= 0
-            );
-
-            IF v_consecutive_loss >= 5 THEN
-                v_risk_s := v_risk_s - 20;
-            ELSIF v_consecutive_loss >= 3 THEN
-                v_risk_s := v_risk_s - 10;
-            END IF;
-        END;
-
-        -- 下限保护
-        v_risk_s := GREATEST(v_risk_s, 0);
-
-        -- 6. 综合AHS评分 (加权平均)
-        --    权重: 资金利用率15% + 胜率25% + 回撤25% + 稳定性15% + 风控20%
-        v_ahs := ROUND(
-            v_capital_util * 0.15 +
-            v_win_rate_s   * 0.25 +
-            v_drawdown_s   * 0.25 +
-            v_consistency_s * 0.15 +
-            v_risk_s       * 0.20,
-            2
-        );
-
-        -- 构建明细JSON
-        v_detail := jsonb_build_object(
-            'capital_utilization', jsonb_build_object(
-                'score', v_capital_util,
-                'weight', 0.15,
-                'util_pct', ROUND(v_util_pct, 4),
-                'desc', '资金利用率评分'
-            ),
-            'win_rate', jsonb_build_object(
-                'score', v_win_rate_s,
-                'weight', 0.25,
-                'win_rate', ROUND(v_win_rate, 4),
-                'total_trades', v_robot.total_trades,
-                'desc', '胜率评分'
-            ),
-            'drawdown', jsonb_build_object(
-                'score', v_drawdown_s,
-                'weight', 0.25,
-                'max_drawdown', v_robot.max_drawdown,
-                'desc', '回撤控制评分'
-            ),
-            'consistency', jsonb_build_object(
-                'score', v_consistency_s,
-                'weight', 0.15,
-                'std_dev', v_std_dev,
-                'data_points', COALESCE(array_length(v_recent_pnl, 1), 0),
-                'desc', '收益稳定性评分'
-            ),
-            'risk_control', jsonb_build_object(
-                'score', v_risk_s,
-                'weight', 0.20,
-                'desc', '风控综合评分'
-            ),
-            'calculated_at', NOW()
-        );
-
-        -- 7. 更新机器人
-        UPDATE robots SET
-            ahs_score = v_ahs,
-            ahs_detail = v_detail,
-            updated_at = NOW()
-        WHERE id = v_robot.id;
-
-        v_count := v_count + 1;
-        RAISE NOTICE '机器人[%] % AHS=% (资金:%/胜率:%/回撤:%/稳定:%/风控:%)',
-            v_robot.id, v_robot.name, v_ahs,
-            v_capital_util, v_win_rate_s, v_drawdown_s, v_consistency_s, v_risk_s;
-
-    END LOOP;
-
-    RAISE NOTICE 'AHS计算完成，共处理 % 个机器人', v_count;
-END;
-$$;
-
-COMMENT ON PROCEDURE sp_calc_ahs_score IS '计算机器人账户健康度(AHS)评分，综合资金利用率/胜率/回撤/稳定性/风控五个维度';
+CREATE INDEX IF NOT EXISTS idx_sim_snap_trade ON sim_trade_snapshots(sim_trade_id, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sim_snap_robot ON sim_trade_snapshots(robot_id, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_sim_snap_date ON sim_trade_snapshots(snapshot_date DESC);
 
 
 -- ============================================================
 -- ============================================================
--- 第十二部分: 定期维护任务SQL(配合Celery调度)
+-- 第四部分: 事件与日志表 (3张)
 -- ============================================================
 -- ============================================================
 
 
 -- ============================================================
--- 12.1 过期模拟交易自动关闭
+-- 4.1 交易事件
 -- ============================================================
-CREATE OR REPLACE PROCEDURE sp_close_expired_sim_trades()
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_rec       RECORD;
-    v_close     DECIMAL(12,4);
-    v_count     INT := 0;
-BEGIN
-    FOR v_rec IN
-        SELECT
-            st.*,
-            fn_trade_days_between(st.entry_date, CURRENT_DATE) AS actual_hold_days
-        FROM sim_trades st
-        WHERE st.status = 'OPEN'
-          AND fn_trade_days_between(st.entry_date, CURRENT_DATE) >= st.max_hold_days
-    LOOP
-        -- 获取最新收盘价
-        SELECT close INTO v_close
-        FROM kline_daily
-        WHERE ts_code = v_rec.ts_code
-        ORDER BY trade_date DESC
-        LIMIT 1;
+CREATE TABLE IF NOT EXISTS trade_events (
+    id                  BIGSERIAL       PRIMARY KEY,
+    robot_id            BIGINT          NOT NULL REFERENCES robots(id) ON DELETE CASCADE,
 
-        -- 更新模拟交易
-        UPDATE sim_trades SET
-            status = 'EXPIRED',
-            exit_date = CURRENT_DATE,
-            exit_price = v_close,
-            exit_reason = format('持仓达到最大天数限制(%s天)', v_rec.max_hold_days),
-            hold_days = v_rec.actual_hold_days,
-            realized_pnl = CASE
-                WHEN v_close IS NOT NULL AND v_rec.entry_price > 0
-                THEN (v_close - v_rec.entry_price) * v_rec.shares
-                ELSE NULL
-            END,
-            realized_pnl_pct = CASE
-                WHEN v_close IS NOT NULL AND v_rec.entry_price > 0
-                THEN ROUND((v_close - v_rec.entry_price) / v_rec.entry_price, 4)
-                ELSE NULL
-            END,
-            updated_at = NOW()
-        WHERE id = v_rec.id;
+    -- 事件信息
+    event_type          VARCHAR(32)     NOT NULL,                        -- 事件类型
+    event_level         VARCHAR(8)      DEFAULT 'INFO',                  -- DEBUG/INFO/WARN/ERROR/CRITICAL
 
-        v_count := v_count + 1;
-    END LOOP;
+    -- 关联实体
+    ts_code             VARCHAR(16),
+    trade_id            BIGINT          REFERENCES robot_trades(id),
+    sim_trade_id        BIGINT          REFERENCES sim_trades(id),
 
-    RAISE NOTICE '过期模拟交易关闭完成，共处理 % 条', v_count;
-END;
-$$;
+    -- 事件内容
+    title               VARCHAR(256)    NOT NULL,                        -- 事件标题
+    message             TEXT,                                            -- 事件详情
+    detail              JSONB           DEFAULT '{}'::jsonb,             -- 结构化详情
 
-COMMENT ON PROCEDURE sp_close_expired_sim_trades IS '关闭超过最大持仓天数的模拟交易';
+    -- 触发条件
+    trigger_type        VARCHAR(32),                                     -- SIGNAL/RISK/SCHEDULE/MANUAL/SYSTEM
+    trigger_value       JSONB,                                           -- 触发条件值
+
+    -- 状态
+    is_read             BOOLEAN         DEFAULT FALSE,
+    is_handled          BOOLEAN         DEFAULT FALSE,
+    handled_at          TIMESTAMP,
+    handler_note        TEXT,                                            -- 处理备注
+
+    trade_date          DATE,
+    created_at          TIMESTAMP       DEFAULT NOW()
+);
+
+COMMENT ON TABLE trade_events IS '交易事件流，记录机器人运行中的所有重要事件';
+COMMENT ON COLUMN trade_events.event_type IS '事件类型: SIGNAL_GENERATED(信号生成)/ORDER_PLACED(下单)/ORDER_FILLED(成交)/STOP_LOSS(止损触发)/TAKE_PROFIT(止盈触发)/RISK_ALERT(风控告警)/CIRCUIT_BREAK(熔断触发)/DAILY_SETTLE(日终结算)/POSITION_EXPIRE(持仓到期)/AHS_UPDATE(健康度更新)';
+
+CREATE INDEX IF NOT EXISTS idx_event_robot_date ON trade_events(robot_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_type ON trade_events(event_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_event_level ON trade_events(event_level, created_at DESC) WHERE event_level IN ('WARN', 'ERROR', 'CRITICAL');
+CREATE INDEX IF NOT EXISTS idx_event_unread ON trade_events(robot_id, is_read) WHERE is_read = FALSE;
+CREATE INDEX IF NOT EXISTS idx_event_trade_date ON trade_events(trade_date DESC);
 
 
 -- ============================================================
--- 12.2 模拟交易止损止盈检查
+-- 4.2 选股日志
 -- ============================================================
-CREATE OR REPLACE PROCEDURE sp_check_sim_trade_triggers()
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_rec       RECORD;
-    v_close     DECIMAL(12,4);
-    v_high      DECIMAL(12,4);
-    v_low       DECIMAL(12,4);
-    v_pnl_pct   DECIMAL(8,4);
-    v_new_status sim_trade_status;
-    v_reason    VARCHAR(256);
-    v_count     INT := 0;
-BEGIN
-    FOR v_rec IN
-        SELECT st.*
-        FROM sim_trades st
-        WHERE st.status = 'OPEN'
-    LOOP
-        -- 获取最新价格
-        SELECT close, high, low INTO v_close, v_high, v_low
-        FROM kline_daily
-        WHERE ts_code = v_rec.ts_code
-        ORDER BY trade_date DESC
-        LIMIT 1;
+CREATE TABLE IF NOT EXISTS selection_logs (
+    id                  BIGSERIAL       PRIMARY KEY,
+    robot_id            BIGINT          REFERENCES robots(id) ON DELETE SET NULL,
+    strategy_id         BIGINT          REFERENCES strategies(id) ON DELETE SET NULL,
 
-        IF v_close IS NULL THEN
-            CONTINUE;
-        END IF;
+    -- 选股日期与阶段
+    trade_date          DATE            NOT NULL,
+    phase               trade_phase     NOT NULL,                        -- PHASE_A/PHASE_B
 
-        v_pnl_pct := ROUND((v_close - v_rec.entry_price) / v_rec.entry_price, 4);
-        v_new_status := NULL;
-        v_reason := NULL;
+    -- 选股池
+    candidate_count     INT             DEFAULT 0,                       -- 候选股数量
+    candidates          JSONB           DEFAULT '[]'::jsonb,             -- 候选列表 [{"ts_code":"xxx","score":85}]
 
-        -- 止损检查(用最低价)
-        IF v_rec.stop_loss_price IS NOT NULL AND v_low <= v_rec.stop_loss_price THEN
-            v_new_status := 'STOP_LOSS';
-            v_close := v_rec.stop_loss_price;  -- 以止损价计算
-            v_reason := format('触发止损: 最低价 %s <= 止损价 %s', v_low, v_rec.stop_loss_price);
-        -- 止盈检查(用最高价)
-        ELSIF v_rec.target_price IS NOT NULL AND v_high >= v_rec.target_price THEN
-            v_new_status := 'TAKE_PROFIT';
-            v_close := v_rec.target_price;  -- 以目标价计算
-            v_reason := format('触发止盈: 最高价 %s >= 目标价 %s', v_high, v_rec.target_price);
-        END IF;
+    -- 筛选结果
+    selected_count      INT             DEFAULT 0,                       -- 最终选出数量
+    selected_stocks     JSONB           DEFAULT '[]'::jsonb,             -- 选中列表(含评分明细)
 
-        IF v_new_status IS NOT NULL THEN
-            v_pnl_pct := ROUND((v_close - v_rec.entry_price) / v_rec.entry_price, 4);
+    -- 筛选过程
+    filter_steps        JSONB           DEFAULT '[]'::jsonb,             -- 筛选步骤记录
+    -- 示例: [
+    --   {"step":"score_filter","threshold":70,"before":45,"after":12},
+    --   {"step":"position_check","max":5,"current":3,"available":2,"after":2},
+    --   {"step":"risk_check","rejected":["000001.SZ"],"reason":"daily_loss_limit","after":1}
+    -- ]
 
-            UPDATE sim_trades SET
-                status = v_new_status,
-                exit_date = CURRENT_DATE,
-                exit_price = v_close,
-                exit_reason = v_reason,
-                hold_days = fn_trade_days_between(v_rec.entry_date, CURRENT_DATE),
-                realized_pnl = ROUND((v_close - v_rec.entry_price) * v_rec.shares, 2),
-                realized_pnl_pct = v_pnl_pct,
-                updated_at = NOW()
-            WHERE id = v_rec.id;
+    -- 关联龙虎榜
+    lhb_daily_ids       BIGINT[],                                        -- 关联的龙虎榜记录ID数组
 
-            -- 写入交易事件
-            INSERT INTO trade_events (
-                robot_id, event_type, event_level,
-                ts_code, sim_trade_id,
-                title, message, detail,
-                trigger_type, trigger_value,
-                trade_date
-            ) VALUES (
-                v_rec.robot_id,
-                CASE v_new_status
-                    WHEN 'STOP_LOSS' THEN 'STOP_LOSS'
-                    WHEN 'TAKE_PROFIT' THEN 'TAKE_PROFIT'
-                END,
-                CASE v_new_status
-                    WHEN 'STOP_LOSS' THEN 'WARN'
-                    WHEN 'TAKE_PROFIT' THEN 'INFO'
-                END,
-                v_rec.ts_code,
-                v_rec.id,
-                format('模拟交易%s: %s(%s)',
-                    CASE v_new_status WHEN 'STOP_LOSS' THEN '止损' ELSE '止盈' END,
-                    v_rec.name, v_rec.ts_code),
-                v_reason,
-                jsonb_build_object(
-                    'entry_price', v_rec.entry_price,
-                    'exit_price', v_close,
-                    'pnl_pct', v_pnl_pct,
-                    'hold_days', fn_trade_days_between(v_rec.entry_date, CURRENT_DATE),
-                    'stop_loss_price', v_rec.stop_loss_price,
-                    'target_price', v_rec.target_price
-                ),
-                'RISK',
-                jsonb_build_object('trigger', v_new_status::TEXT, 'price', v_close),
-                CURRENT_DATE
-            );
+    -- 市场环境
+    market_sentiment    DECIMAL(6,2),                                    -- 选股时市场情绪
+    market_snapshot     JSONB,                                           -- 选股时市场快照
 
-            v_count := v_count + 1;
-        ELSE
-            -- 更新最大浮盈/浮亏
-            UPDATE sim_trades SET
-                max_profit_pct = GREATEST(COALESCE(max_profit_pct, 0), v_pnl_pct),
-                max_loss_pct = LEAST(COALESCE(max_loss_pct, 0), v_pnl_pct),
-                updated_at = NOW()
-            WHERE id = v_rec.id;
-        END IF;
+    -- 执行结果
+    exec_status         VARCHAR(16)     DEFAULT 'PENDING',               -- PENDING/EXECUTED/SKIPPED/FAILED
+    exec_message        TEXT,
 
-    END LOOP;
+    created_at          TIMESTAMP       DEFAULT NOW()
+);
 
-    RAISE NOTICE '模拟交易止损止盈检查完成，触发 % 条', v_count;
-END;
-$$;
+COMMENT ON TABLE selection_logs IS '选股日志，记录每次选股的完整过程和筛选逻辑';
 
-COMMENT ON PROCEDURE sp_check_sim_trade_triggers IS '检查所有OPEN状态模拟交易的止损止盈条件';
+CREATE INDEX IF NOT EXISTS idx_selection_robot_date ON selection_logs(robot_id, trade_date DESC);
+CREATE INDEX IF NOT EXISTS idx_selection_date_phase ON selection_logs(trade_date DESC, phase);
+CREATE INDEX IF NOT EXISTS idx_selection_strategy ON selection_logs(strategy_id, trade_date DESC);
 
 
 -- ============================================================
--- 12.3 模拟交易每日快照生成
+-- 4.3 回测任务与结果
 -- ============================================================
-CREATE OR REPLACE PROCEDURE sp_generate_sim_snapshots(
-    p_trade_date    DATE DEFAULT CURRENT_DATE
-)
-LANGUAGE plpgsql AS $$
-DECLARE
-    v_rec       RECORD;
-    v_close     DECIMAL(12,4);
-    v_open      DECIMAL(12,4);
-    v_high      DECIMAL(12,4);
-    v_low       DECIMAL(12,4);
-    v_pct       DECIMAL(8,4);
-    v_pnl_pct   DECIMAL(8,4);
-    v_max_price DECIMAL(12,4);
-    v_min_price DECIMAL(12,4);
-    v_sentiment DECIMAL(6,2);
-    v_count     INT := 0;
-BEGIN
-    -- 获取当日市场情绪
-    SELECT sentiment_score INTO v_sentiment
-    FROM market_sentiment WHERE trade_date = p_trade_date;
+CREATE TABLE IF NOT EXISTS backtest_tasks (
+    id                  BIGSERIAL       PRIMARY KEY,
+    strategy_id         BIGINT          NOT NULL REFERENCES strategies(id),
+    name                VARCHAR(128),
+    description         TEXT,
 
-    FOR v_rec IN
-        SELECT st.* FROM sim_trades st WHERE st.status = 'OPEN'
-    LOOP
-        -- 获取当日K线
-        SELECT open, high, low, close, pct_change
-        INTO v_open, v_high, v_low, v_close, v_pct
-        FROM kline_daily
-        WHERE ts_code = v_rec.ts_code AND trade_date = p_trade_date;
+    -- 回测区间
+    start_date          DATE            NOT NULL,
+    end_date            DATE            NOT NULL,
 
-        IF v_close IS NULL THEN
-            CONTINUE;  -- 当日无数据(停牌等)
-        END IF;
+    -- 回测参数
+    initial_capital     DECIMAL(16,2)   DEFAULT 1000000.00,
+    params_override     JSONB           DEFAULT '{}'::jsonb,             -- 参数覆盖
+    benchmark_code      VARCHAR(16)     DEFAULT '000300.SH',             -- 基准指数
+    commission_rate     DECIMAL(8,6)    DEFAULT 0.000300,                -- 佣金费率
+    slippage_rate       DECIMAL(8,6)    DEFAULT 0.001000,                -- 滑点费率
+    stamp_tax_rate      DECIMAL(8,6)    DEFAULT 0.001000,                -- 印花税率
 
-        v_pnl_pct := ROUND((v_close - v_rec.entry_price) / v_rec.entry_price, 4);
+    -- 状态
+    status              backtest_status DEFAULT 'PENDING',
+    progress            SMALLINT        DEFAULT 0,                       -- 0-100
+    error_message       TEXT,
 
-        -- 入场以来极值
-        SELECT MAX(high), MIN(low)
-        INTO v_max_price, v_min_price
-        FROM kline_daily
-        WHERE ts_code = v_rec.ts_code
-          AND trade_date >= v_rec.entry_date
-          AND trade_date <= p_trade_date;
+    -- 时间
+    started_at          TIMESTAMP,
+    finished_at         TIMESTAMP,
+    elapsed_seconds     INT,                                             -- 耗时(秒)
 
-        INSERT INTO sim_trade_snapshots (
-            sim_trade_id, robot_id, snapshot_date,
-            current_price, open_price, high_price, low_price, pct_change,
-            unrealized_pnl, unrealized_pnl_pct,
-            max_price_since, min_price_since,
-            max_pnl_pct, min_pnl_pct,
-            hold_days,
-            distance_to_target, distance_to_stop,
-            market_sentiment
-        ) VALUES (
-            v_rec.id, v_rec.robot_id, p_trade_date,
-            v_close, v_open, v_high, v_low, v_pct,
-            ROUND((v_close - v_rec.entry_price) * v_rec.shares, 2),
-            v_pnl_pct,
-            v_max_price, v_min_price,
-            CASE WHEN v_max_price IS NOT NULL
-                THEN ROUND((v_max_price - v_rec.entry_price) / v_rec.entry_price, 4)
-                ELSE NULL END,
-            CASE WHEN v_min_price IS NOT NULL
-                THEN ROUND((v_min_price - v_rec.entry_price) / v_rec.entry_price, 4)
-                ELSE NULL END,
-            fn_trade_days_between(v_rec.entry_date, p_trade_date),
-            CASE WHEN v_rec.target_price IS NOT NULL AND v_close > 0
-                THEN ROUND((v_rec.target_price - v_close) / v_close, 4)
-                ELSE NULL END,
-            CASE WHEN v_rec.stop_loss_price IS NOT NULL AND v_close > 0
-                THEN ROUND((v_rec.stop_loss_price - v_close) / v_close, 4)
-                ELSE NULL END,
-            v_sentiment
-        )
-        ON CONFLICT (sim_trade_id, snapshot_date) DO UPDATE SET
-            current_price = EXCLUDED.current_price,
-            open_price = EXCLUDED.open_price,
-            high_price = EXCLUDED.high_price,
-            low_price = EXCLUDED.low_price,
-            pct_change = EXCLUDED.pct_change,
-            unrealized_pnl = EXCLUDED.unrealized_pnl,
-            unrealized_pnl_pct = EXCLUDED.unrealized_pnl_pct,
-            max_price_since = EXCLUDED.max_price_since,
-            min_price_since = EXCLUDED.min_price_since,
-            max_pnl_pct = EXCLUDED.max_pnl_pct,
-            min_pnl_pct = EXCLUDED.min_pnl_pct,
-            hold_days = EXCLUDED.hold_days,
-            distance_to_target = EXCLUDED.distance_to_target,
-            distance_to_stop = EXCLUDED.distance_to_stop,
-            market_sentiment = EXCLUDED.market_sentiment;
+    created_at          TIMESTAMP       DEFAULT NOW()
+);
 
-        v_count := v_count + 1;
-    END LOOP;
+COMMENT ON TABLE backtest_tasks IS '回测任务';
 
-    RAISE NOTICE '模拟交易快照生成完成，共 % 条', v_count;
-END;
-$$;
-
-COMMENT ON PROCEDURE sp_generate_sim_snapshots IS '为所有OPEN状态的模拟交易生成每日快照';
+CREATE INDEX IF NOT EXISTS idx_bt_task_strategy ON backtest_tasks(strategy_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bt_task_status ON backtest_tasks(status);
 
 
 -- ============================================================
+-- 4.4 回测结果
 -- ============================================================
--- 第十三部分: 完整性校验查询(运维用)
--- ============================================================
--- ============================================================
+CREATE TABLE IF NOT EXISTS backtest_results (
+    id                  BIGSERIAL       PRIMARY KEY,
+    task_id             BIGINT          NOT NULL REFERENCES backtest_tasks(id) ON DELETE CASCADE,
 
+    -- 收益指标
+    total_return        DECIMAL(10,4),                                   -- 总收益率(小数)
+    annual_return       DECIMAL(10,4),                                   -- 年化收益率(小数)
+    benchmark_return    DECIMAL(10,4),                                   -- 基准收益率(小数)
+    excess_return       DECIMAL(10,4),                                   -- 超额收益(小数)
 
--- ============================================================
--- 13.1 数据完整性检查
--- ============================================================
-CREATE OR REPLACE FUNCTION fn_data_integrity_check()
-RETURNS TABLE (
-    check_name      VARCHAR(64),
-    check_result    VARCHAR(16),
-    detail          TEXT
-)
-LANGUAGE plpgsql AS $$
-BEGIN
-    -- 1. 孤立的龙虎榜席位(无对应汇总)
-    RETURN QUERY
-    SELECT
-        '孤立席位数据'::VARCHAR(64),
-        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'FAIL' END::VARCHAR(16),
-        format('发现 %s 条无对应lhb_stock_daily的席位记录', COUNT(*))::TEXT
-    FROM lhb_seats ls
-    WHERE NOT EXISTS (
-        SELECT 1 FROM lhb_stock_daily lsd WHERE lsd.id = ls.stock_daily_id
-    );
+    -- 风险指标
+    max_drawdown        DECIMAL(8,4),                                    -- 最大回撤(小数)
+    max_drawdown_days   INT,                                             -- 最大回撤持续天数
+    volatility          DECIMAL(8,4),                                    -- 年化波动率(小数)
+    downside_volatility DECIMAL(8,4),                                    -- 下行波动率
 
-    -- 2. 机器人资金不一致
-    RETURN QUERY
-    SELECT
-        '机器人资金一致性'::VARCHAR(64),
-        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'WARN' END::VARCHAR(16),
-        format('发现 %s 个机器人cash>total_assets', COUNT(*))::TEXT
-    FROM robots
-    WHERE cash > total_assets AND status = 'RUNNING';
+    -- 风险调整收益
+    sharpe_ratio        DECIMAL(8,4),                                    -- 夏普比率
+    sortino_ratio       DECIMAL(8,4),                                    -- 索提诺比率
+    calmar_ratio        DECIMAL(8,4),                                    -- 卡玛比率
+    information_ratio   DECIMAL(8,4),                                    -- 信息比率
 
-    -- 3. 未计算的T+N价格
-    RETURN QUERY
-    SELECT
-        'T+N价格计算完整性'::VARCHAR(64),
-        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'INFO' END::VARCHAR(16),
-        format('发现 %s 条待计算的龙虎榜记录(10日前上榜)', COUNT(*))::TEXT
-    FROM lhb_stock_daily lsd
-    WHERE lsd.trade_date <= CURRENT_DATE - INTERVAL '10 days'
-      AND NOT EXISTS (
-          SELECT 1 FROM lhb_tn_price tn
-          WHERE tn.stock_daily_id = lsd.id AND tn.n_day = 10 AND tn.calc_status = 'DONE'
-      );
+    -- 交易统计
+    trade_count         INT             DEFAULT 0,                       -- 总交易次数
+    win_count           INT             DEFAULT 0,                       -- 盈利次数
+    lose_count          INT             DEFAULT 0,                       -- 亏损次数
+    win_rate            DECIMAL(8,4),                                    -- 胜率(小数)
+    avg_win             DECIMAL(8,4),                                    -- 平均盈利(小数)
+    avg_loss            DECIMAL(8,4),                                    -- 平均亏损(小数)
+    profit_loss_ratio   DECIMAL(8,4),                                    -- 盈亏比
+    max_consecutive_win INT             DEFAULT 0,                       -- 最大连胜
+    max_consecutive_lose INT            DEFAULT 0,                       -- 最大连亏
+    avg_hold_days       DECIMAL(6,2),                                    -- 平均持仓天数
 
-    -- 4. 交易记录与流水一致性
-    RETURN QUERY
-    SELECT
-        '交易流水一致性'::VARCHAR(64),
-        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'WARN' END::VARCHAR(16),
-        format('发现 %s 条交易无对应资金流水', COUNT(*))::TEXT
-    FROM robot_trades rt
-    WHERE NOT EXISTS (
-        SELECT 1 FROM cash_ledger cl WHERE cl.trade_id = rt.id
-    )
-    AND rt.created_at < NOW() - INTERVAL '1 hour';  -- 排除刚创建的
+    -- 资金使用
+    avg_position_pct    DECIMAL(8,4),                                    -- 平均仓位(小数)
+    max_position_pct    DECIMAL(8,4),                                    -- 最大仓位(小数)
+    turnover_rate       DECIMAL(8,4),                                    -- 换手率
 
-    -- 5. 净值连续性
-    RETURN QUERY
-    SELECT
-        '净值连续性'::VARCHAR(64),
-        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'WARN' END::VARCHAR(16),
-        format('发现 %s 个机器人存在净值缺失(运行中)', COUNT(DISTINCT robot_id))::TEXT
-    FROM (
-        SELECT
-            dn.robot_id,
-            dn.trade_date,
-            LEAD(dn.trade_date) OVER (PARTITION BY dn.robot_id ORDER BY dn.trade_date) AS next_date
-        FROM daily_nav dn
-        JOIN robots r ON r.id = dn.robot_id AND r.status = 'RUNNING'
-    ) sub
-    WHERE next_date IS NOT NULL
-      AND fn_trade_days_between(sub.trade_date, sub.next_date) > 1;
+    -- 曲线数据(JSON)
+    equity_curve        JSONB           DEFAULT '[]'::jsonb,             -- 净值曲线 [{"date":"2024-01-02","nav":1.05}]
+    drawdown_curve      JSONB           DEFAULT '[]'::jsonb,             -- 回撤曲线
+    monthly_returns     JSONB           DEFAULT '{}'::jsonb,             -- 月度收益 {"2024-01":0.05,"2024-02":-0.02}
 
-    -- 6. stock_info 覆盖率
-    RETURN QUERY
-    SELECT
-        'stock_info覆盖率'::VARCHAR(64),
-        CASE WHEN COUNT(*) = 0 THEN 'PASS' ELSE 'WARN' END::VARCHAR(16),
-        format('发现 %s 个龙虎榜股票不在stock_info中', COUNT(DISTINCT lsd.ts_code))::TEXT
-    FROM lhb_stock_daily lsd
-    WHERE NOT EXISTS (
-        SELECT 1 FROM stock_info si WHERE si.ts_code = lsd.ts_code
-    );
+    -- 交易明细
+    trade_log           JSONB           DEFAULT '[]'::jsonb,             -- 交易日志(精简版)
 
-    RETURN;
-END;
-$$;
+    created_at          TIMESTAMP       DEFAULT NOW(),
 
-COMMENT ON FUNCTION fn_data_integrity_check IS '数据完整性检查，返回多项检查结果';
+    CONSTRAINT uk_bt_result UNIQUE(task_id)
+);
 
+COMMENT ON TABLE backtest_results IS '回测结果，一个task对应一条result';
 
--- ============================================================
--- 13.2 系统统计概览
--- ============================================================
-CREATE OR REPLACE FUNCTION fn_system_stats()
-RETURNS TABLE (
-    metric_name     VARCHAR(64),
-    metric_value    BIGINT,
-    description     TEXT
-)
-LANGUAGE plpgsql AS $$
-BEGIN
-    RETURN QUERY
-    SELECT 'stock_info_count'::VARCHAR(64), COUNT(*)::BIGINT, '股票信息总数'::TEXT FROM stock_info WHERE is_active = TRUE
-    UNION ALL
-    SELECT 'kline_daily_count', COUNT(*), '日K线总记录数' FROM kline_daily
-    UNION ALL
-    SELECT 'lhb_stock_daily_count', COUNT(*), '龙虎榜汇总记录数' FROM lhb_stock_daily
-    UNION ALL
-    SELECT 'lhb_seats_count', COUNT(*), '龙虎榜席位记录数' FROM lhb_seats
-    UNION ALL
-    SELECT 'lhb_tn_price_count', COUNT(*), 'T+N价格记录数' FROM lhb_tn_price
-    UNION ALL
-    SELECT 'robot_count', COUNT(*), '机器人总数' FROM robots
-    UNION ALL
-    SELECT 'robot_running_count', COUNT(*), '运行中机器人' FROM robots WHERE status = 'RUNNING'
-    UNION ALL
-    SELECT 'trade_total_count', COUNT(*), '交易记录总数' FROM robot_trades
-    UNION ALL
-    SELECT 'sim_trade_open_count', COUNT(*), '进行中模拟交易' FROM sim_trades WHERE status = 'OPEN'
-    UNION ALL
-    SELECT 'strategy_count', COUNT(*), '策略总数' FROM strategies WHERE is_active = TRUE
-    UNION ALL
-    SELECT 'backtest_count', COUNT(*), '回测任务总数' FROM backtest_tasks
-    UNION ALL
-    SELECT 'trade_calendar_days', COUNT(*), '交易日历天数' FROM trade_calendar WHERE is_open = TRUE
-    UNION ALL
-    SELECT 'latest_kline_date', EXTRACT(EPOCH FROM MAX(trade_date))::BIGINT, '最新K线日期(epoch)' FROM kline_daily
-    UNION ALL
-    SELECT 'latest_lhb_date', EXTRACT(EPOCH FROM MAX(trade_date))::BIGINT, '最新龙虎榜日期(epoch)' FROM lhb_stock_daily
-    UNION ALL
-    SELECT 'error_log_24h', COUNT(*), '24小时内采集错误数' FROM collector_error_log WHERE created
-    UNION ALL
-    SELECT 'error_log_24h', COUNT(*), '24小时内采集错误数' FROM collector_error_log WHERE created_at > NOW() - INTERVAL '24 hours'
-    UNION ALL
-    SELECT 'unread_events', COUNT(*), '未读交易事件数' FROM trade_events WHERE is_read = FALSE
-    UNION ALL
-    SELECT 'circuit_open_count', COUNT(*), '当前熔断中的数据源' FROM datasource_circuit_log
-        WHERE state = 'OPEN' AND created_at = (
-            SELECT MAX(created_at) FROM datasource_circuit_log dcl2 WHERE dcl2.config_id = datasource_circuit_log.config_id
-        );
+CREATE INDEX IF NOT EXISTS idx_bt_result_task ON backtest_results(task_id);
 
-    RETURN;
-END;
-$$;
-
-COMMENT ON FUNCTION fn_system_stats IS '系统关键指标统计概览，用于仪表盘和监控';
-
-
--- ============================================================
--- ============================================================
--- 第十四部分: 性能优化建议(注释说明)
--- ============================================================
--- ============================================================
-
-/*
-=================================================================
- 性能优化检查清单
-=================================================================
-
-1. 定期VACUUM & ANALYZE
-   ────────────────────
-   -- 建议每日凌晨执行
-   VACUUM ANALYZE kline_daily;
-   VACUUM ANALYZE lhb_stock_daily;
-   VACUUM ANALYZE lhb_seats;
-   VACUUM ANALYZE lhb_tn_price;
-   VACUUM ANALYZE robot_trades;
-   VACUUM ANALYZE daily_nav;
-
-2. 慢查询监控
-   ────────────
-   -- 启用 pg_stat_statements
-   CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-
-   -- 查看Top10慢查询
-   SELECT query, calls, mean_exec_time, total_exec_time
-   FROM pg_stat_statements
-   ORDER BY mean_exec_time DESC
-   LIMIT 10;
-
-3. 索引使用率检查
-   ────────────────
-   -- 找出未使用的索引
-   SELECT
-       schemaname, tablename, indexname,
-       idx_scan, idx_tup_read, idx_tup_fetch,
-       pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
-   FROM pg_stat_user_indexes
-   WHERE idx_scan = 0
-   ORDER BY pg_relation_size(indexrelid) DESC;
-
-   -- 找出缺少索引的表(顺序扫描过多)
-   SELECT
-       schemaname, relname,
-       seq_scan, seq_tup_read,
-       idx_scan, idx_tup_fetch,
-       CASE WHEN seq_scan > 0
-           THEN ROUND(seq_tup_read::DECIMAL / seq_scan)
-           ELSE 0
-       END AS avg_seq_tup
-   FROM pg_stat_user_tables
-   WHERE seq_scan > 100
-   ORDER BY seq_tup_read DESC;
-
-4. 表膨胀检查
-   ──────────
-   SELECT
-       schemaname, tablename,
-       pg_size_pretty(pg_total_relation_size(schemaname || '.' || tablename)) AS total_size,
-       pg_size_pretty(pg_relation_size(schemaname || '.' || tablename)) AS table_size,
-       pg_size_pretty(pg_indexes_size(schemaname || '.' || tablename)) AS index_size,
-       n_live_tup, n_dead_tup,
-       CASE WHEN n_live_tup > 0
-           THEN ROUND(n_dead_tup::DECIMAL / n_live_tup * 100, 2)
-           ELSE 0
-       END AS dead_pct
-   FROM pg_stat_user_tables
-   ORDER BY pg_total_relation_size(schemaname || '.' || tablename) DESC;
-
-5. 连接池配置建议
-   ────────────────
-   -- PostgreSQL max_connections: 100-200
-   -- 应用层使用连接池(SQLAlchemy pool_size=20, max_overflow=10)
-   -- 或使用 PgBouncer 作为中间件
-
-6. 分区表启用条件
-   ────────────────
-   -- kline_daily > 5000万行时考虑按年分区
-   -- lhb_stock_daily > 1000万行时考虑按年分区
-   -- robot_trades > 500万行时考虑按月分区
-
-=================================================================
-*/
-
-
--- ============================================================
--- ============================================================
--- 第十五部分: 汇总校验
--- ============================================================
--- ============================================================
-
--- 打印所有创建的对象
-DO $$
-DECLARE
-    v_tables    INT;
-    v_views     INT;
-    v_indexes   INT;
-    v_functions INT;
-    v_procedures INT;
-    v_triggers  INT;
-    v_types     INT;
-BEGIN
-    SELECT COUNT(*) INTO v_tables FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
-    SELECT COUNT(*) INTO v_views FROM information_schema.views
-        WHERE table_schema = 'public';
-    SELECT COUNT(*) INTO v_indexes FROM pg_indexes
-        WHERE schemaname = 'public';
-    SELECT COUNT(*) INTO v_functions FROM information_schema.routines
-        WHERE routine_schema = 'public' AND routine_type = 'FUNCTION';
-    SELECT COUNT(*) INTO v_procedures FROM information_schema.routines
-        WHERE routine_schema = 'public' AND routine_type = 'PROCEDURE';
-    SELECT COUNT(*) INTO v_triggers FROM information_schema.triggers
-        WHERE trigger_schema = 'public';
-    SELECT COUNT(*) INTO v_types FROM pg_type
-        WHERE typnamespace = 'public'::regnamespace AND typtype = 'e';
-
-    RAISE NOTICE '';
-    RAISE NOTICE '╔══════════════════════════════════════════════════╗';
-    RAISE NOTICE '║     龙虎榜量化系统 数据库初始化完成               ║';
-    RAISE NOTICE '╠══════════════════════════════════════════════════╣';
-    RAISE NOTICE '║  基础表:       % 张                              ║', LPAD(v_tables::TEXT, 3);
-    RAISE NOTICE '║  视图:         % 个                              ║', LPAD(v_views::TEXT, 3);
-    RAISE NOTICE '║  索引:         % 个                              ║', LPAD(v_indexes::TEXT, 3);
-    RAISE NOTICE '║  函数:         % 个                              ║', LPAD(v_functions::TEXT, 3);
-    RAISE NOTICE '║  存储过程:     % 个                              ║', LPAD(v_procedures::TEXT, 3);
-    RAISE NOTICE '║  触发器:       % 个                              ║', LPAD(v_triggers::TEXT, 3);
-    RAISE NOTICE '║  枚举类型:     % 个                              ║', LPAD(v_types::TEXT, 3);
-    RAISE NOTICE '╠══════════════════════════════════════════════════╣';
-    RAISE NOTICE '║  对象清单:                                        ║';
-    RAISE NOTICE '║                                                    ║';
-    RAISE NOTICE '║  表: stock_info, trade_calendar, app_config,       ║';
-    RAISE NOTICE '║      strategies, strategy_params,                  ║';
-    RAISE NOTICE '║      datasource_config, datasource_circuit_log,    ║';
-    RAISE NOTICE '║      collector_error_log, audit_logs,              ║';
-    RAISE NOTICE '║      kline_daily, lhb_stock_daily, lhb_seats,     ║';
-    RAISE NOTICE '║      lhb_tn_price, lhb_agg_stats,                 ║';
-    RAISE NOTICE '║      lhb_institution_stat, market_snapshots,       ║';
-    RAISE NOTICE '║      market_sentiment, robots, robot_trades,       ║';
-    RAISE NOTICE '║      trade_executions, cash_ledger, daily_nav,     ║';
-    RAISE NOTICE '║      sim_trades, sim_trade_snapshots,              ║';
-    RAISE NOTICE '║      trade_events, selection_logs,                 ║';
-    RAISE NOTICE '║      backtest_tasks, backtest_results              ║';
-    RAISE NOTICE '║                                                    ║';
-    RAISE NOTICE '║  视图: v_robot_positions, v_robot_overview,        ║';
-    RAISE NOTICE '║        v_lhb_signals, v_broker_profile,            ║';
-    RAISE NOTICE '║        v_daily_pnl_analysis                        ║';
-    RAISE NOTICE '║                                                    ║';
-    RAISE NOTICE '║  函数: fn_calc_trade_cost, fn_calc_robot_nav,      ║';
-    RAISE NOTICE '║        fn_next_trade_date, fn_is_trade_date,       ║';
-    RAISE NOTICE '║        fn_trade_days_between,                      ║';
-    RAISE NOTICE '║        fn_data_integrity_check, fn_system_stats    ║';
-    RAISE NOTICE '║                                                    ║';
-    RAISE NOTICE '║  存储过程: sp_calc_tn_prices,                      ║';
-    RAISE NOTICE '║            sp_refresh_lhb_agg_stats,               ║';
-    RAISE NOTICE '║            sp_daily_settlement,                    ║';
-    RAISE NOTICE '║            sp_cleanup_old_data,                    ║';
-    RAISE NOTICE '║            sp_calc_ahs_score,                      ║';
-    RAISE NOTICE '║            sp_close_expired_sim_trades,            ║';
-    RAISE NOTICE '║            sp_check_sim_trade_triggers,            ║';
-    RAISE NOTICE '║            sp_generate_sim_snapshots               ║';
-    RAISE NOTICE '╠══════════════════════════════════════════════════╣';
-    RAISE NOTICE '║  Celery调度建议:                                   ║';
-    RAISE NOTICE '║  ├─ 17:00 数据同步(K线/龙虎榜)                    ║';
-    RAISE NOTICE '║  ├─ 17:30 sp_calc_tn_prices                       ║';
-    RAISE NOTICE '║  ├─ 18:00 sp_refresh_lhb_agg_stats                ║';
-    RAISE NOTICE '║  ├─ 18:50 Phase A 选股+信号                       ║';
-    RAISE NOTICE '║  ├─ 09:35 Phase B 盘中执行                        ║';
-    RAISE NOTICE '║  ├─ 10s   sp_check_sim_trade_triggers(盘中)        ║';
-    RAISE NOTICE '║  ├─ 15:05 sp_daily_settlement                     ║';
-    RAISE NOTICE '║  ├─ 15:10 sp_generate_sim_snapshots                ║';
-    RAISE NOTICE '║  ├─ 15:15 sp_close_expired_sim_trades              ║';
-    RAISE NOTICE '║  ├─ 20:00 sp_calc_ahs_score                       ║';
-    RAISE NOTICE '║  └─ 02:00 sp_cleanup_old_data (每周一次)           ║';
-    RAISE NOTICE '╚══════════════════════════════════════════════════╝';
-END;
-$$;
