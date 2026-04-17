@@ -2,14 +2,13 @@
 数据采集器单元测试
 """
 import pytest
-import asyncio
 from datetime import date
 from unittest.mock import AsyncMock, Mock, patch
 import pandas as pd
 
-from backend.app.collectors.base import BaseCollector
-from backend.app.collectors.lhb_collector import LhbCollector
-from backend.app.collectors.market_collector import MarketCollector
+from backend import BaseCollector
+from backend import LhbCollector
+from backend import MarketCollector
 
 
 # ============================================================

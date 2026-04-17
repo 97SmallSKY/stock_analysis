@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy import func
 
 from .base import BaseCollector
-from backend.db.models import MarketSentiment
+from backend import MarketSentiment
 
 
 class MarketCollector(BaseCollector):

@@ -178,17 +178,18 @@ tail -f logs/scheduler_*.log
 3. 在 `scheduler.py` 注册定时任务
 
 ```python
-from backend.app.collectors.base import BaseCollector
+from backend import BaseCollector
+
 
 class MyCollector(BaseCollector):
     async def fetch(self, trade_date=None):
         # 从 API 获取数据
         return df
-    
+
     async def transform(self, df):
         # 清洗转换
         return records
-    
+
     async def save(self, records):
         # 入库
         return count

@@ -2,6 +2,7 @@
 数据采集器基类
 """
 import asyncio
+import os
 from abc import ABC, abstractmethod
 from typing import Optional, Any
 from datetime import date
@@ -24,6 +25,15 @@ class BaseCollector(ABC):
     MAX_RETRIES = 3
     RETRY_BACKOFF = [1, 3, 10]  # 秒，指数退避
     
+    # AKShare 相关域名，不走代理
+    AKSHARE_PROXY_BYPASS = [
+        'eastmoney.com',
+        'sina.com.cn',
+        'qq.com',
+        '163.com',
+        'tushare.pro',
+    ]
+    
     def __init__(
         self,
         db_session: AsyncSession,
@@ -42,6 +52,34 @@ class BaseCollector(ABC):
         self.redis = redis_client
         self.config = config or {}
         self.collector_name = self.__class__.__name__
+    
+    def _disable_proxy_for_akshare(self):
+        """
+        临时禁用代理，避免 AKShare 调用失败
+        
+        AKShare 使用的数据源（东方财富、新浪财经等）通常不支持通过代理访问，
+        需要在调用前临时清除代理环境变量。
+        """
+        # 保存原始代理设置
+        self._original_proxy_env = {}
+        proxy_vars = ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY', 'all_proxy']
+        
+        for var in proxy_vars:
+            if var in os.environ:
+                self._original_proxy_env[var] = os.environ[var]
+                # 设置为空字符串以禁用代理
+                os.environ[var] = ''
+        
+        logger.debug(f"[{self.collector_name}] 已临时禁用代理")
+    
+    def _restore_proxy_settings(self):
+        """
+        恢复原始代理设置
+        """
+        if hasattr(self, '_original_proxy_env'):
+            for var, value in self._original_proxy_env.items():
+                os.environ[var] = value
+            logger.debug(f"[{self.collector_name}] 已恢复代理设置")
     
     @abstractmethod
     async def fetch(self, trade_date: Optional[date] = None) -> pd.DataFrame:
@@ -111,8 +149,12 @@ class BaseCollector(ABC):
                     }
                 )
                 
-                # 步骤 1: 抓取数据
-                df = await self.fetch(trade_date)
+                # 步骤 1: 抓取数据（临时禁用代理）
+                self._disable_proxy_for_akshare()
+                try:
+                    df = await self.fetch(trade_date)
+                finally:
+                    self._restore_proxy_settings()
                 
                 if df.empty:
                     logger.warning(
@@ -227,7 +269,7 @@ class BaseCollector(ABC):
             retry_count: 重试次数
         """
         try:
-            from backend.db.models import CollectorErrorLog
+            from backend import CollectorErrorLog
             
             error_log = CollectorErrorLog(
                 collector_name=self.collector_name,

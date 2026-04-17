@@ -2,7 +2,7 @@
 龙虎榜数据采集器
 """
 from typing import Optional
-from datetime import date, datetime, timedelta
+from datetime import date
 import pandas as pd
 import akshare as ak
 from loguru import logger
@@ -10,7 +10,7 @@ from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert
 
 from .base import BaseCollector
-from backend.db.models import LhbStockDaily, LhbSeat
+from backend import LhbStockDaily, LhbSeat
 
 
 class LhbCollector(BaseCollector):

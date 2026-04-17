@@ -7,7 +7,7 @@ from loguru import logger
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.models import (
+from backend import (
     LhbStockDaily,
     KlineDaily,
     MarketSentiment,

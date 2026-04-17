@@ -4,6 +4,63 @@
 
 ---
 
+## 3. 测试报告文档规范
+
+### 3.1 文档组织
+
+所有测试报告文档统一存放在 `docs/test-reports/` 目录下。
+
+**目录结构**:
+```
+docs/test-reports/
+├── README.md                    # 测试报告说明文档
+├── S01_TEST_SUMMARY.md         # S01 测试摘要
+├── S01_ISSUES.md               # S01 待修复问题
+└── S01_BUGFIX_REPORT.md        # S01 Bug 修复报告
+```
+
+### 3.2 命名规范
+
+| 文档类型 | 命名格式 | 说明 |
+|---------|---------|------|
+| 测试摘要 | `S{XX}_TEST_SUMMARY.md` | 阶段测试概览 |
+| 问题清单 | `S{XX}_ISSUES.md` | 待修复问题列表 |
+| Bug 修复报告 | `S{XX}_BUGFIX_REPORT.md` | Bug 修复记录 |
+| 详细测试报告 | `S{XX}_TEST_REPORT_{DATE}.md` | 完整测试日志 |
+
+### 3.3 必需内容
+
+每个阶段测试完成后需产出：
+1. **测试摘要** - 测试结果概览、通过率、关键发现
+2. **问题清单** - 待修复问题列表、优先级、修复计划
+
+详见 [`docs/test-reports/README.md`](../test-reports/README.md)
+
+---
+
+## 4. S01 补充功能
+
+### 4.1 测试补充
+
+- **集成测试**: `backend/tests/test_s01_integration.py`
+  - 真实 API 集成测试
+  - 端到端测试
+  - 性能测试
+
+### 4.2 文档补充
+
+- **API 使用指南**: [`docs/lhb-quant-v2/DATA_SOURCE_API_GUIDE.md`](../lhb-quant-v2/DATA_SOURCE_API_GUIDE.md)
+- **部署指南**: [`docs/lhb-quant-v2/DEPLOYMENT_GUIDE.md`](../lhb-quant-v2/DEPLOYMENT_GUIDE.md)
+- **故障排查手册**: [`docs/lhb-quant-v2/TROUBLESHOOTING.md`](../lhb-quant-v2/TROUBLESHOOTING.md)
+
+### 4.3 工具脚本
+
+- **数据回填**: `scripts/backfill_data.py`
+- **健康检查**: `scripts/health_check.py`
+- **快速验收**: `scripts/quick_acceptance_test.py`
+
+---
+
 ## 0. 前置阅读
 
 - S01~S05 所有产出代码

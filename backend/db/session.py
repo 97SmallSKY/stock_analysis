@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker
 )
-from backend.app.config import settings
+from backend import settings
 
 # ============================================================
 # 异步引擎配置

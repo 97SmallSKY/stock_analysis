@@ -12,11 +12,11 @@ from loguru import logger
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.db.session import AsyncSessionLocal
-from backend.app.collectors import LhbCollector, MarketCollector
-from backend.app.integrity import check_data_integrity
+from backend import AsyncSessionLocal
+from backend import LhbCollector, MarketCollector
+from backend import check_data_integrity
 from sqlalchemy import select, func, text
-from backend.db.models import LhbStockDaily, MarketSentiment
+from backend import LhbStockDaily, MarketSentiment
 
 
 class AcceptanceTest:

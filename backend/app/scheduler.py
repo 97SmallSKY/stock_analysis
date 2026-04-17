@@ -1,7 +1,6 @@
 """
 数据采集调度器
 """
-import os
 import asyncio
 from datetime import datetime
 from pathlib import Path
@@ -12,8 +11,8 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.triggers.cron import CronTrigger
 import chinese_calendar as cc
 
-from backend.db.session import AsyncSessionLocal, sync_database_url
-from backend.app.collectors import LhbCollector, MarketCollector
+from backend import AsyncSessionLocal, sync_database_url
+from backend import LhbCollector, MarketCollector
 
 
 class DataScheduler:
@@ -64,13 +63,13 @@ class DataScheduler:
             logger.warning("[DataScheduler] 调度器已在运行")
             return
         
-        # 创建调度器（使用PostgreSQL持久化）
-        jobstores = {
-            'default': SQLAlchemyJobStore(url=sync_database_url)
-        }
+        # 创建调度器（使用内存存储，避免序列化问题）
+        # jobstores = {
+        #     'default': SQLAlchemyJobStore(url=sync_database_url)
+        # }
         
         self.scheduler = AsyncIOScheduler(
-            jobstores=jobstores,
+            # jobstores=jobstores,
             timezone='Asia/Shanghai'
         )
         
