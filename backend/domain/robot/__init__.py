@@ -22,6 +22,13 @@ from .risk import (
     RiskViolation,
 )
 from .robot import RobotSnapshot, PositionState
+from .events import (
+    TradeEvent, EventType, EventLevel, TriggerType,
+    SelectionLog, TradePhase, SelectionExecStatus,
+    AuditLog, AuditAction,
+    write_trade_event, write_selection_log, write_audit_log,
+    make_signal_event, make_risk_alert_event, make_state_change_audit,
+)
 
 __all__ = [
     "RobotState", "RobotStateMachine", "IllegalStateTransition",
@@ -29,4 +36,9 @@ __all__ = [
     "apply_deposit", "apply_buy", "apply_sell", "apply_commission",
     "RiskRule", "RiskEvaluator", "RiskDecision", "RiskViolation",
     "RobotSnapshot", "PositionState",
+    "TradeEvent", "EventType", "EventLevel", "TriggerType",
+    "SelectionLog", "TradePhase", "SelectionExecStatus",
+    "AuditLog", "AuditAction",
+    "write_trade_event", "write_selection_log", "write_audit_log",
+    "make_signal_event", "make_risk_alert_event", "make_state_change_audit",
 ]
