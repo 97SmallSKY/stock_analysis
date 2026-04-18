@@ -73,6 +73,11 @@ def create_app() -> FastAPI:
     # W8-4 WebSocket /ws/snapshot — Redis pubsub 转发
     from backend.api.ws_snapshot import router as ws_router
     app.include_router(ws_router, prefix="/ws", tags=["ws"])
+    # W9 盘中机器人控制 (registry 占位, live 引擎由 bootstrap 注入)
+    if not hasattr(app.state, "robot_registry"):
+        app.state.robot_registry = {}
+    from backend.api.robots import router as robots_router
+    app.include_router(robots_router, prefix="/api/robots", tags=["robots"])
 
     @app.on_event("shutdown")
     def _shutdown():
