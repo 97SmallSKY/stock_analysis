@@ -361,6 +361,42 @@ ERROR [Router] ❌ DAILY_KLINE.get_daily_kline 全部数据源失败! 链路: ['
 
 ---
 
-## 8. 新增:<YYYY-MM-DD>
+## 8. 新增:2026-04-18 10:04 巡检发现
+
+### 8.1 AKShare adapter 自限流 60/min 拖慢 kline 全量
+
+**现象**: 日志里周期性出现
+```
+WARNING [akshare] 触发限流,等待 22.7s (61/60 per min)
+```
+每分钟 ingest kline 只能处理约 50 只(含限流暂停), 5000 只需要约 100 分钟。
+
+**根因**: `akshare_adapter.py::__init__` 默认 `rate_limit=60`, 这是我们**主动设的保守值**,
+不是上游限制。新浪 `stock_zh_a_daily` 本身能撑 100+ RPS。
+
+**TODO(下一轮重启前调整)**:
+- 把 akshare adapter 默认 `rate_limit` 从 60 → 90(留余量,不至于触发源端反爬)
+- 或者在 manager config 里显式传 `akshare: {rate_limit: 90}`
+
+### 8.2 `sw_index_first_info` 间歇性 `NoneType.find_all` 失败
+
+**现象**:
+```
+WARNING [AKShare] sw_index_first_info 失败: 'NoneType' object has no attribute 'find_all'
+```
+第 2/3 轮 stock-info 会偶发该错误。
+
+**根因**: 乐咕乐股 `sw_index_first_info` 上游返回**非 HTML**(可能反爬限流),
+akshare 内部 BeautifulSoup 拿不到 table → `soup.find('table').find_all` 报 NoneType。
+
+**当前影响**: 该轮 stock-info 拉不到行业,但**下一轮会重试成功**(COALESCE 保留旧值,
+不会覆盖),4 轮累积后最终覆盖率 89.7%(5192/5789)。
+
+**TODO(可选)**: 给 `_fetch_sw_industry_map` 再加一层**外层重试**,
+整个函数失败后整体重跑 1 次。
+
+---
+
+## 9. 新增:<YYYY-MM-DD>
 
 (按时间倒序追加新发现的问题)

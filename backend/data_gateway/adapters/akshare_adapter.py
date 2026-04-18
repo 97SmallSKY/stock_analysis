@@ -24,7 +24,9 @@ class AKShareAdapter(BaseDataAdapter):
         super().__init__(
             name=AdapterName.AKSHARE,
             config=config or {},
-            rate_limit=config.get("rate_limit", 60) if config else 60,
+            # 默认 90/min: 原 60 太保守, 新浪源实测可承受 100+ RPS;
+            # 留 10 的余量避免触发源端反爬
+            rate_limit=config.get("rate_limit", 90) if config else 90,
             timeout=config.get("timeout", 30) if config else 30,
         )
 
