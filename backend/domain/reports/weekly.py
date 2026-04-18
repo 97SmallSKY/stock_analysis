@@ -72,11 +72,13 @@ def _lhb_section(conn, start: date, end: date, report: WeeklyReport) -> None:
             )
             report.lhb_top_reasons = _rows(cur)
 
+            # 列对齐:实际列名 l_net,对外别名 net_amount
             cur.execute(
-                """SELECT ts_code, trade_date, reason, net_amount, score
+                """SELECT ts_code, trade_date, reason,
+                          l_net AS net_amount, score
                    FROM lhb_stock_daily
                    WHERE trade_date BETWEEN %s AND %s
-                   ORDER BY net_amount DESC NULLS LAST
+                   ORDER BY l_net DESC NULLS LAST
                    LIMIT 10""",
                 (start, end),
             )

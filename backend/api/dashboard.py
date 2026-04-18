@@ -23,14 +23,27 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+# 列对齐说明:生产 PG 上 market_sentiment 实际存在的列不是 v2 方案里假设
+# 的 total_stocks/up_count/down_count,而是 limit_up_count/limit_down_count
+# 等离散情绪因子 + sentiment_score/sentiment_level 等聚合字段。
+# lhb_stock_daily 的金额列命名为 l_buy/l_sell/l_net(而不是
+# buy_amount/sell_amount/net_amount)。查询里用别名保持对外 API 稳定。
+#
+# "今日"语义:按最近一个有数据的 trade_date(周末/长假自动回退到周五等)。
+
+
 @cached(lambda: "dashboard:sentiment:latest", ttl=15)
 def _latest_sentiment() -> Optional[dict]:
     try:
         with pg_conn() as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT trade_date, total_stocks, up_count, down_count,
-                          limit_up_count, limit_down_count, avg_pct_change,
-                          sentiment_score
+                """SELECT trade_date,
+                          limit_up_count, limit_down_count,
+                          first_limit_up, cont_limit_up, max_cont_board,
+                          up_down_ratio, avg_pct_change, median_pct_change,
+                          strong_stock_count, weak_stock_count,
+                          lhb_stock_count, lhb_total_net, lhb_avg_score,
+                          sentiment_score, sentiment_level, sentiment_change
                    FROM market_sentiment
                    ORDER BY trade_date DESC LIMIT 1"""
             )
@@ -41,6 +54,10 @@ def _latest_sentiment() -> Optional[dict]:
             out = dict(zip(cols, row))
             if out.get("trade_date") is not None:
                 out["trade_date"] = out["trade_date"].isoformat()
+            # 兼容旧前端:up/down/total 字段保留映射(None 占位)
+            out.setdefault("total_stocks", None)
+            out.setdefault("up_count", None)
+            out.setdefault("down_count", None)
             return out
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[dashboard] latest_sentiment failed: {e}")
@@ -52,10 +69,12 @@ def _top_lhb(top_n: int) -> list[dict]:
     try:
         with pg_conn() as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT ts_code, trade_date, reason, net_amount, score
+                """SELECT ts_code, trade_date, reason,
+                          l_net AS net_amount, l_buy AS buy_amount,
+                          l_sell AS sell_amount, score
                    FROM lhb_stock_daily
                    WHERE trade_date = (SELECT MAX(trade_date) FROM lhb_stock_daily)
-                   ORDER BY score DESC NULLS LAST, net_amount DESC NULLS LAST
+                   ORDER BY score DESC NULLS LAST, l_net DESC NULLS LAST
                    LIMIT %s""",
                 (top_n,),
             )

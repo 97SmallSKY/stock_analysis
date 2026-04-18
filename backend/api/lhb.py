@@ -43,7 +43,19 @@ def list_lhb(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ):
-    """分页查询龙虎榜主表 lhb_stock_daily."""
+    """分页查询龙虎榜主表 lhb_stock_daily.
+
+    列对齐:生产 PG 实际列为 l_buy/l_sell/l_net/amount,
+    这里用 AS 别名保持对外 API 稳定(net_amount / buy_amount / turnover)。
+    """
+    # order_by 白名单 → 实际列名映射(防 SQL 注入 & 列名偏移)
+    ORDER_COL = {
+        "trade_date": "trade_date",
+        "net_amount": "l_net",
+        "score": "score",
+    }
+    order_col = ORDER_COL.get(order_by, "trade_date")
+
     where = ["1=1"]
     params: list = []
     if date_from:
@@ -59,7 +71,7 @@ def list_lhb(
         where.append("reason ILIKE %s")
         params.append(f"%{reason}%")
     if net_amount_min is not None:
-        where.append("net_amount >= %s")
+        where.append("l_net >= %s")
         params.append(net_amount_min)
     if score_min is not None:
         where.append("score >= %s")
@@ -68,11 +80,14 @@ def list_lhb(
     order_dir = "DESC" if order_desc else "ASC"
     sql = f"""
         SELECT ts_code, trade_date, reason,
-               buy_amount, sell_amount, net_amount, turnover,
+               l_buy   AS buy_amount,
+               l_sell  AS sell_amount,
+               l_net   AS net_amount,
+               amount  AS turnover,
                score, score_detail
         FROM lhb_stock_daily
         WHERE {' AND '.join(where)}
-        ORDER BY {order_by} {order_dir}, ts_code
+        ORDER BY {order_col} {order_dir}, ts_code
         LIMIT %s OFFSET %s
     """
     count_sql = f"SELECT COUNT(*) FROM lhb_stock_daily WHERE {' AND '.join(where)}"
@@ -109,9 +124,10 @@ def list_seats(
     if direction:
         where.append("direction = %s")
         params.append(direction)
+    # 注:lhb_seats.rank 列名与 SQL 关键字同名,必须用双引号转义
     sql = f"""
         SELECT ts_code, trade_date, broker_name, direction,
-               buy_amount, sell_amount, net_amount, rank_no
+               buy_amount, sell_amount, net_amount, "rank" AS rank_no
         FROM lhb_seats
         WHERE {' AND '.join(where)}
         ORDER BY net_amount DESC NULLS LAST
