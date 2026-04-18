@@ -31,5 +31,17 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     target: 'es2020',
+    chunkSizeWarningLimit: 1200,
+    rollupOptions: {
+      output: {
+        // 手动分包: 把重库抽出, 降低主 chunk 体积
+        manualChunks: {
+          'vendor-vue': ['vue', 'vue-router', 'pinia'],
+          'vendor-antd': ['ant-design-vue'],
+          'vendor-grid': ['ag-grid-community', 'ag-grid-vue3'],
+          'vendor-echarts': ['echarts', 'vue-echarts'],
+        },
+      },
+    },
   },
 })

@@ -143,7 +143,7 @@
 
 ---
 
-## W7 前端 MVP
+## W7 前端 MVP ✅
 
 ### 任务清单
 1. **脚手架**：Vue 3 + Vite + TypeScript + Pinia + Ant Design Vue + vue-router

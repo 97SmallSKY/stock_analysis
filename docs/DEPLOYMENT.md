@@ -177,3 +177,86 @@ ssh jd "cd ~/stock_analysis && \
 ```
 
 数据库 migration 不自动回滚（需手动 `alembic downgrade -1`），上线前先在 staging 验证。
+
+---
+
+## 8. 前端部署 (W7)
+
+前端工程位于 `frontend/`,技术栈 Vue 3 + Vite + TypeScript + Pinia + Ant Design Vue + AG Grid Community。
+
+### 8.1 一次性准备
+
+```bash
+# jd 服务器
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
+sudo apt install -y nodejs            # 需 node >= 20
+node -v && npm -v
+```
+
+### 8.2 构建 + 发布
+
+推荐在 jd 上跑,避免跨机同步 node_modules:
+
+```bash
+cd ~/stock_analysis
+bash scripts/deploy_frontend.sh       # 构建 -> rsync -> nginx reload
+```
+
+脚本环境变量:
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `FRONTEND_DIR` | `<repo>/frontend` | 前端工程目录 |
+| `DIST_TARGET`  | `/home/xiaotian/stock_analysis/frontend/dist` | nginx root |
+| `NGINX_RELOAD` | `1` | 0=只发布不 reload |
+| `BACKUP_KEEP`  | `3` | 保留最近 N 份 `.bak.<ts>` |
+| `DRY_RUN`      | `0` | 1=只打印命令不执行 |
+
+发布后 `DIST_TARGET` 同级会出现 `dist.bak.YYYYMMDD-HHMMSS` 历史备份,便于快速回滚。
+
+### 8.3 Nginx 配置
+
+配置见 `deploy/nginx/stock_analysis.conf`,已包含:
+
+- 静态 SPA 托管 + `try_files $uri $uri/ /index.html`(vue-router history)
+- `/api/*` 反代 uvicorn (`127.0.0.1:8000`)
+- `/ws/*`  WebSocket upgrade (W8 盘中推送)
+- `/assets/` 一年强缓存 (`Cache-Control: public, immutable`), `index.html` 不缓存
+- gzip (js/css/json/svg)
+
+首次安装:
+
+```bash
+sudo cp deploy/nginx/stock_analysis.conf /etc/nginx/sites-available/stock_analysis
+sudo ln -sf /etc/nginx/sites-available/stock_analysis /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+### 8.4 前端回滚
+
+```bash
+cd /home/xiaotian/stock_analysis/frontend
+ls -1dt dist.bak.* | head
+mv dist dist.broken.$(date +%s)
+mv dist.bak.<timestamp> dist
+sudo systemctl reload nginx
+```
+
+### 8.5 本地开发
+
+```bash
+# 终端 A: 后端
+uvicorn backend.api.main:app --reload --port 8000
+# 终端 B: 前端 (vite dev-server 自动代理 /api 和 /ws 到 localhost:8000)
+cd frontend && npm install && npm run dev
+# http://localhost:5173
+```
+
+### 8.6 前端自测
+
+```bash
+cd frontend
+npm run typecheck      # vue-tsc 严格类型
+npm run test           # vitest 25/25
+npm run build          # 生产构建 (manualChunks 分包, 见 vite.config.ts)
+```
