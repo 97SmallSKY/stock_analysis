@@ -7,6 +7,50 @@
 
 ---
 
+## 🚀 TL;DR — jd 后台灌库速查卡
+
+> 详细命令见本文第十章;外部源问题见 `docs/EXTERNAL_SOURCES_ISSUES.md`
+
+### ⏯️ 启动后台全量灌库
+```bash
+ssh jd 'cd ~/stock_analysis && git pull origin new-branch >/dev/null && \
+  rm -f logs/full_ingest.log && \
+  setsid bash -i scripts/full_ingest.sh > logs/full_ingest.log 2>&1 < /dev/null &'
+```
+⚠️ **必须 `bash -i`**:非交互 shell 不读 `~/.bashrc`,akshare 会全 ProxyError(详见 `EXTERNAL_SOURCES_ISSUES.md` 第 6.1 节)
+
+### 📊 看进度
+```bash
+ssh jd 'tail -20 ~/stock_analysis/logs/full_ingest.log'
+ssh jd 'grep -E "===|完成|失败.*只|行业覆盖" ~/stock_analysis/logs/full_ingest.log'
+ssh jd 'ps -ef | grep -E "full_ingest|backend.cli" | grep -v grep'
+```
+
+### 🛑 紧急停止
+```bash
+ssh jd 'pkill -9 -f "full_ingest|backend.cli ingest" 2>/dev/null; echo done'
+```
+
+### 🔍 DB 当前计数
+```bash
+ssh jd 'cd ~/stock_analysis && .venv/bin/python -c "
+from backend.db.session import pg_conn
+with pg_conn() as conn, conn.cursor() as cur:
+  for t in (\"stock_info\",\"kline_daily\",\"lhb_stock_daily\",\"market_sentiment\"):
+    cur.execute(f\"SELECT COUNT(*) FROM {t}\"); print(f\"{t:20s}={cur.fetchone()[0]}\")
+"'
+```
+
+### 🌐 数据源架构澄清
+
+系统只有 **4 个 adapter**: `tushare / akshare / sina / crawler`
+
+**没有独立的"申万 adapter"** —— 申万数据通过 `akshare` 库内部的
+`ak.sw_index_first_info` / `ak.sw_index_third_cons` 函数获取,用于 stock_info 行业字段。
+东财板块被京东云墙、TuShare 需 2000 积分, 申万是行业字段**唯一可用源**,必须保留。
+
+---
+
 ## 一、本次产出
 
 ### 1.1 代码提交
