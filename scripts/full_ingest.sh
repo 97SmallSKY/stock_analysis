@@ -4,6 +4,11 @@
 set -u
 cd "$(dirname "$0")/.."
 
+# 关键: jd 上全局设置了代理 127.0.0.1:10809 / socks5 10808
+# 但代理进程未运行, 所有 http 请求会 ProxyError
+# 这里强制 unset, 让所有 ingest 直连 (akshare 走的都是国内站)
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+
 PY=.venv/bin/python
 TS() { date '+%F %T'; }
 
