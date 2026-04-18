@@ -88,9 +88,10 @@ if [[ -d frontend && -f frontend/package.json ]]; then
     (
         cd frontend
         echo "  -> $FE_INSTALL"
-        $FE_INSTALL
+        # 用 eval 让 ||、子 shell 等 shell 操作符生效(FE_INSTALL 里有 fallback 链)
+        eval "$FE_INSTALL"
         echo "  -> $FE_BUILD"
-        $FE_BUILD
+        eval "$FE_BUILD"
     )
     # 验证产物
     if [[ ! -d frontend/dist ]] || [[ -z "$(ls -A frontend/dist 2>/dev/null)" ]]; then
