@@ -128,6 +128,23 @@ class BaseDataAdapter(ABC):
     ) -> Optional[pd.DataFrame]:
         return None
 
+    def get_intraday_snapshot(
+        self, ts_codes: list
+    ) -> Optional[pd.DataFrame]:
+        """盘中 10s 快照 (W8).
+
+        入参: ts_codes 如 ['000001.SZ', '600000.SH']
+        返回: DataFrame 含列
+            ts_code (str), ts (datetime), price (float),
+            volume (int 累计成交量), amount (float 累计成交额),
+            bid1..bid5, bid1_vol..bid5_vol,
+            ask1..ask5, ask1_vol..ask5_vol,
+            pct_change (float), open (float), high (float),
+            low (float), prev_close (float)
+        默认返回 None, 由具体适配器 (CrawlerAdapter) override.
+        """
+        return None
+
     # ================================================================
     # 限流控制
     # ================================================================
@@ -324,6 +341,7 @@ class BaseDataAdapter(ABC):
         DataCategory.STOCK_INFO: "get_stock_info",
         DataCategory.TRADE_CALENDAR: "get_trade_calendar",
         DataCategory.INDEX_DAILY: "get_index_daily",
+        DataCategory.INTRADAY_SNAPSHOT: "get_intraday_snapshot",
     }
 
     def get_method_for_category(self, category: DataCategory) -> Optional[Callable]:

@@ -18,6 +18,7 @@ class DataCategory(str, Enum):
     STOCK_INFO = "STOCK_INFO"  # 股票基础信息
     TRADE_CALENDAR = "TRADE_CALENDAR"  # 交易日历
     INDEX_DAILY = "INDEX_DAILY"  # 指数日线
+    INTRADAY_SNAPSHOT = "INTRADAY_SNAPSHOT"  # 盘中快照 (W8 10s 级)
 
 
 class AdapterName(str, Enum):

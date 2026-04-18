@@ -276,6 +276,128 @@ class CrawlerAdapter(BaseDataAdapter):
         return self._safe_request(_fetch)
 
     # ================================================================
+    # 盘中快照 (W8)
+    # ================================================================
+
+    #
+    # 东方财富 push2 多股批量接口:
+    #   https://push2.eastmoney.com/api/qt/ulist.np/get?secids=0.000001,1.600000&fields=...
+    #
+    # 字段定义 (东财 push2 f-code):
+    #   f1   市场 (0=深, 1=沪, 116=港, 105=美)
+    #   f2   最新价 (×100, 保留2位 -> /100)
+    #   f3   涨跌幅 (×100 -> /100, 单位 %)
+    #   f4   涨跌额 (×100)
+    #   f5   成交量 (手)
+    #   f6   成交额 (元)
+    #   f15  最高 (×100)
+    #   f16  最低 (×100)
+    #   f17  开盘 (×100)
+    #   f18  昨收 (×100)
+    #   f12  代码
+    #   f14  名称
+    #
+    # 5 档买卖 (单股接口 stock/get, 这里批量先不取 5档, 统一留 None)
+    #
+    _SNAPSHOT_FIELDS = "f1,f2,f3,f4,f5,f6,f12,f14,f15,f16,f17,f18"
+
+    @staticmethod
+    def _ts_code_to_secid(ts_code: str) -> Optional[str]:
+        """'600000.SH' -> '1.600000', '000001.SZ' -> '0.000001'."""
+        ts = str(ts_code or "").strip().upper()
+        if "." not in ts:
+            return None
+        code, mkt = ts.split(".", 1)
+        if mkt == "SH":
+            return f"1.{code}"
+        if mkt == "SZ":
+            return f"0.{code}"
+        if mkt == "BJ":
+            return f"0.{code}"  # 北交所也走 0
+        return None
+
+    @staticmethod
+    def _scale(v, factor: float = 100.0) -> Optional[float]:
+        """东财 ×100 整数 -> float. '-' 或 None 返回 None."""
+        if v in (None, "-", ""):
+            return None
+        try:
+            return float(v) / factor
+        except (TypeError, ValueError):
+            return None
+
+    def get_intraday_snapshot(
+        self, ts_codes: list
+    ) -> Optional[pd.DataFrame]:
+        """批量拉盘中快照 (东财 push2 ulist.np).
+
+        返回列: ts_code, ts, name, price, pct_change, change,
+                volume, amount, open, high, low, prev_close.
+                5 档买卖为 None (批量接口不提供, 如需请单股另取).
+        """
+        if not ts_codes:
+            return pd.DataFrame()
+
+        # ts_code -> secid, 顺带保留原始代码用于结果回填
+        secids: list[str] = []
+        valid: list[str] = []
+        for tc in ts_codes:
+            sec = self._ts_code_to_secid(tc)
+            if sec is None:
+                logger.debug(f"[crawler.snapshot] 无效 ts_code: {tc!r}")
+                continue
+            secids.append(sec)
+            valid.append(tc.upper())
+        if not secids:
+            return pd.DataFrame()
+
+        def _fetch() -> pd.DataFrame:
+            import datetime as _dt
+            url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+            params = {
+                "secids": ",".join(secids),
+                "fields": self._SNAPSHOT_FIELDS,
+                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                "fltt": "2",
+                "invt": "2",
+            }
+            resp = self._session.get(url, params=params, timeout=self.timeout)
+            resp.raise_for_status()
+            js = resp.json() or {}
+            data = (js.get("data") or {}).get("diff") or []
+            now = _dt.datetime.now()
+            rows = []
+            for it in data:
+                code = it.get("f12")
+                f1 = it.get("f1")
+                ts_code = None
+                if code:
+                    # f1: 0=深, 1=沪
+                    if f1 == 1:
+                        ts_code = f"{code}.SH"
+                    elif f1 == 0:
+                        ts_code = f"{code}.SZ"
+                    else:
+                        ts_code = f"{code}.SZ"
+                rows.append({
+                    "ts_code": ts_code,
+                    "ts": now,
+                    "name": it.get("f14"),
+                    "price": self._scale(it.get("f2")),
+                    "pct_change": self._scale(it.get("f3")),
+                    "change": self._scale(it.get("f4")),
+                    "volume": int(it["f5"]) if it.get("f5") not in (None, "-", "") else None,
+                    "amount": float(it["f6"]) if it.get("f6") not in (None, "-", "") else None,
+                    "high": self._scale(it.get("f15")),
+                    "low": self._scale(it.get("f16")),
+                    "open": self._scale(it.get("f17")),
+                    "prev_close": self._scale(it.get("f18")),
+                })
+            return pd.DataFrame(rows)
+
+        return self._safe_request(_fetch, max_retries=1)
+
+    # ================================================================
     # 工具方法
     # ================================================================
 
