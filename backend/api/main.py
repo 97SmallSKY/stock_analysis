@@ -59,6 +59,10 @@ def create_app() -> FastAPI:
     def healthz():
         return {"status": "ok", "version": app.version}
 
+    # W12-2 Prometheus /metrics + HTTP 中间件
+    from backend.core.metrics import setup_metrics
+    setup_metrics(app)
+
     # 路由
     from backend.api.data_sources import router as ds_router
     app.include_router(ds_router, prefix="/api/data-sources",
