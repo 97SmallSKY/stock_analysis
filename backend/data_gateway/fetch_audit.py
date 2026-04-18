@@ -170,8 +170,18 @@ class FetchAudit:
                 logger.warning(f"[FetchAudit] flush 循环异常: {e}")
 
 
+# 进程级标志: 首次遇到表不存在/权限不足即降级为 no-op,
+# 避免每次 flush 都打 warning 淹没日志.
+_persist_disabled = False
+_persist_disabled_reason: str | None = None
+
+
 def _persist(entries: list[FetchLogEntry]) -> int:
+    global _persist_disabled, _persist_disabled_reason
     if not entries:
+        return 0
+    if _persist_disabled:
+        # 已知目标表不可用, 静默丢弃
         return 0
     try:
         from backend.db.session import pg_conn
@@ -191,5 +201,28 @@ def _persist(entries: list[FetchLogEntry]) -> int:
             )
         return len(entries)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[FetchAudit._persist] 失败: {e}")
+        msg = str(e).lower()
+        # 永久性错误 -> 本进程剩余时间全部禁用, 只 warn 一次.
+        permanent_markers = (
+            "does not exist",
+            "undefinedtable",
+            "permission denied",
+            "insufficientprivilege",
+            "relation",
+        )
+        if any(m in msg for m in permanent_markers) and "data_fetch_log" in msg:
+            _persist_disabled = True
+            _persist_disabled_reason = str(e)
+            logger.warning(
+                f"[FetchAudit._persist] 目标表不可用, 本进程后续 audit 将静默丢弃: {e}"
+            )
+        else:
+            logger.warning(f"[FetchAudit._persist] 失败: {e}")
         return 0
+
+
+def reset_persist_state_for_tests() -> None:
+    """测试用: 复位 _persist_disabled 标志."""
+    global _persist_disabled, _persist_disabled_reason
+    _persist_disabled = False
+    _persist_disabled_reason = None
