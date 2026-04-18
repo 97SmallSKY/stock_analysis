@@ -139,6 +139,9 @@ def create_app() -> FastAPI:
     # W10-2 周报
     from backend.api.reports import router as reports_router
     app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
+    # P7.3 K 线只读(StockDrillModal 数据源)
+    from backend.api.kline import router as kline_router
+    app.include_router(kline_router, prefix="/api/kline", tags=["kline"])
 
     # W12-7 运行时集成: scheduler + redis + robot_registry
     from backend.core.runtime import wire_runtime, shutdown_runtime

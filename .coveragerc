@@ -1,0 +1,20 @@
+# P7 2026-04-19: coverage 配置
+#
+# ingest/* 是 ops 拉数脚本(走 akshare / tushare / sina 外网适配器),
+# 单测桩难度 = 重写 adapter, 收益 << 成本. 已有集成测试 test_data_fetch
+# 在本地手动跑验证真外网; 与 test_db_crud 一并从 pytest 默认轮次剔除.
+# 故覆盖率统计也排除该目录, 避免把 ops 代码算进 75% 门槛.
+
+[run]
+source = backend
+omit =
+    backend/ingest/*
+    backend/__main__.py
+    backend/*/cli.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    raise NotImplementedError
+    if __name__ == .__main__.:
+    if TYPE_CHECKING:

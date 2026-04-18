@@ -11,7 +11,10 @@
       >
         <a-menu-item key="/">Dashboard</a-menu-item>
         <a-menu-item key="/lhb">龙虎榜</a-menu-item>
+        <a-menu-item key="/signals">决策信号</a-menu-item>
+        <a-menu-item key="/lhb-pnl">盈亏分析</a-menu-item>
         <a-menu-item key="/backtest">策略对比</a-menu-item>
+        <a-menu-item key="/robots">机器人</a-menu-item>
         <a-menu-item key="/reports">周报</a-menu-item>
         <a-menu-item key="/data-sources">数据源</a-menu-item>
       </a-menu>
@@ -24,12 +27,16 @@
     <a-layout-footer class="app-footer">
       <span>© LHB quant — 内部系统</span>
     </a-layout-footer>
+
+    <!-- P7.2 全局股票下钻 Modal:日K → 周K → 分钟 K -->
+    <StockDrillModal />
   </a-layout>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import StockDrillModal from '@/components/StockDrillModal.vue'
 
 const route = useRoute()
 const router = useRouter()

@@ -319,6 +319,38 @@ def list_tasks(limit: int = 50):
     ]
 
 
+@router.get('/history')
+def list_history(
+    limit: int = 200,
+    status: Optional[str] = None,
+    strategy_name: Optional[str] = None,
+):
+    """P7.1 历史任务摘要: 在 /api/backtest 基础上补 metrics 摘要 + 过滤.
+
+    每行返回字段 = TaskResp + {
+        total_return, sharpe, max_drawdown, n_trades, win_rate
+    } (若任务未完成, 这些字段为 None).
+    """
+    items = get_store().list(limit=limit * 4)  # 先宽取, 再过滤, 最后 slice
+    out: list[dict] = []
+    for t in items:
+        if status and t.status != status:
+            continue
+        if strategy_name and t.strategy_name != strategy_name:
+            continue
+        d = t.to_dict()
+        m = t.metrics or {}
+        d['total_return'] = m.get('total_return')
+        d['sharpe'] = m.get('sharpe') or m.get('sharpe_ratio')
+        d['max_drawdown'] = m.get('max_drawdown')
+        d['n_trades'] = m.get('n_trades') or m.get('trade_count')
+        d['win_rate'] = m.get('win_rate')
+        out.append(d)
+        if len(out) >= limit:
+            break
+    return {'total': len(out), 'rows': out}
+
+
 @router.get('/{task_id}')
 def get_task(task_id: str):
     t = get_store().get(task_id)

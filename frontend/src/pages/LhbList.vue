@@ -100,10 +100,12 @@ import 'ag-grid-community/styles/ag-theme-quartz.css'
 import { useLhbStore } from '@/stores/lhb'
 import type { LhbRow, LhbListParams } from '@/api/lhb'
 import { fmtAmount, fmtPct, fmtDate } from '@/utils/format'
+import { useStockDrill } from '@/composables/useStockDrill'
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
 const store = useLhbStore()
+const drill = useStockDrill()
 
 interface FormState {
   range: [string, string] | null
@@ -124,7 +126,15 @@ const form = reactive<FormState>({
 const gridApi = ref<GridApi | null>(null)
 
 const columnDefs = computed<ColDef<LhbRow>[]>(() => [
-  { headerName: '股票', field: 'ts_code', width: 120, pinned: 'left' },
+  {
+    headerName: '股票', field: 'ts_code', width: 120, pinned: 'left',
+    filter: 'agTextColumnFilter',
+    cellRenderer: (p: { value: string }) =>
+      `<a class="stock-link" data-ts="${p.value}">${p.value}</a>`,
+    onCellClicked: (ev: { value: string }) => {
+      if (ev.value) drill.open(String(ev.value))
+    },
+  },
   {
     headerName: '日期', field: 'trade_date', width: 120,
     valueFormatter: (p) => fmtDate(p.value as string | null),
@@ -162,7 +172,10 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
   },
 ])
 
-const defaultColDef: ColDef = { resizable: true, sortable: false }
+const defaultColDef: ColDef = {
+  resizable: true, sortable: true,
+  filter: true, floatingFilter: true,
+}
 
 const page = computed(() => Math.floor((store.list.offset ?? 0) / (store.list.limit ?? 50)) + 1)
 const pageSize = computed(() => store.list.limit ?? 50)

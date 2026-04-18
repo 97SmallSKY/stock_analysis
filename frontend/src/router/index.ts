@@ -31,6 +31,24 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/Reports.vue'),
     meta: { title: '周报' },
   },
+  {
+    path: '/robots',
+    name: 'robots',
+    component: () => import('@/pages/Robots.vue'),
+    meta: { title: '机器人模拟炒股' },
+  },
+  {
+    path: '/lhb-pnl',
+    name: 'lhb-pnl',
+    component: () => import('@/pages/LhbPnl.vue'),
+    meta: { title: '龙虎榜盈亏分析' },
+  },
+  {
+    path: '/signals',
+    name: 'signals',
+    component: () => import('@/pages/Signals.vue'),
+    meta: { title: '决策辅助信号' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
