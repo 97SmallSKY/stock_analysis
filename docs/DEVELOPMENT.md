@@ -169,3 +169,60 @@ fix: 修复 SinaAdapter 所有方法嵌套在 __init__ 中导致类为空壳
 
 关联: docs/CODE_REVIEW.md §1.2
 ```
+
+---
+
+## 9. API 索引 (W12-6)
+
+所有 HTTP 端点由 FastAPI app 自动暴露, 完整 schema 可运行时拉取:
+
+```bash
+# 交互式 UI
+open http://localhost:8000/docs            # Swagger UI
+open http://localhost:8000/redoc           # ReDoc
+
+# 导出 JSON / YAML
+python scripts/dump_openapi.py --out docs/openapi.json
+python scripts/dump_openapi.py --yaml --out docs/openapi.yaml
+```
+
+### 9.1 路由一览
+
+| 前缀 | 模块 | 说明 |
+|---|---|---|
+| `/healthz` | main | 进程存活探针 |
+| `/metrics` | core.metrics | Prometheus 指标 (W12-2) |
+| `/api/data-sources/status` | api.data_sources | 适配器 + CB + 健康快照 |
+| `/api/data-sources/priority` | 同上 | POST 优先级链 |
+| `/api/data-sources/adapter/{name}/retry` | 同上 | 重新初始化某适配器 |
+| `/api/data-sources/adapter/{name}/circuit/{action}` | 同上 | 手动 open/close CB |
+| `/api/lhb` | api.lhb | 龙虎榜列表分页/多维过滤 |
+| `/api/lhb/seats` | 同上 | 单日单股席位明细 |
+| `/api/lhb/stat/{stat_type}/{stat_key}` | 同上 | 席位/行业聚合统计 |
+| `/api/dashboard` | api.dashboard | 首屏: 情绪 + Top LHB + 适配器 (@cached 15s) |
+| `/api/backtest` (POST) | api.backtest | 提交单策略回测任务 |
+| `/api/backtest` (GET) / `/{task_id}` | 同上 | 任务列表 / 单任务状态 |
+| `/api/backtest/strategies` | 同上 | 已注册策略列表 |
+| `/api/backtest/compare` (POST) | 同上 | W10-1 多策略并行对比 |
+| `/api/robots` (GET) | api.robots | 机器人列表 (带 enabled/state) |
+| `/api/robots/{id}/status` | 同上 | 单个机器人快照 |
+| `/api/robots/{id}/pause` \| `/resume` | 同上 | 状态机切换 |
+| `/api/robots/{id}/enable` \| `/disable` | 同上 | W12-1 灰度开关 |
+| `/api/reports/weekly` (GET) | api.reports | 指定区间周报 |
+| `/api/reports/weekly/generate` (POST) | 同上 | 立即生成当周周报 |
+| `/ws/snapshot?codes=a,b` | api.ws_snapshot | WebSocket 订阅盘中 10s 快照 (W8-4) |
+
+### 9.2 运行时开关 (env)
+
+| 变量 | 默认 | 用途 |
+|---|---|---|
+| `RUNTIME_ENABLE_REDIS` | `0` | 启用 RedisCache + SnapshotPublisher |
+| `RUNTIME_ENABLE_INTRADAY` | `0` | 启用盘中 10s 快照 scheduler (W8-3) |
+| `RUNTIME_ENABLE_WEEKLY` | `0` | 启用周一 09:00 周报 scheduler (W10-2) |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis 连接串 |
+| `CLEAR_PROXY_ON_STARTUP` | `0` | 启动清代理 (历史兼容) |
+| `LOG_LEVEL` | `INFO` | stdlib logging level |
+
+所有开关打开失败都走 logger.warning, 不阻塞 FastAPI 启动; 见
+`backend/core/runtime.py::wire_runtime`.
+

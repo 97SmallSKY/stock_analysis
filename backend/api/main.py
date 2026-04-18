@@ -86,10 +86,15 @@ def create_app() -> FastAPI:
     from backend.api.reports import router as reports_router
     app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
 
+    # W12-7 运行时集成: scheduler + redis + robot_registry
+    from backend.core.runtime import wire_runtime, shutdown_runtime
+    wire_runtime(app)
+
     @app.on_event("shutdown")
     def _shutdown():
         hc.stop()
         audit.stop()
+        shutdown_runtime(app)
 
     return app
 
