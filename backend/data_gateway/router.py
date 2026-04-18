@@ -105,6 +105,11 @@ class DataRouter:
         Returns:
             DataFrame 或 None (全部失败)
         """
+        from backend.data_gateway.fetch_audit import FetchAudit
+        import time as _time
+
+        audit = FetchAudit.get_instance()
+
         chain = self._priority_chains.get(category, [])
 
         if not chain:
@@ -132,6 +137,7 @@ class DataRouter:
                 )
                 continue
 
+            t0 = _time.time()
             try:
                 logger.debug(
                     f"[Router] 尝试 {adapter_name.value}.{method_name}"
@@ -139,22 +145,52 @@ class DataRouter:
                 )
 
                 result = method(*args, **kwargs)
+                latency_ms = int((_time.time() - t0) * 1000)
 
                 if result is not None and isinstance(result, pd.DataFrame) and not result.empty:
                     logger.info(
                         f"[Router] ✅ {category.value} 通过 {adapter_name.value} "
                         f"获取成功 ({len(result)}行)"
                     )
+                    audit.record(
+                        category=category.value,
+                        method_name=method_name,
+                        adapter_name=adapter_name.value,
+                        latency_ms=latency_ms,
+                        ok=True,
+                        rows=len(result),
+                        error_msg=None,
+                    )
                     # 标记数据来源
                     result["_source"] = adapter_name.value
                     return result
 
+                # 空数据也算一次"尝试", 标记 ok=False 便于统计各源空率
+                audit.record(
+                    category=category.value,
+                    method_name=method_name,
+                    adapter_name=adapter_name.value,
+                    latency_ms=latency_ms,
+                    ok=False,
+                    rows=0,
+                    error_msg="empty",
+                )
                 logger.debug(
                     f"[Router] {adapter_name.value} 返回空数据，降级下一个"
                 )
 
             except Exception as e:
+                latency_ms = int((_time.time() - t0) * 1000)
                 last_error = str(e)
+                audit.record(
+                    category=category.value,
+                    method_name=method_name,
+                    adapter_name=adapter_name.value,
+                    latency_ms=latency_ms,
+                    ok=False,
+                    rows=None,
+                    error_msg=last_error,
+                )
                 logger.warning(
                     f"[Router] {adapter_name.value}.{method_name} 异常: {e}，"
                     f"降级下一个"
