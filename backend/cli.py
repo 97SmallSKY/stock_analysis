@@ -47,6 +47,13 @@ def main(argv: list[str] | None = None) -> int:
     lhb.add_argument("--from", dest="start", default="20240101")
     lhb.add_argument("--to", dest="end", default=_today())
 
+    # 仅回填 lhb_seats(主表已齐时用)
+    lhbs = ingest_sub.add_parser("lhb-seats")
+    lhbs.add_argument("--from", dest="start", default="20240101")
+    lhbs.add_argument("--to", dest="end", default=_today())
+    lhbs.add_argument("--no-skip", action="store_true",
+                      help="不跳过 lhb_seats 已有的日期(强制重采)")
+
     st = ingest_sub.add_parser("sentiment")
     st.add_argument("--from", dest="start", default="20240101")
     st.add_argument("--to", dest="end", default=_today())
@@ -79,6 +86,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.dataset == "lhb":
             from backend.ingest import lhb
             lhb.run(args.start, args.end)
+        elif args.dataset == "lhb-seats":
+            from backend.ingest import lhb as lhb_mod
+            lhb_mod.run_seats(args.start, args.end,
+                              skip_existing=not args.no_skip)
         elif args.dataset == "sentiment":
             from backend.ingest import sentiment
             sentiment.run(args.start, args.end)

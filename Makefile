@@ -71,6 +71,9 @@ ingest-kline: ## 抓取历史日K线到 kline_daily (FROM/TO/CODES 可选)
 ingest-lhb: ## 抓取龙虎榜 lhb_stock_daily (FROM/TO 可选)
 	$(PYTHON) -m backend.cli ingest lhb --from $(FROM) --to $(TO)
 
+ingest-lhb-seats: ## 仅回填 lhb_seats(主表已齐时用;FROM/TO 可选)
+	$(PYTHON) -m backend.cli ingest lhb-seats --from $(FROM) --to $(TO)
+
 ingest-sentiment: ## 抓取市场情绪 market_sentiment
 	$(PYTHON) -m backend.cli ingest sentiment --from $(FROM) --to $(TO)
 

@@ -83,3 +83,30 @@ def run(start: str, end: str, skip_existing: bool = True) -> dict:
     )
     logger.info(f"[ingest.lhb] 完成: {summary}")
     return summary
+
+
+def run_seats(start: str, end: str, skip_existing: bool = True) -> dict:
+    """仅回填 lhb_seats(主表已齐时用)。
+
+    与 `run()` 区别:只调 get_lhb_seats + upsert_seats,不动主表、不跑 aggregate。
+    跳过判定以 lhb_seats 表为准,不看主表。
+    """
+    from backend.data_gateway.manager import DataSourceManager
+    from backend.domain.lhb.daily_job import run_seats_only_range
+
+    manager = DataSourceManager()
+    manager.initialize()
+    trade_days = _load_trading_days(start, end) or list(_daterange(start, end))
+    logger.info(
+        f"[ingest.lhb-seats] 待处理 {len(trade_days)} 天 [{start} -> {end}], "
+        f"skip_existing={skip_existing}"
+    )
+
+    summary = run_seats_only_range(
+        pg_conn,
+        manager,
+        trade_days,
+        skip_existing=skip_existing,
+    )
+    logger.info(f"[ingest.lhb-seats] 完成: {summary}")
+    return summary

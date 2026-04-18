@@ -272,6 +272,139 @@ def run_range(
 
 
 # --------------------------------------------------------------------
+# 仅回填 seats: 主表早已存在但 lhb_seats 空(或部分缺)
+# --------------------------------------------------------------------
+
+
+def run_seats_only_single(conn, manager, trade_date: str) -> dict:
+    """对已有主表的某一日,单独拉 seats 并 upsert 到 lhb_seats。
+
+    策略:
+      1. 从 lhb_stock_daily 读当日所有 (ts_code, trade_date, id)。
+      2. 调 manager.get_lhb_seats(trade_date) 拿席位 DataFrame(单位:万元)。
+      3. parse_seats_dataframe → 与步骤 1 的 id_map 对齐 → 逐行 upsert lhb_seats。
+
+    返回: {main_ids: N, seat_rows: M}
+    """
+    result = {"trade_date": trade_date, "main_ids": 0, "seat_rows": 0}
+    as_of = _to_date(trade_date)
+    if as_of is None:
+        logger.warning(f"[lhb.seats_only] 无效 trade_date={trade_date}")
+        return result
+
+    # 1. 读主表 id_map: (ts_code, date) -> id
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, ts_code, trade_date FROM lhb_stock_daily WHERE trade_date = %s",
+            (as_of,),
+        )
+        id_map: dict[tuple, int] = {}
+        for _id, ts, td in cur.fetchall():
+            id_map[(ts, td)] = _id
+    result["main_ids"] = len(id_map)
+    if not id_map:
+        logger.info(f"[lhb.seats_only] {trade_date} 主表无记录, 跳过")
+        return result
+
+    # 2. 拉 seats
+    try:
+        seats_df = manager.get_lhb_seats(trade_date)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[lhb.seats_only] {trade_date} get_lhb_seats 失败: {e}")
+        return result
+    seats_by_key = parse_seats_dataframe(seats_df)
+    if not seats_by_key:
+        logger.info(f"[lhb.seats_only] {trade_date} 席位为空")
+        return result
+
+    # 3. 组装 records 列表,attach seats 后走既有 upsert_seats
+    from backend.domain.lhb.ingestor import upsert_seats
+    # 反推 records: 只需要 ts_code/trade_date/seats 三个字段就能进 upsert_seats
+    recs: list[LhbRecord] = []
+    for (ts, td), _id in id_map.items():
+        recs.append(LhbRecord(ts_code=ts, trade_date=td, seats=[]))
+    attached = attach_seats(recs, seats_by_key)
+    # upsert_seats 期望 id_map key 用 _norm_date 后的 date
+    from backend.domain.lhb.ingestor import _norm_date
+    id_map_norm = {(ts, _norm_date(td)): _id for (ts, td), _id in id_map.items()}
+    seat_n = upsert_seats(conn, recs, id_map_norm)
+    conn.commit()
+    result["seat_rows"] = seat_n
+    logger.info(
+        f"[lhb.seats_only] {trade_date} main_ids={result['main_ids']} "
+        f"attached={attached} seat_rows={seat_n}"
+    )
+    return result
+
+
+def run_seats_only_range(
+    conn_factory: Callable,
+    manager,
+    trade_days: list[str],
+    *,
+    skip_existing: bool = True,
+    progress_cb: Optional[Callable[[int, int, dict], None]] = None,
+) -> dict:
+    """区间回填 seats, 默认按 lhb_seats 已有日期跳过(与主表 skip 逻辑解耦)。"""
+    summary = {
+        "total_days": len(trade_days),
+        "done_days": 0,
+        "skipped": 0,
+        "fail": 0,
+        "main_ids": 0,
+        "seat_rows": 0,
+    }
+    # 跳过已在 lhb_seats 里出现过的日期
+    covered: set[str] = set()
+    if skip_existing and trade_days:
+        try:
+            conn = _get_conn(conn_factory)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT DISTINCT to_char(trade_date, 'YYYYMMDD') "
+                        "FROM lhb_seats WHERE trade_date BETWEEN %s AND %s",
+                        (
+                            f"{trade_days[0][:4]}-{trade_days[0][4:6]}-{trade_days[0][6:]}",
+                            f"{trade_days[-1][:4]}-{trade_days[-1][4:6]}-{trade_days[-1][6:]}",
+                        ),
+                    )
+                    covered = {r[0] for r in cur.fetchall()}
+            finally:
+                _maybe_close(conn)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[lhb.seats_only] 查 covered 失败: {e}")
+
+    for idx, d in enumerate(trade_days, 1):
+        if d in covered:
+            summary["skipped"] += 1
+            continue
+        conn = _get_conn(conn_factory)
+        try:
+            ret = run_seats_only_single(conn, manager, d)
+            summary["main_ids"] += ret["main_ids"]
+            summary["seat_rows"] += ret["seat_rows"]
+            summary["done_days"] += 1
+            if progress_cb:
+                try:
+                    progress_cb(idx, len(trade_days), ret)
+                except Exception:  # noqa: BLE001
+                    pass
+        except Exception as e:  # noqa: BLE001
+            summary["fail"] += 1
+            logger.warning(f"[lhb.seats_only] {d} 失败: {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            _maybe_close(conn)
+
+    logger.info(f"[lhb.seats_only] 区间完成: {summary}")
+    return summary
+
+
+# --------------------------------------------------------------------
 # conn factory 兼容: 允许 factory 返回 ctx manager 或 直接 conn
 # --------------------------------------------------------------------
 
