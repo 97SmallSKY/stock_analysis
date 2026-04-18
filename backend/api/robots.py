@@ -37,8 +37,8 @@ def _get_engine(request: Request, robot_id: int):
     return eng
 
 
-def _snapshot_to_dict(snap) -> dict:
-    return {
+def _snapshot_to_dict(snap, engine=None) -> dict:
+    d = {
         "robot_id": snap.robot_id,
         "state": snap.state.value if hasattr(snap.state, "value") else str(snap.state),
         "cash": snap.cash,
@@ -57,6 +57,9 @@ def _snapshot_to_dict(snap) -> dict:
             for p in snap.positions
         ],
     }
+    if engine is not None:
+        d["enabled"] = bool(getattr(engine, "enabled", False))
+    return d
 
 
 @router.post("/{robot_id}/pause")
@@ -64,7 +67,7 @@ def pause_robot(robot_id: int, request: Request):
     eng = _get_engine(request, robot_id)
     snap = eng.pause()
     logger.info(f"[API] robot {robot_id} paused -> {snap.state.value}")
-    return {"ok": True, "snapshot": _snapshot_to_dict(snap)}
+    return {"ok": True, "snapshot": _snapshot_to_dict(snap, eng)}
 
 
 @router.post("/{robot_id}/resume")
@@ -72,13 +75,30 @@ def resume_robot(robot_id: int, request: Request):
     eng = _get_engine(request, robot_id)
     snap = eng.resume()
     logger.info(f"[API] robot {robot_id} resumed -> {snap.state.value}")
-    return {"ok": True, "snapshot": _snapshot_to_dict(snap)}
+    return {"ok": True, "snapshot": _snapshot_to_dict(snap, eng)}
+
+
+# W12-1 灰度开关
+@router.post("/{robot_id}/enable")
+def enable_robot(robot_id: int, request: Request):
+    eng = _get_engine(request, robot_id)
+    eng.enable()
+    logger.info(f"[API] robot {robot_id} enabled")
+    return {"ok": True, "snapshot": _snapshot_to_dict(eng.snapshot, eng)}
+
+
+@router.post("/{robot_id}/disable")
+def disable_robot(robot_id: int, request: Request):
+    eng = _get_engine(request, robot_id)
+    eng.disable()
+    logger.info(f"[API] robot {robot_id} disabled")
+    return {"ok": True, "snapshot": _snapshot_to_dict(eng.snapshot, eng)}
 
 
 @router.get("/{robot_id}/status")
 def robot_status(robot_id: int, request: Request):
     eng = _get_engine(request, robot_id)
-    return {"ok": True, "snapshot": _snapshot_to_dict(eng.snapshot)}
+    return {"ok": True, "snapshot": _snapshot_to_dict(eng.snapshot, eng)}
 
 
 @router.get("")
@@ -86,6 +106,6 @@ def list_robots(request: Request):
     reg = _get_registry(request)
     return {
         "robots": [
-            _snapshot_to_dict(eng.snapshot) for eng in reg.values()
+            _snapshot_to_dict(eng.snapshot, eng) for eng in reg.values()
         ],
     }

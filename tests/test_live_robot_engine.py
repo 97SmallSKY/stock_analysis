@@ -22,9 +22,16 @@ from datetime import date, timedelta
 import pytest
 
 from backend.domain.robot.live_engine import (
-    Candidate, LiveRobotEngine, TickDecision, default_sell_policy,
+    Candidate, LiveRobotEngine as _RawLiveRobotEngine,
+    TickDecision, default_sell_policy,
     score_from_zt_pool,
 )
+
+# W12-1: LiveRobotEngine 默认 enabled=False. 既有业务测试都假设会跑,
+# 这里包一层让未显式 enabled 的创建默认 True, 单独的灰度用例再显式传 False.
+def LiveRobotEngine(*args, **kwargs):
+    kwargs.setdefault("enabled", True)
+    return _RawLiveRobotEngine(*args, **kwargs)
 from backend.domain.robot.robot import PositionState, RobotSnapshot
 from backend.domain.robot.state import RobotState
 
@@ -54,6 +61,34 @@ def pos(ts_code="A.SZ", shares=100, cost=10.0, days_ago=0, current=None):
 # --------------------------------------------------------------------
 # pause / resume
 # --------------------------------------------------------------------
+
+
+class TestEnableDisable:
+    def test_default_disabled_tick_skipped(self):
+        # 用原始类, 不自动 enable
+        eng = _RawLiveRobotEngine(make_snap(state=RobotState.RUNNING))
+        assert eng.enabled is False
+        r = eng.tick({})
+        assert r.skipped_reason == "disabled"
+
+    def test_enable_then_tick_runs(self):
+        eng = _RawLiveRobotEngine(make_snap(state=RobotState.RUNNING))
+        eng.enable()
+        assert eng.enabled is True
+        r = eng.tick({})
+        # RUNNING + enabled + 无订阅/候选: 无决策但不算 disabled
+        assert r.skipped_reason is None
+
+    def test_disable_roundtrip(self):
+        eng = _RawLiveRobotEngine(make_snap(), enabled=True)
+        eng.disable()
+        assert eng.enabled is False
+        assert eng.tick({}).skipped_reason == "disabled"
+
+    def test_phase_a_disabled(self):
+        eng = _RawLiveRobotEngine(make_snap(), enabled=False)
+        r = eng.run_phase_a([Candidate("A", 80)], {"A": 10})
+        assert r.skipped_reason == "disabled"
 
 
 class TestPauseResume:
@@ -304,3 +339,24 @@ class TestRobotsApi:
         assert r.status_code == 200
         rows = r.json()["robots"]
         assert len(rows) == 1 and rows[0]["robot_id"] == 1
+        # W12-1 snapshot 字段带 enabled
+        assert "enabled" in rows[0]
+
+    # W12-1 灰度 API
+    def test_enable_disable(self, api_client):
+        client, eng = api_client
+        # 初始 disabled (未调 enable)
+        r = client.get("/api/robots/1/status")
+        assert r.json()["snapshot"]["enabled"] is True    # helper 已默认 enabled
+        # 先 disable
+        r = client.post("/api/robots/1/disable")
+        assert r.status_code == 200
+        assert r.json()["snapshot"]["enabled"] is False
+        assert eng.enabled is False
+        # 再 enable
+        r = client.post("/api/robots/1/enable")
+        assert r.json()["snapshot"]["enabled"] is True
+        assert eng.enabled is True
+        # 幂等: 再 enable
+        r = client.post("/api/robots/1/enable")
+        assert r.json()["snapshot"]["enabled"] is True

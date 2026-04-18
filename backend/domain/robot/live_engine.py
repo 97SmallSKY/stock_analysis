@@ -107,11 +107,27 @@ class LiveRobotEngine:
         sell_policy: Callable = default_sell_policy,
         max_buys_per_tick: int = 1,
         max_sells_per_tick: int = 2,
+        enabled: bool = False,          # W12-1 灰度: 默认 OFF
     ):
         self.snapshot = snapshot
         self.sell_policy = sell_policy
         self.max_buys_per_tick = max_buys_per_tick
         self.max_sells_per_tick = max_sells_per_tick
+        self.enabled = bool(enabled)
+
+    # ------------------------------------------------------------------
+    # 灰度开关 (W12-1)
+    # ------------------------------------------------------------------
+
+    def enable(self) -> bool:
+        """打开灰度开关. 返回当前 enabled 状态."""
+        self.enabled = True
+        return self.enabled
+
+    def disable(self) -> bool:
+        """关闭灰度开关 (不改变 state machine). 返回当前 enabled 状态."""
+        self.enabled = False
+        return self.enabled
 
     # ------------------------------------------------------------------
     # 状态控制
@@ -163,6 +179,9 @@ class LiveRobotEngine:
         biz_date = biz_date or date.today()
         snap = self.snapshot
 
+        # W12-1 灰度: disabled 直接跳过, 上层由运营逐个 enable
+        if not self.enabled:
+            return TickReport(snapshot=snap, skipped_reason="disabled")
         # 非 RUNNING 直接跳过 (PAUSED / STOPPED / IDLE / COOL_DOWN / ERROR)
         if snap.state != RobotState.RUNNING:
             return TickReport(snapshot=snap, skipped_reason=f"state={snap.state.value}")
@@ -254,6 +273,9 @@ class LiveRobotEngine:
         snap = self.snapshot
         decisions: list[TickDecision] = []
 
+        # W12-1 灰度
+        if not self.enabled:
+            return TickReport(snapshot=snap, skipped_reason="disabled")
         if snap.state not in (RobotState.RUNNING, RobotState.IDLE):
             return TickReport(snapshot=snap, skipped_reason=f"state={snap.state.value}")
 
