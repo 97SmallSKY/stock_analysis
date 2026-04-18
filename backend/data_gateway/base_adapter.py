@@ -233,10 +233,15 @@ class BaseDataAdapter(ABC):
                 retryable = self._is_retryable_error(e)
 
                 if retryable and attempt < max_retries:
-                    wait = (attempt + 1) * 2  # 退避: 2s, 4s
+                    # 指数退避 + 随机抖动 (反爬场景下随机抖动很关键,
+                    # 避免多个并发任务同时撞窗口)
+                    import random
+                    base_wait = 2 ** attempt  # 1, 2, 4 ...
+                    jitter = random.uniform(0.0, 1.5)
+                    wait = base_wait + jitter
                     logger.warning(
                         f"[{self.name.value}] 请求失败(第{attempt + 1}/{max_retries + 1}次), "
-                        f"{wait}s后重试: {last_error}"
+                        f"{wait:.1f}s后重试: {last_error}"
                     )
                     time.sleep(wait)
                     continue
