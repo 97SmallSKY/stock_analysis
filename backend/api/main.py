@@ -70,6 +70,9 @@ def create_app() -> FastAPI:
     app.include_router(lhb_router, prefix="/api/lhb", tags=["lhb"])
     from backend.api.dashboard import router as dash_router
     app.include_router(dash_router, prefix="/api/dashboard", tags=["dashboard"])
+    # W8-4 WebSocket /ws/snapshot — Redis pubsub 转发
+    from backend.api.ws_snapshot import router as ws_router
+    app.include_router(ws_router, prefix="/ws", tags=["ws"])
 
     @app.on_event("shutdown")
     def _shutdown():
