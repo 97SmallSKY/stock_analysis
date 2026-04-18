@@ -134,9 +134,34 @@ def _dedup_same_key(rows: list[dict]) -> list[dict]:
     return list(merged.values())
 
 
-def run(start: str, end: str) -> int:
+def _load_covered_days(start: str, end: str) -> set[str]:
+    """已有龙虎榜记录的交易日 (YYYYMMDD 字符串)"""
+    s_iso = f"{start[:4]}-{start[4:6]}-{start[6:]}"
+    e_iso = f"{end[:4]}-{end[4:6]}-{end[6:]}"
+    with pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT to_char(trade_date, 'YYYYMMDD') "
+            "FROM lhb_stock_daily WHERE trade_date BETWEEN %s AND %s",
+            (s_iso, e_iso),
+        )
+        return {r[0] for r in cur.fetchall()}
+
+
+def run(start: str, end: str, skip_existing: bool = True) -> int:
+    """抓取龙虎榜。
+
+    Args:
+        skip_existing: 已灌过该 trade_date 的天会被跳过, 适合断点续跑。
+    """
     mgr = get_manager()
     days = _load_trading_days(start, end) or list(_daterange(start, end))
+    if skip_existing:
+        covered = _load_covered_days(start, end)
+        if covered:
+            days = [d for d in days if d not in covered]
+            logger.info(
+                f"[ingest.lhb] 增量模式: {len(covered)} 天已覆盖, 待抓 {len(days)} 天"
+            )
     logger.info(f"[ingest.lhb] {len(days)} 天待抓")
 
     total = 0

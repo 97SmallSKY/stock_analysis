@@ -304,6 +304,63 @@ print(len(ak.stock_lhb_detail_em(start_date=\\\"20241015\\\", end_date=\\\"20241
 
 ---
 
-## 7. 新增:<YYYY-MM-DD>
+## 7. 新增:2026-04-18 后台灌库期间巡检发现
+
+### 7.1 `Connection aborted / RemoteDisconnected` 周期性出现
+
+**现象**: 后台跑 `ingest kline --codes all` 期间, 日志频繁刷:
+```
+WARNING [AKShare] 东财日K失败, 尝试腾讯: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))
+```
+甚至有时所有 3 源都挂:
+```
+ERROR [Router] ❌ DAILY_KLINE.get_daily_kline 全部数据源失败! 链路: ['akshare','sina','crawler'], 最后错误: None
+```
+
+**5 类原因排查表**:
+
+| 原因 | 是否本场景 | 处置 |
+|---|---|---|
+| 🌐 服务器主动断连(反爬) | ✅ 主因 | adapter 层指数退避重试 + 链路降级 |
+| ⏱️ 请求过于频繁限流 | ⚠️ 部分 | adapter rate_limit=60/min, 已限流 |
+| 🔌 网络/代理/VPN 问题 | ❌ | NO_PROXY 已固化, 见 6.1 |
+| 🕐 数据源临时故障 | ⚠️ 偶发 | 重启任务即可恢复 |
+| 📦 AKShare 版本过旧 | ❌ | 已升级到能调通 stock_zh_a_hist_tx 的版本 |
+
+**长期缓解(已实施)**:
+
+1. **kline 源优先级**:新浪(主) → 东财(降级) → 腾讯(兜底)
+   - 新浪在 jd 京东云**最稳**(实测 5500 只全通)
+   - 东财在京东云**几乎 100% RemoteDisconnected**, 但本地可达
+   - 腾讯也 OK, 字段少需 adapter 补算
+
+2. **A 股主体白名单**(2026-04-18 新增,见 `backend/ingest/kline.py::_load_all_ts_codes`)
+   - 排除可转债 / 基金 / B 股, 它们触发新浪 JSONDecodeError 把日志刷爆
+
+3. **三源全失败时**: Router 返回 None,ingest 层 `fail += 1` 跳过该 ts_code, 不阻塞整批
+
+4. **熔断器**: 单 adapter 连续 5 次失败 → OPEN 300s, 期间该源不试
+
+### 7.2 增量幂等模式(2026-04-18 新增)
+
+**痛点**: 后台任务可能因 OOM / 网络抖动 / 手动停止中断,
+重启后**默认会重头跑全 5500 只**,巨大浪费。
+
+**解决**: 三个 ingest 都加 `skip_existing=True` 默认参数:
+
+| ingest | 跳过条件 | 实现 |
+|---|---|---|
+| `kline` | DB 内 [start,end] 行数 ≥ 100 的 ts_code | `_load_covered_codes()` |
+| `lhb` | DB 内已有该 trade_date 数据 | `_load_covered_days()` |
+| `sentiment` | DB 内已有该 trade_date 行 | `_load_covered_days()` |
+
+**效果**: 重启 / 增量 cron 不会重写已有数据,日志清晰显示 `增量模式: N 天/只 已覆盖, 待抓 M 只`
+
+**注意**: kline 的 `min_rows=100` 阈值是经验值,适合"年度区间"。
+如果是"近 N 天"小区间增量,需要按需调小 min_rows(默认 100 会把所有候选都视为未覆盖)。
+
+---
+
+## 8. 新增:<YYYY-MM-DD>
 
 (按时间倒序追加新发现的问题)

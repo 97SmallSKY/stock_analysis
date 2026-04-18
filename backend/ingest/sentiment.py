@@ -92,12 +92,32 @@ def _is_empty_sentiment(r: dict) -> bool:
     return all((r.get(k) in (None, 0, 0.0)) for k in keys)
 
 
-def run(start: str, end: str) -> int:
+def _load_covered_days(start: str, end: str) -> set[str]:
+    """已写入 market_sentiment 的交易日 (YYYYMMDD)"""
+    s_iso = f"{start[:4]}-{start[4:6]}-{start[6:]}"
+    e_iso = f"{end[:4]}-{end[4:6]}-{end[6:]}"
+    with pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT to_char(trade_date, 'YYYYMMDD') "
+            "FROM market_sentiment WHERE trade_date BETWEEN %s AND %s",
+            (s_iso, e_iso),
+        )
+        return {r[0] for r in cur.fetchall()}
+
+
+def run(start: str, end: str, skip_existing: bool = True) -> int:
     mgr = get_manager()
     days = _load_trading_days(start, end)
     if not days:
         logger.warning("[ingest.sentiment] trade_calendar 无数据，请先 ingest calendar")
         return 0
+    if skip_existing:
+        covered = _load_covered_days(start, end)
+        if covered:
+            days = [d for d in days if d not in covered]
+            logger.info(
+                f"[ingest.sentiment] 增量模式: {len(covered)} 天已覆盖, 待抓 {len(days)} 天"
+            )
 
     total = 0
     fail = 0

@@ -89,7 +89,45 @@ def _normalize_pct(rows: list[dict]) -> None:
                 r["turnover_rate"] = None
 
 
-def run(start: str, end: str, codes: Optional[List[str]] = None) -> int:
+def _load_covered_codes(start: str, end: str, min_rows: int = 100) -> set[str]:
+    """识别已覆盖[start,end]区间的 ts_code, 后续直接跳过。
+
+    判断条件: kline_daily 在 [start, end] 内的行数 >= min_rows
+    (默认 100 行对应 2024 全年 ~240 个交易日的 40%, 能避开只灌过
+     几天的部分样本被误判为"已覆盖")
+
+    停牌/新上市的股票行数天然就少, 所以不能用"行数 = 区间交易日数"判断
+    """
+    s_iso = f"{start[:4]}-{start[4:6]}-{start[6:]}"
+    e_iso = f"{end[:4]}-{end[4:6]}-{end[6:]}"
+    with pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT ts_code, COUNT(*)
+            FROM kline_daily
+            WHERE trade_date BETWEEN %s AND %s
+            GROUP BY ts_code
+            HAVING COUNT(*) >= %s
+            """,
+            (s_iso, e_iso, min_rows),
+        )
+        return {r[0] for r in cur.fetchall()}
+
+
+def run(
+    start: str,
+    end: str,
+    codes: Optional[List[str]] = None,
+    skip_existing: bool = True,
+    min_rows: int = 100,
+) -> int:
+    """抓取日K线。
+
+    Args:
+        skip_existing: 增量幂等. True 时, 已有 [start,end] 内行数 >= min_rows
+            的 ts_code 自动跳过。重启任务不会重复拉取已有数据。
+        min_rows: 判断"已覆盖"的最小行数阈值。
+    """
     mgr = get_manager()
 
     if not codes or codes == ["all"]:
@@ -97,6 +135,16 @@ def run(start: str, end: str, codes: Optional[List[str]] = None) -> int:
         if not codes:
             logger.error("[ingest.kline] stock_info 为空，请先 ingest stock-info")
             return 0
+
+    original_n = len(codes)
+    if skip_existing:
+        covered = _load_covered_codes(start, end, min_rows)
+        if covered:
+            codes = [c for c in codes if c not in covered]
+            logger.info(
+                f"[ingest.kline] 增量模式: {len(covered)} 只已覆盖, "
+                f"跳过 / 待拉 {len(codes)} 只 (原 {original_n} 只)"
+            )
 
     total = 0
     fail = 0
