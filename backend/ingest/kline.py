@@ -40,9 +40,32 @@ COLMAP = {
 
 
 def _load_all_ts_codes() -> List[str]:
+    """只取 A 股主体,排除可转债/基金/B股/港股/已退市。
+
+    过滤规则:
+      - is_active = TRUE (主过滤: 可转债/退市股在骨架补齐时已标 is_active=FALSE)
+      - symbol 前缀白名单:
+         000/001/002/003  深市主板/中小板
+         300/301           创业板
+         600/601/603/605   沪市主板
+         688               科创板
+         920               北交所
+        其他前缀(1xx/2xx/5xx/9xx 等)多为债券/基金/B股, akshare 日K 不支持
+    """
+    allow_prefix = (
+        "000", "001", "002", "003",
+        "300", "301",
+        "600", "601", "603", "605",
+        "688",
+        "920",
+    )
     with pg_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT ts_code FROM stock_info WHERE is_active = TRUE")
-        return [r[0] for r in cur.fetchall()]
+        cur.execute("SELECT ts_code, symbol FROM stock_info WHERE is_active = TRUE")
+        rows = cur.fetchall()
+    return [
+        ts_code for ts_code, symbol in rows
+        if symbol and symbol.startswith(allow_prefix)
+    ]
 
 
 def _normalize_pct(rows: list[dict]) -> None:

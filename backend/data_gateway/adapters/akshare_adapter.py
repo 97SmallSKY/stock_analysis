@@ -76,8 +76,14 @@ class AKShareAdapter(BaseDataAdapter):
                     end_date=end_dash,
                     adjust="qfq",
                 )
+                # 新浪偶发对可转债/异常代码返回空 DataFrame 或缺列,
+                # 需要保证至少有 date 列, 否则视为无数据往下降级
+                if df is not None and not df.empty and "date" not in df.columns:
+                    logger.debug(f"[AKShare] 新浪日K列异常({list(df.columns)}), 降级")
+                    df = None
             except Exception as e:
-                logger.warning(f"[AKShare] 新浪日K失败, 尝试东财: {e}")
+                # 常见: 可转债代码 JSONDecodeError / KeyError('date') / AttributeError
+                logger.warning(f"[AKShare] 新浪日K失败({ts_code}), 尝试东财: {e}")
                 df = None
 
             if df is not None and not df.empty:

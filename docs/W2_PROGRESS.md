@@ -389,3 +389,81 @@ make ingest-lhb FROM=20240101 TO=20241231
 2. 完成后重跑全年 `ingest-sentiment`,score 转为全市场口径
 3. 申万 L2/L3 行业补全(离线批跑 258 次 `sw_index_third_cons(三级代码)`)
 4. ingest-kline / ingest-lhb 的**增量模式**(只拉最近 1 天,cron 定时)
+
+---
+
+## 十、jd 运维速查(2026-04-18 新增)
+
+本节把**日常检查/后台任务管理**的命令固化下来,避免每次回忆。
+
+### 10.1 后台全量灌库
+
+脚本: `scripts/full_ingest.sh` (stock-info 4 轮 → kline 全年 → sentiment → lhb)
+
+```bash
+# 在 jd 上后台启动 (用 bash -i 让 ~/.bashrc 的 no_proxy 生效)
+ssh jd 'cd ~/stock_analysis && git pull origin new-branch >/dev/null && \
+  rm -f logs/full_ingest.log && \
+  setsid bash -i scripts/full_ingest.sh > logs/full_ingest.log 2>&1 < /dev/null &'
+```
+
+### 10.2 进度/状态检查
+
+```bash
+# 最近 20 行日志
+ssh jd 'tail -20 ~/stock_analysis/logs/full_ingest.log'
+
+# 阶段里程碑(筛选关键字)
+ssh jd 'grep -E "===|完成|失败.*只|失败.*天|行业覆盖|进度" ~/stock_analysis/logs/full_ingest.log'
+
+# 在跑的进程
+ssh jd 'ps -ef | grep -E "full_ingest|backend.cli ingest" | grep -v grep'
+
+# DB 当前计数
+ssh jd 'cd ~/stock_analysis && .venv/bin/python - <<PY
+from backend.db.session import pg_conn
+with pg_conn() as conn, conn.cursor() as cur:
+    for t in ("stock_info","kline_daily","lhb_stock_daily","market_sentiment","trade_calendar"):
+        cur.execute(f"SELECT COUNT(*) FROM {t}"); print(f"{t:20s}={cur.fetchone()[0]}")
+    cur.execute("SELECT COUNT(industry) FROM stock_info")
+    print("industry non-null =", cur.fetchone()[0])
+PY'
+```
+
+### 10.3 停任务
+
+```bash
+ssh jd 'ps -ef | grep -E "full_ingest|backend.cli ingest" | grep -v grep | \
+  awk "{print \$2}" | xargs -r kill -9'
+```
+
+### 10.4 代理/no_proxy 自检
+
+```bash
+ssh jd 'bash -i -c "env | grep -i proxy"'
+# 应看到 no_proxy/NO_PROXY 都含 .eastmoney.com / .sina.com.cn 等后缀
+
+ssh jd 'bash -i -c "python3 -c \"from urllib.request import proxy_bypass; \
+print(proxy_bypass(\\\"push2his.eastmoney.com\\\"), proxy_bypass(\\\"hq.sinajs.cn\\\"))\""'
+# 必须都为 True; 若为 False 见 docs/EXTERNAL_SOURCES_ISSUES.md 第 6.1 节
+```
+
+### 10.5 单次 smoke(手动拉一小样本)
+
+```bash
+ssh jd 'cd ~/stock_analysis && bash -i -c ".venv/bin/python -m backend.cli ingest kline \
+  --from 20241008 --to 20241018 \
+  --codes 000001.SZ,600519.SH"'
+```
+
+### 10.6 常用 psql
+
+```bash
+# A 股主体覆盖率
+ssh jd 'PGPASSWORD=lhb_quant_2024 psql -h 127.0.0.1 -U lhb_admin -d lhb_quant -c "
+SELECT
+  COUNT(*) FILTER (WHERE is_active) AS active,
+  COUNT(*) FILTER (WHERE is_active AND industry IS NOT NULL) AS with_industry
+FROM stock_info WHERE symbol ~ '\''^(000|001|002|003|300|301|600|601|603|605|688|920)'\'';
+"'
+```

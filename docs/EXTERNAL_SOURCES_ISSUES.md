@@ -206,6 +206,104 @@ DELETE FROM market_sentiment WHERE trade_date = ANY(%s)
 
 ---
 
-## 6. 新增:<YYYY-MM-DD>
+## 6. 新增:2026-04-18 (重大发现)
+
+### 6.1 Python requests 的 NO_PROXY 大小写陷阱
+
+**重大发现**: Python 的 `urllib.request.getproxies()` 读取代理环境变量时,
+**小写 `no_proxy` 的优先级高于大写 `NO_PROXY`**。
+如果 jd 上 `~/.bashrc` 里只导出了小写 `no_proxy="localhost,127.0.0.1"`,
+那么即便你设置 `NO_PROXY="*.eastmoney.com,..."`, Python 仍然只会 bypass
+小写那份,导致 akshare 请求依然走代理 10809 → ProxyError。
+
+**复现**:
+```bash
+export HTTP_PROXY=http://127.0.0.1:10809
+export HTTPS_PROXY=http://127.0.0.1:10809
+export NO_PROXY="localhost,127.0.0.1,push2his.eastmoney.com"
+export no_proxy="localhost,127.0.0.1"   # 注意小写只写了 localhost
+
+python -c "
+from urllib.request import getproxies, proxy_bypass
+print('getproxies:', getproxies())
+# 会输出 {'no': 'localhost,127.0.0.1', ...} ← 读的是小写!
+print('bypass push2his:', proxy_bypass('push2his.eastmoney.com'))
+# False ← NO_PROXY 失效
+"
+```
+
+**正确做法**:必须在 `~/.bashrc` 里**同时导出大小写两份**,
+且内容完全一致:
+
+```bash
+# jd 上当前配置 (2026-04-18 已修正)
+export no_proxy="localhost,127.0.0.1,.feishu.cn,.eastmoney.com,.sina.com.cn,.sinajs.cn,.qq.com,.gtimg.cn,.gtimg.com,.bse.cn,.cninfo.com.cn,.legulegu.com,.swsresearch.com,.tushare.pro,.akfamily.xyz,push2his.eastmoney.com,push2.eastmoney.com,hq.sinajs.cn"
+export NO_PROXY="localhost,127.0.0.1,.feishu.cn,.eastmoney.com,.sina.com.cn,.sinajs.cn,.qq.com,.gtimg.cn,.gtimg.com,.bse.cn,.cninfo.com.cn,.legulegu.com,.swsresearch.com,.tushare.pro,.akfamily.xyz,push2his.eastmoney.com,push2.eastmoney.com,hq.sinajs.cn"
+```
+
+**注意事项**:
+- `proxy_bypass` 不支持 `*.domain.com` 通配符, 要用**裸点前缀** `.domain.com` 做后缀匹配
+- 修改 `~/.bashrc` 后, 交互式 shell 要 `source ~/.bashrc` 或重新登录
+- **非交互式 shell**(如 `ssh jd '...'`)**默认不 source ~/.bashrc**!
+  如需在脚本中生效, 用 `ssh jd 'bash -i -c "..."'` 强制交互模式,
+  或在脚本开头明确 `source ~/.bashrc`
+
+### 6.2 新浪日K `ak.stock_zh_a_daily` 对非普通 A 股会抛异常
+
+**重大发现**: 新浪日K接口对**可转债、基金、某些异常代码**会抛
+`JSONDecodeError` / `KeyError('date')` / `AttributeError`,不是优雅返回 None。
+
+**案例**:
+```python
+ak.stock_zh_a_daily(symbol="sz123157", ...)   # 可转债 → JSONDecodeError: No value to decode
+ak.stock_zh_a_daily(symbol="sz000001", ...)   # 普通股 → DataFrame(7行)
+```
+
+**缓解**:
+1. `backend/ingest/kline.py::_load_all_ts_codes()` 加**前缀白名单**,
+   只取 000/001/002/003/300/301/600/601/603/605/688/920 开头的 A 股主体
+2. `akshare_adapter.get_daily_kline()` 里新浪分支 catch 所有异常并检查
+   `"date" in df.columns`, 否则 `df=None` 进入东财降级
+
+### 6.3 腾讯 `ak.stock_zh_a_hist_tx` 对异常代码抛 `list index out of range`
+
+**现象**: `ak.stock_zh_a_hist_tx(symbol="sz123xxx", ...)` 对可转债等非股票代码,
+ akshare 内部 split 响应时越界。同样被白名单过滤后规避。
+
+### 6.4 东财 `stock_zh_a_hist` 在京东云仍 `RemoteDisconnected`
+
+**已知**: 第 1 节原有结论保持不变。NO_PROXY 只是排除代理影响,
+**东财网络本身在京东云不通**。依赖 adapter 内降级到新浪/腾讯。
+
+### 6.5 运维操作 Checklist (2026-04-18)
+
+- [x] jd `~/.bashrc` no_proxy 白名单已更新, 包含所有 akshare 目标域
+- [x] `backend/ingest/kline.py` 加 A 股白名单
+- [x] `akshare_adapter.get_daily_kline` 新浪分支列名容错
+- [x] `scripts/full_ingest.sh` 撤回 unset 代理的代码 (改由环境变量配置)
+- [ ] 后续: 把 no_proxy 配置固化到 `deploy.sh` 自动追加 (避免新机器忘记)
+
+### 6.6 验证命令 (手动)
+
+```bash
+# 1. 验证 no_proxy 生效
+ssh jd 'bash -i -c "python -c \"
+from urllib.request import proxy_bypass
+for h in [\\\"push2his.eastmoney.com\\\", \\\"hq.sinajs.cn\\\", \\\"www.bse.cn\\\"]:
+    print(h, proxy_bypass(h))
+\""'
+# 全部应为 True
+
+# 2. 验证 akshare 全套通
+ssh jd 'bash -i -c "cd ~/stock_analysis && .venv/bin/python -c \"
+import akshare as ak
+print(len(ak.stock_zh_a_daily(symbol=\\\"sz000001\\\", start_date=\\\"2024-10-08\\\", end_date=\\\"2024-10-10\\\", adjust=\\\"qfq\\\")))
+print(len(ak.stock_lhb_detail_em(start_date=\\\"20241015\\\", end_date=\\\"20241015\\\")))
+\""'
+```
+
+---
+
+## 7. 新增:<YYYY-MM-DD>
 
 (按时间倒序追加新发现的问题)

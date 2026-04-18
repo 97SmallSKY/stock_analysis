@@ -4,10 +4,10 @@
 set -u
 cd "$(dirname "$0")/.."
 
-# 关键: jd 上全局设置了代理 127.0.0.1:10809 / socks5 10808
-# 但代理进程未运行, 所有 http 请求会 ProxyError
-# 这里强制 unset, 让所有 ingest 直连 (akshare 走的都是国内站)
-unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy
+# 代理处理: 本脚本**不再在此 unset 代理**, 改由 jd 的 shell 初始化文件配置
+# NO_PROXY/no_proxy 来覆盖所有 akshare 会访问的国内域名.
+# 具体域名列表见 docs/EXTERNAL_SOURCES_ISSUES.md 第 7 节
+# 如仍出现 ProxyError, 检查 ~/.bashrc / ~/.profile 里的 no_proxy 是否包含目标域名
 
 PY=.venv/bin/python
 TS() { date '+%F %T'; }
