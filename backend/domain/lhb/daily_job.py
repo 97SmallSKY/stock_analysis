@@ -426,17 +426,33 @@ def run_seats_only_range(
 # conn factory 兼容: 允许 factory 返回 ctx manager 或 直接 conn
 # --------------------------------------------------------------------
 
+# 保存活跃 ctx manager 的引用,避免 Python GC 过早 close 生成器:
+# _GeneratorContextManager 被回收时会对未退出的 gen 发 GeneratorExit,
+# 触发 pg_conn 的 finally: conn.close() —— 这会把 _get_conn 刚返回
+# 的连接立刻置为 closed=1(仅 CPython 引用计数即时回收时稳定复现)。
+_ACTIVE_CTXS: "dict[int, Any]" = {}
+
 
 def _get_conn(factory: Callable):
     obj = factory()
-    # 若是 context manager, 进入
+    # 若是 context manager, 进入并保留引用
     if hasattr(obj, "__enter__"):
-        return obj.__enter__()
+        conn = obj.__enter__()
+        _ACTIVE_CTXS[id(conn)] = obj
+        return conn
     return obj
 
 
 def _maybe_close(conn) -> None:
-    # 没法可靠区分是不是 ctx manager, 这里尽量 close
+    # 优先走 ctx.__exit__(让 pg_conn 的 try/commit/finally 正常执行)
+    ctx = _ACTIVE_CTXS.pop(id(conn), None)
+    if ctx is not None:
+        try:
+            ctx.__exit__(None, None, None)
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    # 非 ctx manager(裸 conn) → 直接 close
     try:
         close = getattr(conn, "close", None)
         if callable(close):
