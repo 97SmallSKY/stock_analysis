@@ -157,6 +157,24 @@ class DataSourceManager:
         self._ensure_initialized()
         return self._router.fetch_lhb_seats(trade_date)
 
+    def get_lhb_seats_for_codes(
+        self, trade_date: str, codes: list
+    ) -> Optional[pd.DataFrame]:
+        """只对指定股票列表拉席位(当前仅 akshare adapter 实现)。
+
+        若 akshare 不可用或未实现,退回 get_lhb_seats(trade_date) 全量。
+        """
+        self._ensure_initialized()
+        # 直接拿 akshare adapter(按名字定位,不走 router 的优先级链)
+        try:
+            from backend.data_gateway.category import AdapterName
+            ad = self._router._adapters.get(AdapterName.AKSHARE)
+            if ad is not None and hasattr(ad, "get_lhb_seats_for_codes"):
+                return ad.get_lhb_seats_for_codes(trade_date, codes)
+        except Exception:  # noqa: BLE001
+            pass
+        return self._router.fetch_lhb_seats(trade_date)
+
     def get_realtime_quote(self, ts_codes: list) -> Optional[pd.DataFrame]:
         """获取实时行情"""
         self._ensure_initialized()

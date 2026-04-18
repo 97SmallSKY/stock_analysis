@@ -85,11 +85,19 @@ def run(start: str, end: str, skip_existing: bool = True) -> dict:
     return summary
 
 
-def run_seats(start: str, end: str, skip_existing: bool = True) -> dict:
+def run_seats(
+    start: str,
+    end: str,
+    skip_existing: bool = True,
+    top_n: int | None = None,
+    reverse: bool = False,
+) -> dict:
     """仅回填 lhb_seats(主表已齐时用)。
 
-    与 `run()` 区别:只调 get_lhb_seats + upsert_seats,不动主表、不跑 aggregate。
-    跳过判定以 lhb_seats 表为准,不看主表。
+    Args:
+        skip_existing: True=跳过 lhb_seats 已出现过的日期
+        top_n: 每日仅回填主表 l_net DESC 前 N 只的 seats(None=全量)
+        reverse: True=从 end 往 start 倒序回填(便于从最新一日先拿到近期数据)
     """
     from backend.data_gateway.manager import DataSourceManager
     from backend.domain.lhb.daily_job import run_seats_only_range
@@ -97,9 +105,11 @@ def run_seats(start: str, end: str, skip_existing: bool = True) -> dict:
     manager = DataSourceManager()
     manager.initialize()
     trade_days = _load_trading_days(start, end) or list(_daterange(start, end))
+    if reverse:
+        trade_days = list(reversed(trade_days))
     logger.info(
         f"[ingest.lhb-seats] 待处理 {len(trade_days)} 天 [{start} -> {end}], "
-        f"skip_existing={skip_existing}"
+        f"skip_existing={skip_existing}, top_n={top_n}, reverse={reverse}"
     )
 
     summary = run_seats_only_range(
@@ -107,6 +117,7 @@ def run_seats(start: str, end: str, skip_existing: bool = True) -> dict:
         manager,
         trade_days,
         skip_existing=skip_existing,
+        top_n=top_n,
     )
     logger.info(f"[ingest.lhb-seats] 完成: {summary}")
     return summary

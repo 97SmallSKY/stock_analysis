@@ -358,6 +358,74 @@ class AKShareAdapter(BaseDataAdapter):
 
         return self._safe_request(_fetch)
 
+    def get_lhb_seats_for_codes(
+        self,
+        trade_date: str,
+        codes: list[str],
+    ) -> Optional[pd.DataFrame]:
+        """只对指定股票列表拉当日买/卖席位,避免对当日全部上榜股票扫描。
+
+        Args:
+            trade_date: 'YYYYMMDD'
+            codes: ['000581.SZ', '600519.SH', ...] 或纯数字 '000581'
+        返回与 get_lhb_seats 相同 schema 的 DataFrame(空时 None)。
+        """
+        if not codes:
+            return None
+
+        def _fetch():
+            import akshare as ak
+            all_rows: list[dict] = []
+            for raw in codes:
+                raw_s = str(raw).strip()
+                if not raw_s:
+                    continue
+                pure = raw_s.split(".")[0] if "." in raw_s else raw_s
+                ts = self._to_ts_code(pure)
+                for direction_cn, direction_en in (("买入", "BUY"), ("卖出", "SELL")):
+                    try:
+                        detail = ak.stock_lhb_stock_detail_em(
+                            symbol=pure, date=trade_date, flag=direction_cn,
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"[AKShare] seats_for_codes[{ts}/{direction_cn}] 失败: {e}"
+                        )
+                        continue
+                    if detail is None or detail.empty:
+                        continue
+                    for _, seat in detail.iterrows():
+                        broker_name = str(seat.get("交易营业部名称") or "").strip()
+                        if not broker_name:
+                            continue
+                        buy_amt  = self._yuan_to_wan(seat.get("买入金额"))
+                        sell_amt = self._yuan_to_wan(seat.get("卖出金额"))
+                        net_amt  = self._yuan_to_wan(seat.get("净额"))
+                        buy_pct  = self._pct_to_dec(seat.get("买入金额-占总成交比例"))
+                        sell_pct = self._pct_to_dec(seat.get("卖出金额-占总成交比例"))
+                        is_inst, b_type = self._classify_broker(broker_name)
+                        all_rows.append({
+                            "ts_code": ts,
+                            "trade_date": trade_date,
+                            "broker_name": broker_name,
+                            "direction": direction_en,
+                            "buy_amount": buy_amt,
+                            "sell_amount": sell_amt,
+                            "net_amount": net_amt,
+                            "buy_pct": buy_pct,
+                            "sell_pct": sell_pct,
+                            "rank": int(seat.get("序号"))
+                                if seat.get("序号") is not None else None,
+                            "broker_type": b_type,
+                            "is_institution": is_inst,
+                            "reason": None,
+                        })
+            if not all_rows:
+                return None
+            return pd.DataFrame(all_rows)
+
+        return self._safe_request(_fetch)
+
     # ---- lhb_seats 辅助 ----------------------------------------------
 
     @staticmethod

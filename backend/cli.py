@@ -53,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
     lhbs.add_argument("--to", dest="end", default=_today())
     lhbs.add_argument("--no-skip", action="store_true",
                       help="不跳过 lhb_seats 已有的日期(强制重采)")
+    lhbs.add_argument("--top", type=int, default=None,
+                      help="每日仅回填主表 l_net DESC 前 N 只(默认全量)")
+    lhbs.add_argument("--reverse", action="store_true",
+                      help="从 end 往 start 倒序回填(优先拿最新一日)")
 
     st = ingest_sub.add_parser("sentiment")
     st.add_argument("--from", dest="start", default="20240101")
@@ -88,8 +92,12 @@ def main(argv: list[str] | None = None) -> int:
             lhb.run(args.start, args.end)
         elif args.dataset == "lhb-seats":
             from backend.ingest import lhb as lhb_mod
-            lhb_mod.run_seats(args.start, args.end,
-                              skip_existing=not args.no_skip)
+            lhb_mod.run_seats(
+                args.start, args.end,
+                skip_existing=not args.no_skip,
+                top_n=args.top,
+                reverse=args.reverse,
+            )
         elif args.dataset == "sentiment":
             from backend.ingest import sentiment
             sentiment.run(args.start, args.end)

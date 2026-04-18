@@ -74,6 +74,9 @@ ingest-lhb: ## 抓取龙虎榜 lhb_stock_daily (FROM/TO 可选)
 ingest-lhb-seats: ## 仅回填 lhb_seats(主表已齐时用;FROM/TO 可选)
 	$(PYTHON) -m backend.cli ingest lhb-seats --from $(FROM) --to $(TO)
 
+ingest-lhb-seats-top: ## 每日只回填 TOP-N 龙虎榜股票的 seats(TOP=10 默认,REVERSE=1 则倒序)
+	$(PYTHON) -m backend.cli ingest lhb-seats --from $(FROM) --to $(TO) --top $(or $(TOP),10) $(if $(REVERSE),--reverse,)
+
 ingest-sentiment: ## 抓取市场情绪 market_sentiment
 	$(PYTHON) -m backend.cli ingest sentiment --from $(FROM) --to $(TO)
 

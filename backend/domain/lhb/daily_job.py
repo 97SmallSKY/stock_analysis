@@ -276,13 +276,23 @@ def run_range(
 # --------------------------------------------------------------------
 
 
-def run_seats_only_single(conn, manager, trade_date: str) -> dict:
+def run_seats_only_single(
+    conn,
+    manager,
+    trade_date: str,
+    *,
+    top_n: Optional[int] = None,
+) -> dict:
     """对已有主表的某一日,单独拉 seats 并 upsert 到 lhb_seats。
 
+    Args:
+        top_n: None=当日全量; >0 按主表 l_net DESC 只取前 N 只股票,seats 仅拉这些。
+
     策略:
-      1. 从 lhb_stock_daily 读当日所有 (ts_code, trade_date, id)。
-      2. 调 manager.get_lhb_seats(trade_date) 拿席位 DataFrame(单位:万元)。
-      3. parse_seats_dataframe → 与步骤 1 的 id_map 对齐 → 逐行 upsert lhb_seats。
+      1. 从 lhb_stock_daily 读当日 (ts_code, trade_date, id) 列表(按 l_net 排序)。
+      2. 若指定 top_n,则裁剪到前 N 只股票,并用 adapter 的
+         get_lhb_seats_for_codes 精确拉取(避免全量 http)。
+      3. parse_seats_dataframe → upsert lhb_seats。
 
     返回: {main_ids: N, seat_rows: M}
     """
@@ -292,23 +302,31 @@ def run_seats_only_single(conn, manager, trade_date: str) -> dict:
         logger.warning(f"[lhb.seats_only] 无效 trade_date={trade_date}")
         return result
 
-    # 1. 读主表 id_map: (ts_code, date) -> id
+    # 1. 读主表 id_map: (ts_code, date) -> id(按 l_net DESC 排序,NULL 垫底)
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, ts_code, trade_date FROM lhb_stock_daily WHERE trade_date = %s",
+            """SELECT id, ts_code, trade_date
+               FROM lhb_stock_daily
+               WHERE trade_date = %s
+               ORDER BY l_net DESC NULLS LAST, ts_code""",
             (as_of,),
         )
-        id_map: dict[tuple, int] = {}
-        for _id, ts, td in cur.fetchall():
-            id_map[(ts, td)] = _id
+        rows = cur.fetchall()
+    if top_n is not None and top_n > 0:
+        rows = rows[:top_n]
+    id_map: dict[tuple, int] = {(ts, td): _id for _id, ts, td in rows}
     result["main_ids"] = len(id_map)
     if not id_map:
         logger.info(f"[lhb.seats_only] {trade_date} 主表无记录, 跳过")
         return result
 
-    # 2. 拉 seats
+    # 2. 拉 seats —— 有 top_n 时只对裁剪后的股票精确拉
     try:
-        seats_df = manager.get_lhb_seats(trade_date)
+        if top_n is not None and top_n > 0 and hasattr(manager, "get_lhb_seats_for_codes"):
+            codes = [ts for (ts, _td) in id_map.keys()]
+            seats_df = manager.get_lhb_seats_for_codes(trade_date, codes)
+        else:
+            seats_df = manager.get_lhb_seats(trade_date)
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[lhb.seats_only] {trade_date} get_lhb_seats 失败: {e}")
         return result
@@ -361,9 +379,14 @@ def run_seats_only_range(
     trade_days: list[str],
     *,
     skip_existing: bool = True,
+    top_n: Optional[int] = None,
     progress_cb: Optional[Callable[[int, int, dict], None]] = None,
 ) -> dict:
-    """区间回填 seats, 默认按 lhb_seats 已有日期跳过(与主表 skip 逻辑解耦)。"""
+    """区间回填 seats, 默认按 lhb_seats 已有日期跳过(与主表 skip 逻辑解耦)。
+
+    Args:
+        top_n: 每日仅回填主表 l_net DESC 前 N 只股票的 seats(None=全量)。
+    """
     summary = {
         "total_days": len(trade_days),
         "done_days": 0,
@@ -399,7 +422,7 @@ def run_seats_only_range(
             continue
         conn = _get_conn(conn_factory)
         try:
-            ret = run_seats_only_single(conn, manager, d)
+            ret = run_seats_only_single(conn, manager, d, top_n=top_n)
             summary["main_ids"] += ret["main_ids"]
             summary["seat_rows"] += ret["seat_rows"]
             summary["done_days"] += 1
