@@ -1,0 +1,49 @@
+# Redis —— 仅作 cache(backend/cache/redis_cache.py)。
+# 软依赖:起不起都能跑,起了能少打 AKShare/EastMoney。
+#
+# 启动:
+#   docker compose -f docker-compose.redis.yml up -d
+# 停止:
+#   docker compose -f docker-compose.redis.yml down
+# 清空数据:
+#   docker compose -f docker-compose.redis.yml down -v
+#
+# scripts/deploy.sh 会幂等地在存在 docker + 该文件时拉起本服务。
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: lhb-redis
+    restart: unless-stopped
+    # 端口:本机 6379;如果和已有 redis 冲突,改这里映射到别的宿主端口
+    ports:
+      - "6379:6379"
+    # 持久化:AOF,掉电少丢。cache 场景其实无所谓,保留以便排查。
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    environment:
+      TZ: Asia/Shanghai
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 640M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+
+volumes:
+  redis_data:
+    name: lhb_redis_data

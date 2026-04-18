@@ -2337,7 +2337,7 @@ COMMENT ON FUNCTION fn_system_stats IS '系统关键指标统计概览，用于�
 5. 连接池配置建议
    ────────────────
    -- PostgreSQL max_connections: 100-200
-   -- 应用层使用连接池(SQLAlchemy pool_size=20, max_overflow=10)
+   -- 应用层使用 psycopg2 连接(本项目不引入 SQLAlchemy,见 docs/ADR/0001);如需连接池推荐 PgBouncer
    -- 或使用 PgBouncer 作为中间件
 
 6. 分区表启用条件

@@ -322,6 +322,11 @@ ssh jd "PGPASSWORD=lhb_quant_2024 psql -h 127.0.0.1 -U lhb_admin -d lhb_quant -c
 - catch 异常时 `conn.rollback()`
 - 循环末尾 `conn.commit()` 防末轮丢失
 
+> 🔁 后续变更(2025-04-18,W3+):上述修复逻辑已全部迁移到 `backend/domain/lhb/`
+> (`parser.merge_same_key` / `ingestor.ensure_stock_info_skel` / `ingestor.ingest_records`)。
+> `backend/ingest/lhb.py` 已退化为薄壳,`run()` 委托 `domain.lhb.daily_job.run_range`。
+> 本节保留原文仅作 W2 历史记录。
+
 **验证**:2024/10/08–10/18 共 9 个交易日
 - 863 行 / 526 只股票 / 0 失败
 - TOP 净买入真实(长亮科技 6.87 亿 / 深圳华强 5.65 亿)

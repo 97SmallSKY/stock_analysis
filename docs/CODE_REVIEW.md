@@ -125,8 +125,11 @@ POSTGRES_PASSWORD: lhb_quant_2024  # 硬编码
 ### 3.8 🟢 `tests/conftest.py` 手写 `.env` 解析
 已有 `python-dotenv` 更稳健。W1 引入 `pyproject.toml` 后切换。
 
-### 3.9 🟢 `data_sources/` 目录与 `backend/data_gateway/` 功能重叠
-`data_sources/adapters/` 与 `backend/data_gateway/adapters/` 并存。前者应是旧代码，确认后删除（用户说"之前的代码全部删除"，但这个目录还在）。
+### 3.9 ✅ `data_sources/` 目录与 `backend/data_gateway/` 功能重叠(2025-04-18 已清理)
+根目录 `data_sources/` 整目录已删除,ER 图迁至 `docs/db/数据库表ER图.md`。
+当时情况:`data_sources/__init__.py` 还尝试从 `./priority_config.py`、`./manager.py` 等根本不存在的文件里 import,`import data_sources` 直接 `ModuleNotFoundError`;全仓库无任何 `from data_sources.xxx import` 引用。现行数据网关统一在 `backend/data_gateway/`。
+
+顺带处理:`backend/ingest/lhb.py` 与 `backend/domain/lhb/` 的逻辑重叠 —— ingest 版已改为薄壳,`run()` 直接委托给 `domain.lhb.daily_job.run_range`(与 `scripts/backfill_lhb.py` 行为一致),`_load_trading_days` / `_daterange` 保留供 `ingest/sentiment.py` 及 CLI 使用。对应新测试见 `tests/test_ingest_lhb_shell.py`。
 
 ### 3.10 🟢 `backend/__init__.py` 为空字符串文件
 正常；但 `backups/` / `pids/` 两个空目录应加到 `.gitignore`。
@@ -141,7 +144,7 @@ POSTGRES_PASSWORD: lhb_quant_2024  # 硬编码
 | `PriorityConfig` | `backend/data_gateway/priority_config.py` | ⬜ W2 |
 | `CacheManager` | `backend/data_gateway/cache_manager.py` | ⬜ W2 |
 | `HealthChecker` | `backend/data_gateway/health_checker.py` | ⬜ W3 |
-| `data_fetch_log` / `adapter_health` / `data_source_config` 三张表 | Alembic migration | ⬜ W1 |
+| `data_fetch_log` / `adapter_health` / `data_source_config` 三张表 | `db/init/*.sql` 原生 SQL(不使用 Alembic,见 ADR-0001) | ⬜ W1 |
 | TuShare adapter 收窄为只 DAILY_KLINE | `tushare_adapter.py` | ⬜ W2 (加 `_supported_categories` 限制) |
 | Router 补 CB.allow_request 显式检查 | `router.py` | ⬜ W2 |
 

@@ -1,6 +1,15 @@
 # 部署与运维手册
 
-> 目标环境：jd 服务器 (117.72.184.8)。本地 macOS **不部署运行时服务**，只做代码编辑与 git push。
+> 目标环境:jd 服务器 (117.72.184.8)。本地 macOS **不部署运行时服务**,只做代码编辑与 git push。
+>
+> 架构速查(P5.2 后):
+>
+> - **1 个 systemd unit**:`stock_analysis_api.service`(uvicorn + 嵌入的 APScheduler + WebSocket)
+> - **不使用 Celery**(调度走进程内 APScheduler;详见 docs/ADR 与 progress)
+> - **不使用 Alembic**(schema 通过 `db/init/*.sql` 手动 psql 应用;ADR-0001)
+> - **不使用 nginx**(FastAPI 直接 serve `frontend/dist`,一端口通吃;P5.1b)
+> - **PostgreSQL**:远程 `117.72.184.8`(生产默认),本机可选
+> - **Redis**:通过 `docker-compose.redis.yml` 起,仅作 cache,不起也能降级运行
 
 ---
 
@@ -8,121 +17,144 @@
 
 ### 1.1 系统依赖
 ```bash
-# 在 jd 上，以具备 sudo 的账户执行
 sudo apt update
-sudo apt install -y python3.11 python3.11-venv python3-pip \
-    postgresql-15 postgresql-15-timescaledb redis-server \
-    nginx git curl
+sudo apt install -y python3.10 python3.10-venv python3-pip git curl
+# 可选: Docker(用于起 Redis 容器)
+#   curl -fsSL https://get.docker.com | sh
+# 可选: postgresql-client(用于 pg_isready / psql)
+#   sudo apt install -y postgresql-client
+# 可选: Node(前端构建,node >= 20)
+#   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
+#   sudo apt install -y nodejs
 ```
 
-### 1.2 初始化 PostgreSQL + TimescaleDB
-```bash
-sudo -u postgres psql <<'SQL'
-CREATE DATABASE lhb_quant;
-CREATE USER lhb_admin WITH PASSWORD 'lhb_quant_2024';
-GRANT ALL ON DATABASE lhb_quant TO lhb_admin;
-\c lhb_quant
-CREATE EXTENSION IF NOT EXISTS timescaledb;
-SQL
+> jd 现状:Python 走 pyenv(`/root/.pyenv/shims/python3.10`),`scripts/deploy.sh::pick_python` 会自动兜底。
+
+### 1.2 PostgreSQL
+
+生产数据库部署在远程 (117.72.184.8)。本机无需安装 PG。`.env` 填好:
 ```
-然后导入初始 schema：
+PG_HOST=117.72.184.8
+PG_PORT=5432
+POSTGRES_DB=lhb_quant
+POSTGRES_USER=lhb_admin
+POSTGRES_PASSWORD=***
+```
+
+Schema 初始化(一次性,在有权限的机器上执行):
 ```bash
-psql -U lhb_admin -d lhb_quant -f db/init/00_init.sql
-psql -U lhb_admin -d lhb_quant -f db/init/01_schema.sql
+psql -h "$PG_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -f db/01_schema_all.sql
 ```
 
 ### 1.3 拉代码
 ```bash
-cd ~
+cd /root
 git clone <repo-url> stock_analysis
 cd stock_analysis
 cp .env.example .env   # 编辑 .env 填入真实 token / 密码
 ```
 
-### 1.4 安装 Python 依赖
+### 1.4 安装 systemd unit
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt     # W1 后可用 poetry
+sudo bash scripts/install_units.sh
 ```
 
-### 1.5 systemd 注册
+等价于:
 ```bash
-sudo cp deploy/systemd/*.service /etc/systemd/system/
+sudo cp deploy/systemd/*.service deploy/systemd/*.timer /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now stock_analysis_api
-sudo systemctl enable --now stock_analysis_worker
-sudo systemctl enable --now stock_analysis_scheduler
+sudo systemctl enable --now stock_analysis_smoke.timer  # 每天 16:30 冒烟
 ```
 
-### 1.6 Nginx
+详见 `deploy/systemd/README.md`。
+
+### 1.4.1 Redis(可选,软依赖)
+
 ```bash
-sudo cp deploy/nginx/stock_analysis.conf /etc/nginx/sites-available/
-sudo ln -s /etc/nginx/sites-available/stock_analysis.conf /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
+docker compose -f docker-compose.redis.yml up -d
+docker compose -f docker-compose.redis.yml ps
 ```
 
-### 1.7 验证
+- 只作 cache;不起也能跑(自动降级)
+- `restart: unless-stopped`,机器重启会自动拉回
+- `scripts/deploy.sh` 里有"存在 compose 文件且 docker 可用则启动"的幂等逻辑
+
+### 1.5 首次部署(自动跑全流程)
 ```bash
-./scripts/healthcheck.sh
+bash scripts/deploy.sh
 ```
+
+该脚本会:
+1. 清 HTTP(S)_PROXY
+2. 自适应选 Python ≥ 3.10
+3. venv + `pip install -r requirements.txt`
+4. `npm ci && npm run build`(若 `frontend/package.json` 存在)
+5. 若存在 `docker-compose.redis.yml` 且 docker 可用,起 Redis 容器(不覆盖已跑)
+6. `sudo systemctl restart stock_analysis_api`
+7. 跑 `scripts/healthcheck.sh`
 
 ---
 
 ## 2. 日常部署流程 (本地 → jd)
 
-每次代码更新后，在本地执行：
 ```bash
+# 本地
 git push origin <branch>
-ssh jd "cd ~/stock_analysis && git pull && ./scripts/deploy.sh"
+# 触发 jd 部署
+ssh jd "cd /root/stock_analysis && git pull && bash scripts/deploy.sh"
 ```
 
-`deploy.sh` 做的事：
-1. 清环境代理
-2. `pip install -r requirements.txt` (或 poetry sync)
-3. 前端 build (W7 后)
-4. `alembic upgrade head`
-5. `systemctl restart` 三个服务
-6. `nginx -s reload`
-7. 跑 healthcheck
+部署失败时 `deploy.sh` 非 0 退出,不会破坏正在跑的旧进程(systemd `restart` 先起新后杀旧)。
 
-部署失败时 `deploy.sh` 非 0 退出，不会破坏正在跑的旧进程（systemd `restart` 的行为是先起新进程再杀旧进程）。
+只重启服务(不拉代码):
+```bash
+ssh jd "cd /root/stock_analysis && bash scripts/restart.sh"
+```
+
+只重新构建前端:
+```bash
+ssh jd "cd /root/stock_analysis && bash scripts/deploy_frontend.sh"
+# 前端产物就地挂在 FastAPI 下,无需 reload nginx;改完刷新浏览器即可
+```
 
 ---
 
 ## 3. 代理与网络
 
-jd 服务器默认注入了 SG 代理 (`HTTP_PROXY=...`, `HTTPS_PROXY=...`)，用于访问境外服务。
+jd 服务器默认注入了 SG 代理 (`HTTP_PROXY=...`, `HTTPS_PROXY=...`),用于访问境外服务。
 
-**本项目所有出站都是国内源** (TuShare / AKShare / EastMoney / Sina)，**必须绕过 SG 代理**，否则会 403 / 超时。
+**本项目所有出站都是国内源** (TuShare / AKShare / EastMoney / Sina),**必须绕过 SG 代理**,否则会 403 / 超时。
 
-实现：
-- `backend/core/startup.py::bootstrap()` 在进程启动时 `os.environ.pop("HTTP_PROXY"...)` 并设 `NO_PROXY=*`。
-- 所有适配器的 `requests.Session` 都显式 `trust_env=False` + `proxies={}` 双保险。
-- FastAPI / Celery / APScheduler 所有入口脚本**第一行**必须调用 `bootstrap()`。
+实现(三层防护):
+- `scripts/deploy.sh` 开头 `unset HTTP_PROXY ...`
+- `deploy/systemd/stock_analysis_api.service` 里 `Environment="HTTP_PROXY="` 显式清空
+- `backend/core/startup.py::bootstrap()` 进程启动时再 `os.environ.pop(...)` 并设 `NO_PROXY=*`
+- 所有适配器的 `requests.Session` 都 `trust_env=False` + `proxies={}`
 
-验证：
+验证:
 ```bash
-ssh jd "cd ~/stock_analysis && source .venv/bin/activate && \
+ssh jd "cd /root/stock_analysis && source .venv/bin/activate && \
         python -c 'from backend.core.startup import bootstrap; bootstrap(); \
                    import akshare as ak; print(ak.stock_zh_a_spot_em().head())'"
 ```
-应 2s 内返回数据，无代理错误。
+应 2 s 内返回数据,无代理错误。
 
 ---
 
 ## 4. 数据库备份
 
-每日 03:00 自动备份（写 crontab）：
+每日 02:30 通过 cron 调用 `scripts/backup_pg.sh`:
 ```
-0 3 * * * pg_dump -U lhb_admin lhb_quant | gzip > /var/backups/lhb_$(date +\%Y\%m\%d).sql.gz && \
-          find /var/backups -name 'lhb_*.sql.gz' -mtime +30 -delete
+30 2 * * *  /bin/bash /root/stock_analysis/scripts/backup_pg.sh >> /var/log/lhb_backup.log 2>&1
 ```
 
-恢复：
+该脚本从 `.env` 读 PG 连接信息,写到 `BACKUP_DIR`(默认 `/var/backups/lhb_quant`),按保留天数清理旧文件。
+
+恢复:
 ```bash
-gunzip -c /var/backups/lhb_20260417.sql.gz | psql -U lhb_admin lhb_quant
+gunzip -c /var/backups/lhb_quant/lhb_YYYYMMDD.sql.gz | \
+    psql -h "$PG_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 
 ---
@@ -132,10 +164,12 @@ gunzip -c /var/backups/lhb_20260417.sql.gz | psql -U lhb_admin lhb_quant
 | 操作 | 命令 |
 |---|---|
 | 查看 API 日志 | `sudo journalctl -u stock_analysis_api -f` |
-| 重启单个服务 | `sudo systemctl restart stock_analysis_api` |
-| 查看所有状态 | `systemctl status stock_analysis_*` |
+| 重启服务 | `sudo systemctl restart stock_analysis_api` |
+| 查看服务状态 | `systemctl status stock_analysis_api` |
 | 手动跑健康检查 | `./scripts/healthcheck.sh` |
-| 进入 psql | `psql -U lhb_admin -d lhb_quant` |
+| 手动跑集成冒烟 | `sudo systemctl start stock_analysis_smoke.service && journalctl -u stock_analysis_smoke.service -n 200` |
+| 看 smoke timer | `systemctl list-timers stock_analysis_smoke.timer --all` |
+| 进入 psql | `psql -h "$PG_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB"` |
 | 查看 Redis | `redis-cli` |
 | CB 手动关闭 | `curl -X POST http://localhost:8000/api/data-sources/adapter/akshare/circuit/close` |
 
@@ -144,119 +178,65 @@ gunzip -c /var/backups/lhb_20260417.sql.gz | psql -U lhb_admin lhb_quant
 ## 6. 故障排查
 
 ### 6.1 AKShare 403 / 超时
-1. 检查 `echo $HTTP_PROXY` 在 systemd 环境中是否为空（应为空）
-2. `sudo journalctl -u stock_analysis_api | grep "已清除代理环境变量"` 确认 startup 跑过
-3. 若仍然有问题，IP 可能被封 — 换出口 IP 或等待
+1. `echo $HTTP_PROXY` 在 systemd 环境里应为空(unit 文件里显式清了)
+2. `sudo journalctl -u stock_analysis_api | grep -i proxy` 确认 bootstrap 跑过
+3. 仍 403 —— 出口 IP 可能被风控,等待或换 IP
 
 ### 6.2 TuShare 积分不足
-当前仅 120 积分仅能拉日 K；`FINANCIAL_DATA` / `INDEX_DAILY` 等请求会自动降级到 AKShare。升级到 2000 积分后参考 [重写方案_v2.md §6](重写方案_v2.md)。
+当前仅 120 积分,能拉日 K;`FINANCIAL_DATA` / `INDEX_DAILY` 请求自动降级到 AKShare。
 
 ### 6.3 熔断器长期打开
 ```bash
-# 查看状态
 curl http://localhost:8000/api/data-sources/status | jq '.adapters'
-# 手动关闭
 curl -X POST http://localhost:8000/api/data-sources/adapter/<name>/circuit/close
 ```
 
-### 6.4 盘中快照延迟
-APScheduler job 监控：
+### 6.4 盘中快照延迟 / 调度没跑
+APScheduler job 嵌在 API 进程里,过滤其日志:
 ```bash
-sudo journalctl -u stock_analysis_scheduler -f | grep intraday_snapshot
+sudo journalctl -u stock_analysis_api -f | grep -E 'intraday|scheduler'
 ```
-若 CB 打开会自动降级到 30s。爬虫失败率 > 50% 时考虑更换 crawler 实现。
+必须:`RUNTIME_ENABLE_INTRADAY=1`(unit 文件里默认开);工作日 09:30–15:00 外无动作是正常的。
 
 ---
 
 ## 7. 回滚
 
 ```bash
-ssh jd "cd ~/stock_analysis && \
+ssh jd "cd /root/stock_analysis && \
         git fetch origin && git checkout <tag-or-commit> && \
-        ./scripts/deploy.sh"
+        bash scripts/deploy.sh"
 ```
 
-数据库 migration 不自动回滚（需手动 `alembic downgrade -1`），上线前先在 staging 验证。
+数据库 schema 变更不自动回滚(需手动写反向 SQL;ADR-0001),上线前先在 staging 验证。
 
 ---
 
-## 8. 前端部署 (W7)
+## 8. 前端
 
 前端工程位于 `frontend/`,技术栈 Vue 3 + Vite + TypeScript + Pinia + Ant Design Vue + AG Grid Community。
 
-### 8.1 一次性准备
+P5.1b 起:**FastAPI 自己 serve `<repo>/frontend/dist`**(`backend/api/main.py::_mount_frontend`)。不再使用独立的 nginx 站点,不需要 rsync 到外部目录。
 
+### 8.1 构建
 ```bash
-# jd 服务器
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
-sudo apt install -y nodejs            # 需 node >= 20
-node -v && npm -v
+ssh jd "cd /root/stock_analysis && bash scripts/deploy_frontend.sh"
+# 产物: <repo>/frontend/dist —— FastAPI 已就地挂载。
 ```
 
-### 8.2 构建 + 发布
-
-推荐在 jd 上跑,避免跨机同步 node_modules:
-
-```bash
-cd ~/stock_analysis
-bash scripts/deploy_frontend.sh       # 构建 -> rsync -> nginx reload
-```
-
-脚本环境变量:
-
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `FRONTEND_DIR` | `<repo>/frontend` | 前端工程目录 |
-| `DIST_TARGET`  | `/home/xiaotian/stock_analysis/frontend/dist` | nginx root |
-| `NGINX_RELOAD` | `1` | 0=只发布不 reload |
-| `BACKUP_KEEP`  | `3` | 保留最近 N 份 `.bak.<ts>` |
-| `DRY_RUN`      | `0` | 1=只打印命令不执行 |
-
-发布后 `DIST_TARGET` 同级会出现 `dist.bak.YYYYMMDD-HHMMSS` 历史备份,便于快速回滚。
-
-### 8.3 Nginx 配置
-
-配置见 `deploy/nginx/stock_analysis.conf`,已包含:
-
-- 静态 SPA 托管 + `try_files $uri $uri/ /index.html`(vue-router history)
-- `/api/*` 反代 uvicorn (`127.0.0.1:8000`)
-- `/ws/*`  WebSocket upgrade (W8 盘中推送)
-- `/assets/` 一年强缓存 (`Cache-Control: public, immutable`), `index.html` 不缓存
-- gzip (js/css/json/svg)
-
-首次安装:
-
-```bash
-sudo cp deploy/nginx/stock_analysis.conf /etc/nginx/sites-available/stock_analysis
-sudo ln -sf /etc/nginx/sites-available/stock_analysis /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-```
-
-### 8.4 前端回滚
-
-```bash
-cd /home/xiaotian/stock_analysis/frontend
-ls -1dt dist.bak.* | head
-mv dist dist.broken.$(date +%s)
-mv dist.bak.<timestamp> dist
-sudo systemctl reload nginx
-```
-
-### 8.5 本地开发
-
+### 8.2 本地开发
 ```bash
 # 终端 A: 后端
 uvicorn backend.api.main:app --reload --port 8000
-# 终端 B: 前端 (vite dev-server 自动代理 /api 和 /ws 到 localhost:8000)
+# 终端 B: 前端 (vite dev-server 代理 /api 和 /ws 到 localhost:8000)
 cd frontend && npm install && npm run dev
-# http://localhost:5173
+# 访问 http://localhost:5173
 ```
 
-### 8.6 前端自测
-
+### 8.3 前端自测
 ```bash
 cd frontend
 npm run typecheck      # vue-tsc 严格类型
-npm run test           # vitest 25/25
-npm run build          # 生产构建 (manualChunks 分包, 见 vite.config.ts)
+npm run test           # vitest
+npm run build          # 生产构建(manualChunks 分包,见 vite.config.ts)
 ```

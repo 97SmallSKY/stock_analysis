@@ -2,6 +2,8 @@
 
 ingest 层的写入都是批量 upsert，SQLAlchemy ORM 会拖慢节奏；
 这里封装一个连接上下文管理器就够了。
+
+架构决策详见 docs/ADR/0001-drop-sqlalchemy-and-alembic.md。
 """
 
 from __future__ import annotations

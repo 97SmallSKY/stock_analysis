@@ -1,0 +1,17 @@
+[Unit]
+Description=Stock Analysis integration smoke (once per trigger)
+After=network.target stock_analysis_api.service
+Requires=stock_analysis_api.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/stock_analysis
+EnvironmentFile=/root/stock_analysis/.env
+Environment="HTTP_PROXY="
+Environment="HTTPS_PROXY="
+Environment="NO_PROXY=*"
+ExecStart=/bin/bash /root/stock_analysis/scripts/integration_smoke.sh
+StandardOutput=journal
+StandardError=journal
+# smoke 失败也不触发重启(由 timer 下一次重跑)

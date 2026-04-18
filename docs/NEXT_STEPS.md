@@ -19,7 +19,7 @@
 | 1 | CLI 入口 | `backend/cli.py` | `python -m backend.cli ingest ...` |
 | 2 | Makefile | `Makefile` | 本地/远程一行命令抓数 |
 | 3 | 配置加载 | `backend/config.py` | 读取 `.env` → dataclass settings |
-| 4 | DB 会话 | `backend/db/session.py` | SQLAlchemy engine / raw psycopg2 连接 |
+| 4 | DB 会话 | `backend/db/session.py` | psycopg2 连接上下文 `pg_conn`(不使用 ORM,见 ADR-0001) |
 | 5 | 写入助手 | `backend/db/writer.py` | upsert 封装（ON CONFLICT） |
 | 6 | ingest 基类 | `backend/ingest/base.py` | 进度条/批量/错误捕获 |
 | 7 | 股票信息 | `backend/ingest/stock_info.py` | `stock_info` 全量刷新 |

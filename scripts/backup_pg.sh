@@ -87,5 +87,5 @@ fi
 
 log "OK: 备份完成 ${FNAME}"
 
-# cron 示例 (每天 02:30):
-#   30 2 * * *  /bin/bash /home/xiaotian/stock_analysis/scripts/backup_pg.sh >> /var/log/lhb_backup.log 2>&1
+# cron 示例 (每天 02:30,jd 部署路径):
+#   30 2 * * *  /bin/bash /root/stock_analysis/scripts/backup_pg.sh >> /var/log/lhb_backup.log 2>&1

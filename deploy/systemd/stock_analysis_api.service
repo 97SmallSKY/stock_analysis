@@ -1,19 +1,26 @@
 [Unit]
-Description=Stock Analysis FastAPI
-After=network.target postgresql.service redis-server.service
-Wants=postgresql.service redis-server.service
+Description=Stock Analysis FastAPI (serves backend API + frontend SPA + embedded APScheduler)
+After=network.target
+# P5.2: jd 现状 PG 在远程(117.72.184.8),Redis 走 docker-compose,
+# 所以不再 After= 本机 postgresql/redis 服务。
 
 [Service]
 Type=simple
-User=xiaotian
-WorkingDirectory=/home/xiaotian/stock_analysis
-EnvironmentFile=/home/xiaotian/stock_analysis/.env
-# 显式清除代理（双保险）
+User=root
+WorkingDirectory=/root/stock_analysis
+EnvironmentFile=/root/stock_analysis/.env
+# 显式清除代理(bootstrap 里还会再清一次)
 Environment="HTTP_PROXY="
 Environment="HTTPS_PROXY="
 Environment="NO_PROXY=*"
-ExecStart=/home/xiaotian/stock_analysis/.venv/bin/uvicorn backend.api.main:app \
-    --host 0.0.0.0 --port 8000 --workers 2
+# 让 runtime 默认拉起内嵌的 APScheduler + Redis(若可用)
+Environment="RUNTIME_ENABLE_INTRADAY=1"
+Environment="RUNTIME_ENABLE_WEEKLY=1"
+Environment="RUNTIME_ENABLE_REDIS=1"
+ExecStart=/root/stock_analysis/.venv/bin/uvicorn backend.api.main:app \
+    --host 0.0.0.0 --port 8000 --workers 1
+# APScheduler + Redis 连接都是进程级的,多 worker 会重复启动调度和 WebSocket
+# 订阅;本项目单机单进程足够,workers=1。
 Restart=always
 RestartSec=5
 StandardOutput=journal

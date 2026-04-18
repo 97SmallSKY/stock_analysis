@@ -1,7 +1,9 @@
 # 实施路线图
 
 > 配套 [重写方案_v2.md](重写方案_v2.md) 第 9 章的 12 周路线图，本文给出**每周具体任务拆解 + 交付标准**。
-> 状态：W0 已完成，W1 进行中。
+>
+> ⚠️ **本文档各章标题上的 ✅ 标记不可信**(历史遗留,未随代码同步更新)。
+> 真实进度请以 [PROGRESS.md](PROGRESS.md) 为准。本文保留作为**计划参考**。
 
 ---
 
@@ -20,6 +22,10 @@
 ## W1 基础设施 ✅
 
 **目标**：具备在 jd 上跑起来的最小后端。
+
+> ⚠️ 偏离说明(2025-04-18 追认):下方任务 1 中的 `sqlalchemy>=2.0` 与 `alembic`,以及任务 2 中的 `models.py`(SQLAlchemy declarative)、`migrations/`(Alembic)均已**废弃**。
+> 现行方案:原生 SQL + `db/init/*.sql` 版本化脚本,详见 [ADR-0001](ADR/0001-drop-sqlalchemy-and-alembic.md)。
+> 本节保留原文仅作历史参考,实际实现以 ADR-0001 为准。
 
 ### 任务清单
 1. **`pyproject.toml` + poetry / requirements.txt**
@@ -232,8 +238,6 @@
 
 ---
 
-## 当前即可着手的下一步 (推荐顺序)
+## 当前即可着手的下一步
 
-1. **修复 `akshare_adapter.get_lhb_seats`** (CODE_REVIEW §3.6) — 当前实现语义错乱
-2. **删除遗留 `data_sources/` 目录** (CODE_REVIEW §3.9) — 避免 import 歧义
-3. **开始 W1**：`pyproject.toml` → `backend/db/models.py` → Alembic migration → FastAPI 入口
+> 本节已过时。请查阅 [PROGRESS.md §5 修复优先级](PROGRESS.md#5-修复优先级)。

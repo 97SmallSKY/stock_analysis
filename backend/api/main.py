@@ -2,15 +2,69 @@
 
 用法:
     uvicorn backend.api.main:app --reload --port 8000
+
+P5.1b 起,本进程同时服务前端 SPA(frontend/dist),
+省掉一层 nginx 反代;对外端口只有 8000。
 """
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
+
+
+def _frontend_dist_dir() -> Path:
+    """vite build 产物目录。相对仓库根定位,部署路径随之变化也能用。"""
+    # backend/api/main.py -> 仓库根 = parents[2]
+    return Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """把 frontend/dist 挂成 SPA:
+
+    - `/assets/*` 交给 StaticFiles 处理(vite 产出带 hash 的 JS/CSS)
+    - `/` 返回 index.html
+    - 任意前端路由(Vue Router history 模式)fallback 到 index.html
+
+    若目录不存在(例如只部署后端时),只打一条 warning,不抛错。
+    """
+    dist = _frontend_dist_dir()
+    if not dist.is_dir():
+        logger.warning(
+            f"[frontend] {dist} 不存在, 跳过 SPA 挂载。"
+            f"部署时请先 `cd frontend && npm ci && npm run build`。"
+        )
+        return
+
+    assets_dir = dist / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+
+    index_html = dist / "index.html"
+
+    # 根路径
+    @app.get("/", include_in_schema=False)
+    def _index():
+        return FileResponse(str(index_html))
+
+    # SPA fallback:任何未命中 /api /ws /healthz /metrics /assets 的 GET 返回 index.html
+    # 注意:FastAPI 路由匹配顺序,API 路由在本函数调用前已全部注册,所以这里放最后
+    # 不会吃掉 API 请求。
+    @app.get("/{path:path}", include_in_schema=False)
+    def _spa_fallback(path: str):
+        # 如果直链是已构建出的文件(例如 /favicon.ico),先尝试静态返回
+        candidate = dist / path
+        if candidate.is_file():
+            return FileResponse(str(candidate))
+        return FileResponse(str(index_html))
+
+    logger.info(f"[frontend] SPA 已挂载: {dist}")
 
 
 def create_app() -> FastAPI:
@@ -89,6 +143,10 @@ def create_app() -> FastAPI:
     # W12-7 运行时集成: scheduler + redis + robot_registry
     from backend.core.runtime import wire_runtime, shutdown_runtime
     wire_runtime(app)
+
+    # P5.1b: 挂载前端 SPA(vite 产物)—— 一端口通吃,不再需要 nginx 反代。
+    # 所有 /api/* 和 /ws/* 路由已在上面注册,下面 catch-all 挂静态目录。
+    _mount_frontend(app)
 
     @app.on_event("shutdown")
     def _shutdown():

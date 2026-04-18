@@ -1,0 +1,13 @@
+[Unit]
+Description=Stock Analysis integration smoke timer (daily)
+
+[Timer]
+# 每天 16:30 Asia/Shanghai 跑一次 —— A 股收盘后, 数据已写入,
+# 也给盘中 APScheduler 留足余量不互相打扰。
+OnCalendar=*-*-* 16:30:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=stock_analysis_smoke.service
+
+[Install]
+WantedBy=timers.target

@@ -1,23 +1,25 @@
 #!/usr/bin/env bash
-# scripts/deploy_frontend.sh — 前端构建并发布到 nginx 根目录
+# scripts/deploy_frontend.sh — 仅构建前端,不再 rsync 到外部目录,不再 reload nginx
+#
+# 自 P5.1b 起,FastAPI 进程直接 serve <repo>/frontend/dist,因此前端
+# "部署" = 在仓库内 build 出 dist。无需独立 nginx 站点,无需同步目录。
 #
 # 用法:
-#   bash scripts/deploy_frontend.sh                     # 本机构建+发布(默认)
-#   FRONTEND_DIR=/path DIST_TARGET=/srv/web ./x.sh      # 自定义路径
-#   DRY_RUN=1 bash scripts/deploy_frontend.sh           # 只打印命令不执行
+#   bash scripts/deploy_frontend.sh                     # 本机构建(默认)
+#   FRONTEND_DIR=/path bash scripts/deploy_frontend.sh   # 自定义工程目录
+#   DRY_RUN=1 bash scripts/deploy_frontend.sh            # 只打印命令不执行
 #
 # 环境变量:
-#   FRONTEND_DIR   前端工程目录 (默认 <repo>/frontend)
-#   DIST_TARGET    部署目标目录 (默认 /home/xiaotian/stock_analysis/frontend/dist)
-#   NGINX_RELOAD   1=reload nginx (默认 1); 0=只发布不 reload
-#   BACKUP_KEEP    保留最近 N 份备份 (默认 3)
+#   FRONTEND_DIR  前端工程目录 (默认 <repo>/frontend)
+#   DRY_RUN       1=只打印命令不执行 (默认 0)
 #
 # 步骤:
-#   1. cd frontend && npm ci (若 node_modules 缺失)
-#   2. npm run build → 产出 frontend/dist
-#   3. 备份 DIST_TARGET -> ${DIST_TARGET}.bak.<ts>, 保留最近 BACKUP_KEEP 份
-#   4. rsync 增量同步到 DIST_TARGET
-#   5. nginx -t && systemctl reload nginx
+#   1. cd frontend && (pnpm install --frozen-lockfile | npm ci)
+#   2. (pnpm build | npm run build) → 产出 frontend/dist
+#   3. 校验 frontend/dist/index.html 存在
+#
+# 注:不会触碰 nginx,不会重启 systemd。如果只改了前端,运行结束后用
+#     curl -fsS http://localhost:8000/ 验证即可(FastAPI SPA fallback)。
 
 set -euo pipefail
 
@@ -25,9 +27,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 FRONTEND_DIR="${FRONTEND_DIR:-${REPO_ROOT}/frontend}"
-DIST_TARGET="${DIST_TARGET:-/home/xiaotian/stock_analysis/frontend/dist}"
-NGINX_RELOAD="${NGINX_RELOAD:-1}"
-BACKUP_KEEP="${BACKUP_KEEP:-3}"
 DRY_RUN="${DRY_RUN:-0}"
 
 log() { printf '[deploy_frontend] %s\n' "$*" >&2; }
@@ -46,59 +45,34 @@ fi
 
 cd "${FRONTEND_DIR}"
 
-# ---- 1. 安装依赖 ----
-if [[ ! -d node_modules ]]; then
-    log "node_modules 不存在, 执行 npm ci ..."
-    run "npm ci --no-audit --no-fund"
-fi
-
-# ---- 2. 构建 ----
-log "npm run build ..."
-run "npm run build"
-
-if [[ "${DRY_RUN}" != "1" && ! -f dist/index.html ]]; then
-    log "ERROR: 构建产物缺失 dist/index.html"
+# ---- 选包管理器 ----
+if command -v pnpm >/dev/null 2>&1; then
+    INSTALL_CMD="pnpm install --frozen-lockfile"
+    BUILD_CMD="pnpm build"
+elif command -v npm >/dev/null 2>&1; then
+    INSTALL_CMD="npm ci --no-audit --no-fund"
+    BUILD_CMD="npm run build"
+else
+    log "ERROR: 未找到 pnpm 或 npm"
     exit 3
 fi
 
-# ---- 3. 备份旧版本 ----
-TARGET_PARENT="$(dirname "${DIST_TARGET}")"
-TS="$(date +%Y%m%d-%H%M%S)"
-if [[ -d "${DIST_TARGET}" ]]; then
-    BAK="${DIST_TARGET}.bak.${TS}"
-    log "备份 ${DIST_TARGET} -> ${BAK}"
-    run "mv '${DIST_TARGET}' '${BAK}'"
-else
-    log "目标目录不存在, 首次部署"
-    run "mkdir -p '${TARGET_PARENT}'"
-fi
+log "install: ${INSTALL_CMD}"
+run "${INSTALL_CMD}"
 
-# ---- 4. 同步 ----
-log "rsync dist/ -> ${DIST_TARGET}/"
-run "mkdir -p '${DIST_TARGET}'"
-run "rsync -a --delete '${FRONTEND_DIR}/dist/' '${DIST_TARGET}/'"
+log "build: ${BUILD_CMD}"
+run "${BUILD_CMD}"
 
-# 清理多余备份
 if [[ "${DRY_RUN}" != "1" ]]; then
-    OLD_BAKS=$(ls -1dt "${DIST_TARGET}.bak."* 2>/dev/null | tail -n +"$((BACKUP_KEEP + 1))" || true)
-    if [[ -n "${OLD_BAKS}" ]]; then
-        log "清理旧备份 (保留最近 ${BACKUP_KEEP} 份)"
-        while IFS= read -r d; do
-            rm -rf "$d"
-        done <<< "${OLD_BAKS}"
+    if [[ ! -f dist/index.html ]]; then
+        log "ERROR: 构建产物缺失 dist/index.html"
+        exit 4
     fi
-fi
-
-# ---- 5. reload nginx ----
-if [[ "${NGINX_RELOAD}" == "1" ]]; then
-    if command -v nginx >/dev/null 2>&1; then
-        log "nginx -t ..."
-        run "sudo nginx -t"
-        log "systemctl reload nginx ..."
-        run "sudo systemctl reload nginx"
-    else
-        log "WARN: 未找到 nginx, 跳过 reload"
+    if [[ -z "$(ls -A dist 2>/dev/null)" ]]; then
+        log "ERROR: frontend/dist 为空"
+        exit 5
     fi
+    FILE_COUNT="$(find dist -type f | wc -l | tr -d ' ')"
+    log "OK: 构建完成 -> ${FRONTEND_DIR}/dist (${FILE_COUNT} files)"
+    log "提示: FastAPI 已就地 serve 此目录;验证:curl http://localhost:8000/"
 fi
-
-log "OK: 前端已发布 -> ${DIST_TARGET}"

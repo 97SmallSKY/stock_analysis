@@ -8,13 +8,15 @@ pydantic>=2.5,<3.0
 pydantic-settings>=2.1,<3.0
 
 # 数据库
-sqlalchemy>=2.0,<3.0
+# 方案 v2 原计划使用 SQLAlchemy ORM + Alembic migration,
+# 实际改为 psycopg2 原生驱动 + db/01_schema_all.sql 直建 + backend/db/writer.py 批量 upsert。
+# 详见 docs/ADR/0001-drop-sqlalchemy-and-alembic.md
 psycopg2-binary>=2.9
-alembic>=1.13,<2.0
 
-# 缓存 / 任务队列
+# 缓存 / 调度
+# 注:本项目不使用 Celery(详见 docs/ADR/0001 + docs/progress.md),
+# 所有定时任务嵌入 FastAPI 进程内 APScheduler;Redis 仅作 cache。
 redis>=5.0,<6.0
-celery>=5.3,<6.0
 apscheduler>=3.10,<4.0
 
 # 数据源

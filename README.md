@@ -83,7 +83,7 @@ stock_analysis/
 │   ├── core/                 # 启动初始化 (代理/日志)
 │   ├── data_gateway/         # 数据网关：适配器 + 路由 + 熔断
 │   │   └── adapters/         # tushare / akshare / sina / crawler
-│   ├── db/                   # SQLAlchemy 模型 + Alembic  (W1)
+│   ├── db/                   # psycopg2 连接封装(不使用 ORM,见 docs/ADR/0001)
 │   ├── domain/               # 业务层：LHB / 选股 / 策略 / 回测 / 机器人 (W4+)
 │   ├── api/                  # FastAPI 路由 + WebSocket  (W6+)
 │   ├── tasks/                # Celery 任务  (W5+)
@@ -120,8 +120,9 @@ stock_analysis/
 
 ## 6. 文档导航
 
+- **[docs/PROGRESS.md](docs/PROGRESS.md) — 项目真实进度(单一事实源)**
 - [docs/重写方案_v2.md](docs/重写方案_v2.md) — 完整设计方案 (主文档)
-- [docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) — 12 周实施步骤
+- [docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) — 12 周实施步骤(计划参考,状态以 PROGRESS.md 为准)
 - [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md) — 当前代码审查与修复记录
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — 部署 / 运维手册
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — 本地开发指南
@@ -132,13 +133,15 @@ stock_analysis/
 
 ## 7. 当前进度
 
-- [x] W0 方案设计 (v2)
-- [x] 数据网关骨架 (category / base / CB / router / manager / 4 adapter)
-- [x] 代理绕过、优先级链、熔断器 bug 修复
-- [x] CircuitBreaker 单元测试 (47/47 pass)
-- [ ] W1 基础设施 (SQLAlchemy / Alembic / CI)
-- [ ] W2 数据网关补全 (PriorityConfig / Cache / HealthChecker)
-- [ ] W3+ 详见 [IMPLEMENTATION_ROADMAP](docs/IMPLEMENTATION_ROADMAP.md)
+**进度单一事实源**:[docs/PROGRESS.md](docs/PROGRESS.md)
+
+简要摘录(2025-04-18):
+
+- 代码功能骨架:**~80%**(W1~W10 主要业务代码均已落地)
+- 质量门(测试/覆盖率/集成):**~40%**(pytest 覆盖率实测 24.81%,集成测试在 CI 被 `--ignore`)
+- 文档同步度:**~40%**(`IMPLEMENTATION_ROADMAP.md` 历史勾选不可信,以 `PROGRESS.md` 为准)
+
+> 历史计划文档 [IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) 仅作参考,其中的 ✅ 标记与真实状态存在偏差。
 
 ---
 
