@@ -17,7 +17,7 @@
 
 ---
 
-## W1 基础设施
+## W1 基础设施 ✅
 
 **目标**：具备在 jd 上跑起来的最小后端。
 
@@ -42,7 +42,7 @@
 
 ---
 
-## W2 数据网关 Ⅰ (Router + CB + Proxy + Cache + PriorityConfig)
+## W2 数据网关 Ⅰ (Router + CB + Proxy + Cache + PriorityConfig) ✅
 
 ### 任务清单
 1. **Router 补熔断显式检查**
