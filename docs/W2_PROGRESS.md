@@ -19,8 +19,12 @@ ssh jd 'cd ~/stock_analysis && git pull origin new-branch >/dev/null && \
 ```
 ⚠️ **必须 `bash -i`**:非交互 shell 不读 `~/.bashrc`,akshare 会全 ProxyError(详见 `EXTERNAL_SOURCES_ISSUES.md` 第 6.1 节)
 
-### 📊 看进度
+### 📊 看进度(推荐:一键速览)
 ```bash
+# 最推荐:集进程/阶段/错误/DB/版本 于一条命令
+ssh jd 'cd ~/stock_analysis && git pull origin new-branch >/dev/null && bash scripts/ingest_status.sh'
+
+# 或分开看
 ssh jd 'tail -20 ~/stock_analysis/logs/full_ingest.log'
 ssh jd 'grep -E "===|完成|失败.*只|行业覆盖" ~/stock_analysis/logs/full_ingest.log'
 ssh jd 'ps -ef | grep -E "full_ingest|backend.cli" | grep -v grep'
