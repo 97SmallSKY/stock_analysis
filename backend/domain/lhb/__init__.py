@@ -6,6 +6,14 @@
   aggregator 写 lhb_agg_stats / lhb_institution_stat
 """
 
-from .parser import LhbRecord, LhbSeat, parse_lhb_dataframe
+from .parser import (
+    LhbRecord,
+    LhbSeat,
+    parse_lhb_dataframe,
+    parse_seats_dataframe,
+)
 
-__all__ = ["LhbRecord", "LhbSeat", "parse_lhb_dataframe"]
+__all__ = [
+    "LhbRecord", "LhbSeat",
+    "parse_lhb_dataframe", "parse_seats_dataframe",
+]

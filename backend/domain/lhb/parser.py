@@ -185,6 +185,42 @@ def parse_lhb_dataframe(df: Optional[pd.DataFrame], source: Optional[str] = None
 
 
 # --------------------------------------------------------------------
+# seats DataFrame -> list[LhbSeat]
+# --------------------------------------------------------------------
+
+
+def parse_seats_dataframe(df: Optional[pd.DataFrame]) -> dict[tuple, list[LhbSeat]]:
+    """把 get_lhb_seats 返回的 DataFrame 转成 {(ts_code, trade_date) -> [LhbSeat]}.
+
+    DataFrame 列应已规整为:
+      ts_code / trade_date / broker_name / direction / buy_amount / sell_amount /
+      net_amount / rank / broker_type / is_institution
+    """
+    out: dict[tuple, list[LhbSeat]] = {}
+    if df is None or df.empty:
+        return out
+    for _, row in df.iterrows():
+        ts_code = row.get("ts_code")
+        trade_date = row.get("trade_date")
+        if not ts_code or not trade_date:
+            continue
+        seat = LhbSeat(
+            broker_name=str(row.get("broker_name") or ""),
+            direction=str(row.get("direction") or "BUY"),
+            buy_amount=_to_float(row.get("buy_amount")) or 0.0,
+            sell_amount=_to_float(row.get("sell_amount")) or 0.0,
+            net_amount=_to_float(row.get("net_amount")) or 0.0,
+            rank=int(row["rank"]) if row.get("rank") is not None and not pd.isna(row["rank"]) else None,
+            is_institution=bool(row.get("is_institution") or False),
+            broker_type=str(row.get("broker_type") or "UNKNOWN"),
+        )
+        if not seat.broker_name:
+            continue
+        out.setdefault((ts_code, trade_date), []).append(seat)
+    return out
+
+
+# --------------------------------------------------------------------
 # 同键合并 (与 ingest/lhb._dedup_same_key 等价, 但操作 LhbRecord)
 # --------------------------------------------------------------------
 

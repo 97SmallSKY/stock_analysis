@@ -265,56 +265,149 @@ class AKShareAdapter(BaseDataAdapter):
     # ================================================================
 
     def get_lhb_seats(self, trade_date: str) -> Optional[pd.DataFrame]:
-        """获取龙虎榜营业部买卖席位"""
+        """获取指定日期所有龙虎榜股票的营业部买卖席位明细。
+
+        实现:
+          1. 先用 stock_lhb_detail_em 拿当日上榜股票列表
+          2. 对每只股票分别调 stock_lhb_stock_detail_em(buy) + (sell) 拿席位
+          3. 规整列名 / 推断 broker_type / 计算 is_institution
+
+        返回 DataFrame 列(符合 lhb_seats 写入契约):
+          ts_code, trade_date, broker_name, direction(BUY/SELL),
+          buy_amount(万), sell_amount(万), net_amount(万),
+          buy_pct, sell_pct, rank, broker_type, is_institution, reason
+        金额单位: 万元 (akshare 原始是元, 这里 / 10000 统一)
+        """
 
         def _fetch():
             import akshare as ak
 
-            date_fmt = f"{trade_date[:4]}-{trade_date[4:6]}-{trade_date[6:]}"
-
-            all_seats = []
-
-            # 买入席位
+            # 1. 拿当日上榜股票列表
+            lhb_df = None
             try:
-                df_buy = ak.stock_lhb_stock_detail_em(
-                    symbol="近一月", date=date_fmt
+                lhb_df = ak.stock_lhb_detail_em(
+                    start_date=trade_date, end_date=trade_date
                 )
-                if df_buy is not None and not df_buy.empty:
-                    # 根据实际返回的列做适配
-                    all_seats.append(self._parse_seat_data(df_buy, trade_date))
             except Exception as e:
-                logger.warning(f"[AKShare] 获取买入席位失败: {e}")
-
-            # 也可以按个股获取详细席位
-            # 先获取当日龙虎榜股票列表
-            try:
-                lhb_stocks = ak.stock_lhb_detail_em(date=date_fmt)
-                if lhb_stocks is not None and not lhb_stocks.empty:
-                    for _, row in lhb_stocks.iterrows():
-                        try:
-                            code = str(row.get("代码", ""))
-                            if not code:
-                                continue
-
-                            df_detail = ak.stock_lhb_stock_statistic_em(
-                                symbol=code
-                            )
-                            if df_detail is not None and not df_detail.empty:
-                                df_detail["ts_code"] = self._to_ts_code(code)
-                                df_detail["trade_date"] = trade_date
-                                all_seats.append(df_detail)
-                        except Exception:
-                            continue
-            except Exception as e:
-                logger.warning(f"[AKShare] 获取个股席位失败: {e}")
-
-            if not all_seats:
+                logger.warning(f"[AKShare] lhb_seats: 拿上榜列表失败 {e}")
+                return None
+            if lhb_df is None or lhb_df.empty:
                 return None
 
-            df = pd.concat(all_seats, ignore_index=True)
-            return self._normalize_seat_columns(df)
+            # 代码列可能是 '代码' 或 'ts_code'(经过 get_lhb_detail 时) 等
+            code_col = None
+            for c in ("代码", "ts_code", "股票代码"):
+                if c in lhb_df.columns:
+                    code_col = c
+                    break
+            if code_col is None:
+                logger.warning("[AKShare] lhb_seats: 找不到股票代码列")
+                return None
+
+            all_rows: list[dict] = []
+            for _, row in lhb_df.iterrows():
+                raw_code = str(row.get(code_col, "")).strip()
+                if not raw_code:
+                    continue
+                pure_code = raw_code.split(".")[0] if "." in raw_code else raw_code
+                ts_code = self._to_ts_code(pure_code)
+                reason = row.get("解读") or row.get("reason") or row.get("上榜原因")
+
+                for direction_cn, direction_en in (("买入", "BUY"), ("卖出", "SELL")):
+                    try:
+                        detail = ak.stock_lhb_stock_detail_em(
+                            symbol=pure_code, date=trade_date, flag=direction_cn,
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            f"[AKShare] lhb_seats[{ts_code}/{direction_cn}] 失败: {e}"
+                        )
+                        continue
+                    if detail is None or detail.empty:
+                        continue
+                    for _, seat in detail.iterrows():
+                        broker_name = str(seat.get("交易营业部名称") or "").strip()
+                        if not broker_name:
+                            continue
+                        buy_amt  = self._yuan_to_wan(seat.get("买入金额"))
+                        sell_amt = self._yuan_to_wan(seat.get("卖出金额"))
+                        net_amt  = self._yuan_to_wan(seat.get("净额"))
+                        buy_pct  = self._pct_to_dec(seat.get("买入金额-占总成交比例"))
+                        sell_pct = self._pct_to_dec(seat.get("卖出金额-占总成交比例"))
+                        is_inst, b_type = self._classify_broker(broker_name)
+                        all_rows.append({
+                            "ts_code": ts_code,
+                            "trade_date": trade_date,
+                            "broker_name": broker_name,
+                            "direction": direction_en,
+                            "buy_amount": buy_amt,
+                            "sell_amount": sell_amt,
+                            "net_amount": net_amt,
+                            "buy_pct": buy_pct,
+                            "sell_pct": sell_pct,
+                            "rank": int(seat.get("序号"))
+                                if seat.get("序号") is not None else None,
+                            "broker_type": b_type,
+                            "is_institution": is_inst,
+                            "reason": str(reason) if reason is not None else None,
+                        })
+
+            if not all_rows:
+                return None
+            return pd.DataFrame(all_rows)
 
         return self._safe_request(_fetch)
+
+    # ---- lhb_seats 辅助 ----------------------------------------------
+
+    @staticmethod
+    def _yuan_to_wan(v) -> Optional[float]:
+        """元 -> 万元. None/NaN 返回 0.0 (sql NOT NULL DEFAULT 0 契约)"""
+        if v is None:
+            return 0.0
+        try:
+            f = float(v)
+            if pd.isna(f):
+                return 0.0
+            return round(f / 10000.0, 2)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _pct_to_dec(v) -> Optional[float]:
+        """百分比字符串/数 -> 小数. 5.23 -> 0.0523."""
+        if v is None:
+            return None
+        try:
+            f = float(v)
+            if pd.isna(f):
+                return None
+            return round(f / 100.0, 6) if abs(f) > 1 else round(f, 6)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _classify_broker(name: str) -> tuple[bool, str]:
+        """简易分类. 返回 (is_institution, broker_type).
+
+        - 机构专用 / QFII / 养老金 / 基金 / 社保 -> INSTITUTION
+        - 含'证券营业部' 且 非机构 -> HOT_MONEY (粗粒度, 后续可由维护表细化)
+        - 其他 -> UNKNOWN
+        """
+        if not name:
+            return False, "UNKNOWN"
+        n = name
+        inst_kws = ("机构专用", "QFII", "RQFII", "养老", "社保", "基金专户",
+                    "中国国际金融", "中金公司", "证券投资")
+        for kw in inst_kws:
+            if kw in n:
+                return True, "INSTITUTION"
+        # 深股通/沪股通: 外资通道, 归 INSTITUTION 便于统计
+        if "股通" in n:
+            return True, "INSTITUTION"
+        if "营业部" in n or "分公司" in n or "公司" in n:
+            return False, "HOT_MONEY"
+        return False, "UNKNOWN"
 
     # ================================================================
     # 实时行情
