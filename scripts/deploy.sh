@@ -75,7 +75,11 @@ if [[ -d frontend && -f frontend/package.json ]]; then
         FE_BUILD="pnpm build"
     elif command -v npm >/dev/null 2>&1; then
         # jd 默认环境:node v22 + npm 10.x,无 pnpm
-        FE_INSTALL="npm ci"
+        # 注:npm 10 的 ci 对 lock-file peer 检查比 11 更严格,如果跨版本 lock
+        # 不完全对齐(常见于 vitest 4 子依赖要求 esbuild 0.28 但顶层 esbuild
+        # 是 0.21)会硬失败。这里给个 fallback:ci 失败时退回 install --no-save
+        # (不污染仓库 lock,只本地 resolve 一次)。
+        FE_INSTALL="npm ci || (echo '[deploy] npm ci 失败,fallback 到 npm install --no-save' >&2; npm install --no-save --no-audit --no-fund)"
         FE_BUILD="npm run build"
     else
         echo "ERROR: 未找到 pnpm 或 npm,无法构建前端" >&2
