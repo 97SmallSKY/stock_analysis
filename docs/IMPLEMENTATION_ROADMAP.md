@@ -160,7 +160,7 @@
 
 ---
 
-## W8 实时 Ⅰ (盘中 10s 快照)
+## W8 实时 Ⅰ (盘中 10s 快照) ✅
 
 ### 任务清单
 1. **用户实现** `CrawlerAdapter.get_intraday_snapshot(codes)`
