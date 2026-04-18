@@ -22,7 +22,11 @@ REPO_ROOT="$(pwd)"
 
 log() { printf '[smoke %s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 
+# 失败分级:
+#   FAIL: 自身进程/接口挂了 —— 直接告警
+#   WARN: 外部依赖抖动 / 业务侧无数据 —— 记录但不阻断 timer 退出码
 FAIL=0
+WARN=0
 
 # ---- 0. 必备 venv ----
 if [[ ! -x ".venv/bin/python" ]]; then
@@ -83,12 +87,12 @@ PY
 then
     log "AKShare OK"
 else
-    log "AKShare FAIL"
-    FAIL=$((FAIL + 1))
+    log "AKShare soft-fail(外部抖动/熔断时常见,不阻断)"
+    WARN=$((WARN + 1))
 fi
 
 # ---- 4. PG 最近 7 天龙虎榜 ----
-log "==> PG t_lhb_daily 最近 7 天"
+log "==> PG lhb_stock_daily 最近 7 天"
 if .venv/bin/python - <<'PY'
 import os, sys
 try:
@@ -103,7 +107,7 @@ try:
     )
     cur = conn.cursor()
     cur.execute(
-        "select count(*) from t_lhb_daily "
+        "select count(*) from lhb_stock_daily "
         "where trade_date >= current_date - interval '7 days'"
     )
     n = cur.fetchone()[0]
@@ -118,14 +122,27 @@ PY
 then
     log "PG OK"
 else
-    log "PG/数据 FAIL(可能近 7 天非交易日,但最好人工确认)"
-    FAIL=$((FAIL + 1))
+    # 区分:连接失败 vs 最近 7 天 0 行
+    #   psycopg2 连接/查询异常 rc=2 → hard fail
+    #   7 天 0 行(长假 / 新系统未灌数) rc=3 → warn
+    PG_RC=$?
+    if [[ ${PG_RC} -eq 3 ]]; then
+        log "PG 最近 7 天 0 行(长假 / 未灌数,不阻断)"
+        WARN=$((WARN + 1))
+    else
+        log "PG 硬失败(连接或表缺失),rc=${PG_RC}"
+        FAIL=$((FAIL + 1))
+    fi
 fi
 
 if [[ ${FAIL} -eq 0 ]]; then
-    log "==> ALL GREEN"
+    if [[ ${WARN} -eq 0 ]]; then
+        log "==> ALL GREEN"
+    else
+        log "==> hard checks OK, ${WARN} soft warning(s)"
+    fi
     exit 0
 else
-    log "==> ${FAIL} hard check(s) failed"
+    log "==> ${FAIL} hard check(s) failed, ${WARN} soft warning(s)"
     exit 1
 fi
