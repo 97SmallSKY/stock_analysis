@@ -78,6 +78,9 @@ def create_app() -> FastAPI:
         app.state.robot_registry = {}
     from backend.api.robots import router as robots_router
     app.include_router(robots_router, prefix="/api/robots", tags=["robots"])
+    # W10-2 周报
+    from backend.api.reports import router as reports_router
+    app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
 
     @app.on_event("shutdown")
     def _shutdown():

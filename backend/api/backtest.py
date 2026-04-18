@@ -306,3 +306,68 @@ def get_task(task_id: str):
     d['result'] = t.result
     d['metrics'] = t.metrics
     return d
+
+
+# ====================================================================
+# W10-2 compare: 并行对比多个策略
+# ====================================================================
+
+
+class CompareStrategy(BaseModel):
+    name: str
+    strategy_name: str                 # 已注册策略名
+    params: dict = Field(default_factory=dict)
+
+
+class CompareReq(BaseModel):
+    start_date: date
+    end_date: date
+    initial_capital: float = 1_000_000
+    strategies: list[CompareStrategy] = Field(..., min_length=1)
+    max_positions: int = 5
+    per_position_pct: float = 0.20
+    max_workers: int = 4
+
+
+_compare_provider_factory = _make_db_provider  # 测试点: 替换为 fake provider 工厂
+
+
+def set_compare_provider_factory(fn) -> None:
+    global _compare_provider_factory
+    _compare_provider_factory = fn
+
+
+@router.post('/compare')
+def compare_endpoint(req: CompareReq):
+    if req.end_date < req.start_date:
+        raise HTTPException(400, 'end_date < start_date')
+    # 懒导入, 避免启动时 strategy 注册表未就绪
+    from backend.domain.strategy import get_strategy
+    import backend.domain.strategy.builtins  # noqa: F401
+    from backend.domain.backtest.compare import run_compare
+    from backend.domain.backtest.engine import BacktestConfig
+
+    strategies = []
+    for s in req.strategies:
+        try:
+            cls = get_strategy(s.strategy_name)
+        except Exception as e:
+            raise HTTPException(400, f'未知策略 {s.strategy_name}: {e}')
+        params = {
+            **s.params,
+            'max_positions': req.max_positions,
+            'per_position_pct': req.per_position_pct,
+        }
+        strategies.append((s.name, cls(params=params)))
+
+    provider = _compare_provider_factory()
+    cfg = BacktestConfig(
+        initial_capital=req.initial_capital,
+        max_positions=req.max_positions,
+        per_position_pct=req.per_position_pct,
+    )
+    rep = run_compare(
+        strategies, provider, req.start_date, req.end_date,
+        config=cfg, max_workers=req.max_workers,
+    )
+    return rep.to_dict()
