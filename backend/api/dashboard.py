@@ -16,12 +16,14 @@ from typing import Optional
 
 from fastapi import APIRouter, Query, Request
 
+from backend.cache import cached
 from backend.db.session import pg_conn
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@cached(lambda: "dashboard:sentiment:latest", ttl=15)
 def _latest_sentiment() -> Optional[dict]:
     try:
         with pg_conn() as conn, conn.cursor() as cur:
@@ -45,6 +47,7 @@ def _latest_sentiment() -> Optional[dict]:
         return None
 
 
+@cached(lambda top_n: f"dashboard:top_lhb:{top_n}", ttl=15)
 def _top_lhb(top_n: int) -> list[dict]:
     try:
         with pg_conn() as conn, conn.cursor() as cur:
