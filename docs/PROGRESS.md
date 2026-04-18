@@ -76,3 +76,9 @@
   - P8.4 全局 CSS 杠杆:`.ant-form-inline .ant-form-item { margin-bottom:0 }`、表头 font-weight 600、排序箭头激活色 `#d4380d`、`.ant-tag` 胶囊化、Card hover `0 4px 16px` 抬升、tbody 偶数行 `#fafbfc` 斑马纹 + hover `#fff7f5` —— 一次覆盖 Signals / LhbPnl / Robots / Backtest / Reports / DataSourceMgr 所有页面,零侵入。
   - P8.5 StockDrillModal:标题 `<AreaChartOutlined>` + ts_code mono 字体 + 频率副标;切页 Tab 之外加 `<a-breadcrumb>` 面包屑(日K → 周K → 分钟K · YYYY-MM-DD),支持逐级回退;空态按 `empty_reason` 分三种:`no_source_table` 明示「分钟级 K 线暂未接入数据源(Tushare stk_mins / AkShare stock_zh_a_minute),接口契约已就位」、`out_of_range` 提供返回日K按钮、`fetch_failed` 提示重试;底部 hint 说明交互链。
   - P8.6 测试:前端 `vue-tsc 0 error / vitest 43 passed`;后端 `pytest 729 passed / 75.43%`,纯前端 CSS + 组件重排,未触发任何逻辑改动。
+- **2026-04-19 P9**:远程部署 jd + P7/P8 验证。
+  - `git push origin new-branch`(a70a833 → e9d60ea,2 个 commit 上推)。
+  - `make deploy` = ssh jd + `git pull` + `scripts/deploy.sh`:npm ci 因 lock 与子依赖 esbuild 版本不匹配失败,自动 fallback `npm install --no-save`;`vite build` 3826 modules 产出 28 个文件,含 P7/P8 新构件(Dashboard/LhbPnl/Signals/Robots/StockLink)。
+  - `systemd unit 未安装` → `deploy.sh` 跳过 restart。手动 `ssh jd pkill uvicorn + nohup .venv/bin/uvicorn` 拉起新进程 pid 4054433(老 pid 4040791 停)。
+  - 冒烟 11 端点全 200:`/healthz` / `/` SPA / `/api/dashboard` / `/api/lhb?limit=1` / `/api/reports/weekly` / `/api/backtest/history`(返回 {total:0, rows:[]})/ `/api/kline/daily`(返回 20 条真实 K 线)/ `/api/kline/weekly` / `/api/kline/minute`(返回 empty_reason=no_source_table)/ `/api/robots` / `/api/lhb/seats`。
+  - TODO(非阻塞):`scripts/install_units.sh` 装 `stock_analysis_api.service`,让 `make deploy` 自动 restart 而不是依赖手动 pkill。
