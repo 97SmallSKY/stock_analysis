@@ -11,6 +11,8 @@
       >
         <a-menu-item key="/">Dashboard</a-menu-item>
         <a-menu-item key="/lhb">龙虎榜</a-menu-item>
+        <a-menu-item key="/backtest">策略对比</a-menu-item>
+        <a-menu-item key="/reports">周报</a-menu-item>
         <a-menu-item key="/data-sources">数据源</a-menu-item>
       </a-menu>
     </a-layout-header>

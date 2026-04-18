@@ -1,6 +1,5 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 
-// 路由表: W7-3/4/5 会逐步填充各页面实际内容
 const routes: RouteRecordRaw[] = [
   {
     path: '/',
@@ -19,6 +18,18 @@ const routes: RouteRecordRaw[] = [
     name: 'data-sources',
     component: () => import('@/pages/DataSourceMgr.vue'),
     meta: { title: '数据源管理' },
+  },
+  {
+    path: '/backtest',
+    name: 'backtest',
+    component: () => import('@/pages/Backtest.vue'),
+    meta: { title: '策略对比' },
+  },
+  {
+    path: '/reports',
+    name: 'reports',
+    component: () => import('@/pages/Reports.vue'),
+    meta: { title: '周报' },
   },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
