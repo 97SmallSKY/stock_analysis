@@ -8,6 +8,25 @@ echo '============ 1. 进程 ============'
 ps -ef | grep -E "full_ingest|backend.cli ingest" | grep -v grep || echo '  (none)'
 
 echo
+echo '============ 1.5 日志心跳检查 ============'
+# 事故教训 (2026-04-18): 进程活着但日志长时间无增长 = 某个 HTTP 调用卡死.
+# 这里检测 full_ingest.log 最近修改时间, 静默超 10 分钟即红色警告.
+if [ -f logs/full_ingest.log ]; then
+  MTIME=$(stat -c %Y logs/full_ingest.log 2>/dev/null || stat -f %m logs/full_ingest.log)
+  NOW=$(date +%s)
+  SILENT=$(( NOW - MTIME ))
+  if [ $SILENT -gt 600 ]; then
+    echo "  ⚠️  日志已静默 $((SILENT / 60)) 分钟 (>10 分钟), 疑似卡死"
+    echo "     排查: ss -tnp | grep <pid>  /  lsof -nP -p <pid> | grep TCP"
+    echo "     处置: kill -9 <pid> 让 full_ingest 进入下一阶段"
+  else
+    echo "  ✓ 日志 ${SILENT}s 前刚更新 (<10 分钟)"
+  fi
+else
+  echo '  (no log)'
+fi
+
+echo
 echo '============ 2. 阶段里程碑 ============'
 if [ -f logs/full_ingest.log ]; then
   grep -E "=== 阶段|完成|失败.*只|失败.*天|行业覆盖|增量模式|进度" logs/full_ingest.log | tail -15

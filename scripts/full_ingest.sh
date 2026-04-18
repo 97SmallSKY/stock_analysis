@@ -12,6 +12,15 @@ cd "$(dirname "$0")/.."
 PY=.venv/bin/python
 TS() { date '+%F %T'; }
 
+# 外层超时保护 (2026-04-18 卡死事故后加)
+# 配合 base_adapter._safe_request 的 per-call 硬超时, 形成两层护栏:
+#   - 内层(30~60s): 单次 HTTP 调用卡死自动熔断+重试
+#   - 外层(此处 timeout): 极端情况(如 Python GIL 被 native 死锁占用)
+#     整条 CLI 进程被 SIGTERM, 脚本继续下一阶段
+# --kill-after=60 给 SIGTERM 后 60s 机会清理, 到时 SIGKILL
+TIMEOUT_SHORT="timeout --preserve-status --kill-after=60  1h"
+TIMEOUT_LONG="timeout --preserve-status --kill-after=120 6h"
+
 echo "[$(TS)] ============================================================"
 echo "[$(TS)] 全量灌库开始"
 echo "[$(TS)] ============================================================"
@@ -19,17 +28,21 @@ echo "[$(TS)] ============================================================"
 echo "[$(TS)] === 阶段1: stock-info 4 轮(累积行业覆盖) ==="
 for i in 1 2 3 4; do
   echo "[$(TS)] -- stock-info 第 $i 轮 --"
-  $PY -m backend.cli ingest stock-info || echo "[$(TS)] 第 $i 轮失败,继续"
+  $TIMEOUT_SHORT $PY -m backend.cli ingest stock-info \
+    || echo "[$(TS)] 第 $i 轮失败/超时,继续"
 done
 
 echo "[$(TS)] === 阶段2: kline 全市场 2024/01/01 - 2024/12/31 ==="
-$PY -m backend.cli ingest kline --from 20240101 --to 20241231 --codes all
+$TIMEOUT_LONG $PY -m backend.cli ingest kline --from 20240101 --to 20241231 --codes all \
+  || echo "[$(TS)] kline 阶段失败/超时(exit=$?), 继续后续阶段"
 
 echo "[$(TS)] === 阶段3: sentiment 全年(会触发 DB 反算,秒级完成) ==="
-$PY -m backend.cli ingest sentiment --from 20240101 --to 20241231
+$TIMEOUT_SHORT $PY -m backend.cli ingest sentiment --from 20240101 --to 20241231 \
+  || echo "[$(TS)] sentiment 阶段失败/超时, 继续"
 
 echo "[$(TS)] === 阶段4: lhb 全年校对(幂等重跑) ==="
-$PY -m backend.cli ingest lhb --from 20240101 --to 20241231
+$TIMEOUT_LONG $PY -m backend.cli ingest lhb --from 20240101 --to 20241231 \
+  || echo "[$(TS)] lhb 阶段失败/超时, 继续"
 
 echo "[$(TS)] === 数据库统计 ==="
 $PY - <<'PYEND'

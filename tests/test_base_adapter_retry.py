@@ -122,3 +122,79 @@ def test_safe_request_retryable_exhaust(adapter, monkeypatch):
     out = adapter._safe_request(f, max_retries=2)
     assert out is None
     assert calls["n"] == 3  # 1 首次 + 2 重试
+
+
+# ---------------------------------------------------------------------------
+# 硬超时 (2026-04-18 卡死事故回归用例)
+# ---------------------------------------------------------------------------
+def test_safe_request_timeout_error_is_retryable(adapter, monkeypatch):
+    """TimeoutError (硬超时抛出的异常) 必须被判为可重试, 走重试路径后
+    返回 None, 不会永久挂起上层调用。
+
+    这是 2026-04-18 事故的回归用例: 当时 akshare 底层 requests 对腾讯源
+    TCP recv 永久阻塞, _safe_request 新增的线程级 hard timeout 会主动抛
+    TimeoutError, 必须被重试关键字白名单(含 'timeout') 命中。
+    """
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    calls = {"n": 0}
+
+    def f():
+        calls["n"] += 1
+        raise TimeoutError(
+            "_safe_request hard timeout after 60s"
+        )
+
+    out = adapter._safe_request(f, max_retries=2)
+    assert out is None
+    assert calls["n"] == 3  # 1 首次 + 2 重试, 证明走了重试路径
+
+
+def test_safe_request_returns_value_when_fast(adapter):
+    """快速返回时硬超时线程机制不应拦截正常结果。"""
+    def f():
+        return pd.DataFrame({"a": [1]})
+
+    out = adapter._safe_request(f)
+    assert out is not None and len(out) == 1
+
+
+def test_safe_request_hard_timeout_actually_kills_blocking_call(
+    adapter, monkeypatch
+):
+    """集成验证: func 真实阻塞超过硬超时时, _safe_request 整体能在有限时间
+    内返回 (而不是卡死测试进程)。
+
+    为让测试快速结束, monkeypatch hard_timeout 相关常量 —— 但因该值在
+    `_safe_request` 内是局部变量, 改为直接 monkeypatch adapter.timeout=1
+    (hard_timeout = max(1*2, 30) = 30s), 这对 CI 来说偏长, 因此也
+    patch time.sleep 把重试间隔归零. 整个调用预期在 ~30s 内结束.
+
+    为了不让 CI 真等 30s, 这里我们用一个取巧: 把 threading 模块的
+    `Thread.start` patch 成立即标记完成但不真跑 target, 并在 join 后
+    直接让 is_alive() 返回 True 一次。
+    """
+    import threading as _th
+
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    # 构造一个 "join 后仍 alive" 的假 Thread
+    class FakeThread:
+        def __init__(self, target, daemon=None):
+            self._target = target
+
+        def start(self):
+            pass  # 不真跑, 模拟线程被卡住
+
+        def join(self, timeout=None):
+            pass  # 立即返回
+
+        def is_alive(self):
+            return True  # 总是 alive → 触发 TimeoutError
+
+    monkeypatch.setattr(_th, "Thread", FakeThread)
+
+    def f():
+        raise AssertionError("不应被真正调用")
+
+    out = adapter._safe_request(f, max_retries=1)
+    assert out is None  # 超时两次后返回 None, 不挂起

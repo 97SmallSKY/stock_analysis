@@ -187,14 +187,48 @@ class BaseDataAdapter(ABC):
         self, func: Callable, *args, max_retries: int = 2, **kwargs
     ) -> Optional[pd.DataFrame]:
         """
-        安全请求封装: 熔断 + 限流 + 重试 + 异常捕获
+        安全请求封装: 熔断 + 限流 + 重试 + 异常捕获 + **硬超时**
 
         所有子类的数据获取方法应通过此方法调用实际 API。
 
         重试策略(2026-04-18 调整):
           - 只对可重试错误(_is_retryable_error) 做重试
           - 其它异常(参数错、权限错)立即记录失败并返回 None,不浪费时间等
+
+        硬超时(2026-04-18 事故修复):
+          - akshare 底层对腾讯/东财走 requests 同步调用, 个别场景 socket recv
+            永久阻塞(CLOSE_WAIT 不触发 socket timeout), 导致单个 symbol 卡死
+            全量灌库. 这里用 daemon 线程 + Event.wait(timeout) 做 wall-clock
+            硬超时: 超时即抛 TimeoutError, 走 _is_retryable_error → 重试 →
+            熔断, 整条灌库不会因一个坏代码彻底吊死.
+          - timeout = self.timeout * 2 (留网络波动余量, 不与底层 requests
+            timeout 完全重叠, 避免瞬时抖动就被当超时)
         """
+        import threading
+
+        hard_timeout = max(self.timeout * 2, 30)
+
+        def _call_with_hard_timeout():
+            result_holder: dict = {}
+
+            def _target():
+                try:
+                    result_holder["value"] = func(*args, **kwargs)
+                except BaseException as e:  # noqa: BLE001
+                    result_holder["error"] = e
+
+            t = threading.Thread(target=_target, daemon=True)
+            t.start()
+            t.join(hard_timeout)
+            if t.is_alive():
+                # 线程留着慢慢死 (daemon, 进程退出自然回收), 这里直接抛超时
+                raise TimeoutError(
+                    f"_safe_request hard timeout after {hard_timeout}s"
+                )
+            if "error" in result_holder:
+                raise result_holder["error"]
+            return result_holder.get("value")
+
         # 1. 熔断检查
         if not self.circuit_breaker.allow_request():
             status = self.circuit_breaker.get_status()
@@ -213,7 +247,7 @@ class BaseDataAdapter(ABC):
         for attempt in range(max_retries + 1):
             start = time.time()
             try:
-                result = func(*args, **kwargs)
+                result = _call_with_hard_timeout()
                 elapsed = time.time() - start
 
                 self.circuit_breaker.record_success()
