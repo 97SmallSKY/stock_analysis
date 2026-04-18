@@ -240,12 +240,34 @@ def _make_db_provider():
                     'FROM lhb_stock_daily WHERE trade_date=%s',
                     (as_of,),
                 )
-                return [
+                main = [
                     {'ts_code': r[0], 'score': float(r[1] or 0),
                      'close_price': float(r[2]) if r[2] else None,
                      'reason': r[3], 'lhb_daily_id': r[4], 'seats': []}
                     for r in cur.fetchall()
                 ]
+                if not main:
+                    return []
+                # 批量拉当日 seats,按 ts_code 分桶
+                cur.execute(
+                    'SELECT ts_code, broker_name, broker_type, direction, '
+                    'buy_amount, sell_amount, net_amount, is_institution '
+                    'FROM lhb_seats WHERE trade_date=%s', (as_of,),
+                )
+                seats_by: dict[str, list] = {}
+                for s in cur.fetchall():
+                    seats_by.setdefault(s[0], []).append({
+                        'broker_name': s[1],
+                        'broker_type': s[2],
+                        'direction': s[3],
+                        'buy_amount': float(s[4]) if s[4] is not None else 0.0,
+                        'sell_amount': float(s[5]) if s[5] is not None else 0.0,
+                        'net_amount': float(s[6]) if s[6] is not None else 0.0,
+                        'is_institution': bool(s[7]) if s[7] is not None else False,
+                    })
+                for rec in main:
+                    rec['seats'] = seats_by.get(rec['ts_code'], [])
+                return main
 
     return _Provider()
 
