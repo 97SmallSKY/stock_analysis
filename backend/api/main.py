@@ -66,6 +66,10 @@ def create_app() -> FastAPI:
     from backend.api.backtest import router as bt_router
     app.include_router(bt_router, prefix="/api/backtest",
                        tags=["backtest"])
+    from backend.api.lhb import router as lhb_router
+    app.include_router(lhb_router, prefix="/api/lhb", tags=["lhb"])
+    from backend.api.dashboard import router as dash_router
+    app.include_router(dash_router, prefix="/api/dashboard", tags=["dashboard"])
 
     @app.on_event("shutdown")
     def _shutdown():
