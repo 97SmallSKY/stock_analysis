@@ -1,15 +1,23 @@
 <template>
   <a-modal
     v-model:open="drill.state.open"
-    :title="title"
     width="960px"
     :footer="null"
     :destroy-on-close="true"
+    :body-style="{ padding: '16px 24px 20px' }"
     @cancel="drill.close()"
   >
-    <a-tabs v-model:active-key="tab" @change="onTabChange">
-      <a-tab-pane key="daily" tab="日K" />
-      <a-tab-pane key="weekly" tab="周K (5日均)" />
+    <template #title>
+      <div class="drill-title">
+        <AreaChartOutlined style="color:#d4380d;" />
+        <span class="ts">{{ drill.state.tsCode ?? '' }}</span>
+        <span class="freq">· {{ freqLabel }}</span>
+      </div>
+    </template>
+
+    <a-tabs v-model:active-key="tab" @change="onTabChange" class="drill-tabs">
+      <a-tab-pane key="daily" tab="日 K" />
+      <a-tab-pane key="weekly" tab="周 K · MA5" />
       <a-tab-pane
         key="minute"
         :tab="minuteTabLabel"
@@ -17,17 +25,42 @@
       />
     </a-tabs>
 
+    <a-breadcrumb v-if="tab !== 'daily'" class="drill-bread" separator="→">
+      <a-breadcrumb-item>
+        <a @click="tab='daily'">日 K</a>
+      </a-breadcrumb-item>
+      <a-breadcrumb-item>
+        <a v-if="tab === 'minute'" @click="tab='weekly'">周 K</a>
+        <span v-else>周 K</span>
+      </a-breadcrumb-item>
+      <a-breadcrumb-item v-if="tab === 'minute'">
+        分钟 K · {{ pickedDate }}
+      </a-breadcrumb-item>
+    </a-breadcrumb>
+
     <div v-if="pickedDate && tab !== 'daily'" class="bread">
-      <a-tag color="blue">选中日期: {{ pickedDate }}</a-tag>
+      <a-tag color="orange">
+        <ClockCircleOutlined /> 选中日期: {{ pickedDate }}
+      </a-tag>
       <a-button type="link" size="small" @click="resetPicked">清除选择</a-button>
     </div>
 
-    <a-spin :spinning="loading">
-      <div v-if="emptyReason" style="padding: 60px 0;">
-        <a-empty :description="emptyText" />
+    <a-spin :spinning="loading" tip="拉取行情中...">
+      <div v-if="emptyReason" class="empty-box">
+        <a-empty :image="simpleImage" :description="null">
+          <template #description>
+            <div class="empty-title">{{ emptyTitle }}</div>
+            <div class="empty-sub">{{ emptyText }}</div>
+          </template>
+          <a-button v-if="emptyReason==='out_of_range'" size="small" @click="tab='daily';load()">返回日K</a-button>
+        </a-empty>
       </div>
       <div v-else ref="chartRef" class="chart-box"></div>
     </a-spin>
+
+    <div class="drill-hint">
+      <InfoCircleOutlined /> 点日 K 的某根蜡烛 → 切换到周 K;再点周 K → 切换到分钟 K
+    </div>
   </a-modal>
 </template>
 
@@ -40,10 +73,16 @@ import {
   DataZoomComponent, MarkLineComponent, MarkPointComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { Empty } from 'ant-design-vue'
+import {
+  AreaChartOutlined, ClockCircleOutlined, InfoCircleOutlined,
+} from '@ant-design/icons-vue'
 import { useStockDrill } from '@/composables/useStockDrill'
 import {
   fetchKlineDaily, fetchKlineWeekly, fetchKlineMinute, type KlineBar,
 } from '@/api/kline'
+
+const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
 echarts.use([
   CandlestickChart, LineChart, BarChart,
@@ -62,19 +101,31 @@ const pickedDate = ref<string | null>(null)
 const chartRef = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
 
-const title = computed(() => {
-  if (!drill.state.tsCode) return '股票下钻'
-  return `${drill.state.tsCode} · 行情下钻`
+const freqLabel = computed(() => {
+  if (tab.value === 'daily') return '日 K 线'
+  if (tab.value === 'weekly') return '周 K 线 · MA5'
+  return '分钟 K'
 })
 
 const minuteTabLabel = computed(() =>
-  pickedDate.value ? `分钟 K (${pickedDate.value})` : '分钟 K (请先在日K选日期)',
+  pickedDate.value ? `分钟 K · ${pickedDate.value}` : '分钟 K (需先选日期)',
 )
+
+const emptyTitle = computed(() => {
+  if (emptyReason.value === 'no_source_table') return '数据源尚未接入'
+  if (emptyReason.value === 'out_of_range') return '暂无行情数据'
+  if (emptyReason.value === 'no_pick') return '请先选择日期'
+  if (emptyReason.value === 'fetch_failed') return '网络或服务异常'
+  return ''
+})
 
 const emptyText = computed(() => {
   if (!emptyReason.value) return ''
-  if (emptyReason.value === 'no_source_table') return '该数据源未接入,待补'
-  if (emptyReason.value === 'out_of_range') return '该时间范围内无行情数据'
+  if (emptyReason.value === 'no_source_table')
+    return '分钟级 K 线暂未接入数据源 (Tushare stk_mins / AkShare stock_zh_a_minute),接口契约已就位,接入后无需前端变更'
+  if (emptyReason.value === 'out_of_range') return '所选区间内无行情,请调整时间范围'
+  if (emptyReason.value === 'no_pick') return '点击日 K 蜡烛自动选择某日期,再切到分钟 K'
+  if (emptyReason.value === 'fetch_failed') return '请稍后重试'
   return emptyReason.value
 })
 
@@ -211,6 +262,41 @@ watch(
 </script>
 
 <style scoped>
-.chart-box { width: 100%; height: 480px; }
+.drill-title {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 500;
+}
+.drill-title .ts {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 16px; letter-spacing: 0.3px;
+}
+.drill-title .freq {
+  color: #8c8c8c; font-size: 13px; font-weight: 400;
+}
+.drill-tabs { margin-top: -4px; }
+.drill-bread {
+  margin: -4px 0 8px;
+  padding: 6px 12px;
+  background: linear-gradient(90deg, #fff7f5 0%, #fff 100%);
+  border-radius: 6px;
+  font-size: 12px;
+}
 .bread { margin-bottom: 8px; }
+.chart-box {
+  width: 100%; height: 480px;
+  border-radius: 6px; overflow: hidden;
+}
+.empty-box { padding: 80px 0; }
+.empty-title {
+  font-size: 14px; color: #595959; font-weight: 500; margin-bottom: 4px;
+}
+.empty-sub {
+  font-size: 12px; color: #bfbfbf; max-width: 420px; margin: 0 auto;
+  line-height: 1.6;
+}
+.drill-hint {
+  margin-top: 8px;
+  color: #bfbfbf; font-size: 12px;
+  display: flex; align-items: center; gap: 6px;
+}
 </style>
