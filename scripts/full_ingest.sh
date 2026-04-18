@@ -32,16 +32,21 @@ for i in 1 2 3 4; do
     || echo "[$(TS)] 第 $i 轮失败/超时,继续"
 done
 
-echo "[$(TS)] === 阶段2: kline 全市场 2024/01/01 - 2024/12/31 ==="
-$TIMEOUT_LONG $PY -m backend.cli ingest kline --from 20240101 --to 20241231 --codes all \
+# 近三年数据 (2023-01-01 → 今天). 按月反向采集, 最近月先入库.
+FROM_DATE="20230101"
+TO_DATE="$(date +%Y%m%d)"
+
+echo "[$(TS)] === 阶段2: kline 全市场 $FROM_DATE - $TO_DATE 月反向并发 workers=4 ==="
+$TIMEOUT_LONG $PY -m backend.cli ingest kline \
+  --from $FROM_DATE --to $TO_DATE --codes all --workers 4 \
   || echo "[$(TS)] kline 阶段失败/超时(exit=$?), 继续后续阶段"
 
-echo "[$(TS)] === 阶段3: sentiment 全年(会触发 DB 反算,秒级完成) ==="
-$TIMEOUT_SHORT $PY -m backend.cli ingest sentiment --from 20240101 --to 20241231 \
+echo "[$(TS)] === 阶段3: sentiment $FROM_DATE - $TO_DATE (触发 DB 反算) ==="
+$TIMEOUT_SHORT $PY -m backend.cli ingest sentiment --from $FROM_DATE --to $TO_DATE \
   || echo "[$(TS)] sentiment 阶段失败/超时, 继续"
 
-echo "[$(TS)] === 阶段4: lhb 全年校对(幂等重跑) ==="
-$TIMEOUT_LONG $PY -m backend.cli ingest lhb --from 20240101 --to 20241231 \
+echo "[$(TS)] === 阶段4: lhb $FROM_DATE - $TO_DATE (幂等重跑) ==="
+$TIMEOUT_LONG $PY -m backend.cli ingest lhb --from $FROM_DATE --to $TO_DATE \
   || echo "[$(TS)] lhb 阶段失败/超时, 继续"
 
 echo "[$(TS)] === 数据库统计 ==="

@@ -158,6 +158,29 @@ def test_safe_request_returns_value_when_fast(adapter):
     assert out is not None and len(out) == 1
 
 
+# ---------------------------------------------------------------------------
+# 并发限流 (2026-04-18 多线程采集前置用例)
+# ---------------------------------------------------------------------------
+def test_rate_limit_is_thread_safe(monkeypatch):
+    """多个 worker 同时调 _check_rate_limit 时, 内部计数必须互斥,
+    实测 _request_count 应等于调用次数, 不因竞态丢更新或超出 rate_limit."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    a = _Dummy()
+    a.rate_limit = 10_000  # 设得很大, 避免真触发 sleep
+    a.circuit_breaker.force_close()
+
+    # 让 sleep 变 no-op, 节省测试时间
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    N = 200
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        list(ex.map(lambda _: a._check_rate_limit(), range(N)))
+
+    # 单次窗口内请求全部落同一分钟窗口, 计数必须等于 N
+    assert a._request_count == N
+
+
 def test_safe_request_hard_timeout_actually_kills_blocking_call(
     adapter, monkeypatch
 ):

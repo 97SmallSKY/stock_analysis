@@ -40,6 +40,8 @@ def main(argv: list[str] | None = None) -> int:
     kl.add_argument("--to", dest="end", default=_today())
     kl.add_argument("--codes", default="all",
                     help="逗号分隔的 ts_code，或 'all' 代表全市场")
+    kl.add_argument("--workers", type=int, default=4,
+                    help="并发采集线程数 (默认 4). 1=串行, 推荐 2~6")
 
     lhb = ingest_sub.add_parser("lhb")
     lhb.add_argument("--from", dest="start", default="20240101")
@@ -73,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.dataset == "kline":
             from backend.ingest import kline
             codes = None if args.codes in ("all", "") else [c.strip() for c in args.codes.split(",") if c.strip()]
-            kline.run(args.start, args.end, codes)
+            kline.run(args.start, args.end, codes, workers=args.workers)
         elif args.dataset == "lhb":
             from backend.ingest import lhb
             lhb.run(args.start, args.end)

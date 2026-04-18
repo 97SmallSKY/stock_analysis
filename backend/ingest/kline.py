@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
 from backend.db.session import pg_conn
@@ -89,6 +90,87 @@ def _normalize_pct(rows: list[dict]) -> None:
                 r["turnover_rate"] = None
 
 
+def _iter_month_segments_reverse(start: str, end: str) -> list[tuple[str, str]]:
+    """生成从 end 到 start 的月反向段: [(seg_start, seg_end), ...]
+
+    每段起止都是 YYYYMMDD, seg_start <= seg_end. 最新的月份排最前,
+    保证"从近到远"的采集语义: 任务被中断时, 近端数据已入库.
+
+    例: start=20230101, end=20260418 →
+        [('20260401','20260418'), ('20260301','20260331'), ...,
+         ('20230101','20230131')]
+
+    如该月无交易日 (春节整月?不存在), 仍会返回, 由下游 _filter_trading_days
+    过滤掉. 不因空月中断.
+    """
+    s_dt = date(int(start[:4]), int(start[4:6]), int(start[6:]))
+    e_dt = date(int(end[:4]), int(end[4:6]), int(end[6:]))
+    if s_dt > e_dt:
+        return []
+
+    segs: list[tuple[str, str]] = []
+    cur_end = e_dt
+    while cur_end >= s_dt:
+        # 本月 1 号
+        month_first = cur_end.replace(day=1)
+        seg_start = max(month_first, s_dt)
+        segs.append((
+            seg_start.strftime("%Y%m%d"),
+            cur_end.strftime("%Y%m%d"),
+        ))
+        # 下一段: 上一个月的最后一天
+        if month_first <= s_dt:
+            break
+        cur_end = month_first - timedelta(days=1)
+    return segs
+
+
+def _estimate_min_rows(
+    seg_start: str, seg_end: str, fallback: int = 100
+) -> int:
+    """查 trade_calendar 得该段内 SSE 交易日数 × 0.9, 作为"已覆盖"
+    判定阈值. trade_calendar 未灌时返回 fallback.
+
+    月反向模式单段只 ~20 交易日, 必须动态估算, 否则 min_rows=100 会
+    永远命中"未覆盖"反复重拉.
+    """
+    s_iso = f"{seg_start[:4]}-{seg_start[4:6]}-{seg_start[6:]}"
+    e_iso = f"{seg_end[:4]}-{seg_end[4:6]}-{seg_end[6:]}"
+    try:
+        with pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM trade_calendar "
+                "WHERE exchange='SSE' AND is_open=TRUE "
+                "AND cal_date BETWEEN %s AND %s",
+                (s_iso, e_iso),
+            )
+            n = cur.fetchone()[0] or 0
+        if n <= 0:
+            return fallback
+        # 0.9 留停牌余地, 最少 3 行避免过严
+        return max(int(n * 0.9), 3)
+    except Exception:  # noqa: BLE001
+        return fallback
+
+
+def _has_any_trading_day(seg_start: str, seg_end: str) -> bool:
+    """查 trade_calendar 判断该段内是否至少有一个 SSE 交易日.
+    trade_calendar 未灌时默认返回 True (走自然日, 不挡路)."""
+    s_iso = f"{seg_start[:4]}-{seg_start[4:6]}-{seg_start[6:]}"
+    e_iso = f"{seg_end[:4]}-{seg_end[4:6]}-{seg_end[6:]}"
+    try:
+        with pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM trade_calendar "
+                "WHERE exchange='SSE' AND is_open=TRUE "
+                "AND cal_date BETWEEN %s AND %s LIMIT 1",
+                (s_iso, e_iso),
+            )
+            return cur.fetchone() is not None
+    except Exception:  # noqa: BLE001
+        return True  # 表不存在/未灌, 不拦截
+
+
 def _load_covered_codes(start: str, end: str, min_rows: int = 100) -> set[str]:
     """识别已覆盖[start,end]区间的 ts_code, 后续直接跳过。
 
@@ -114,12 +196,40 @@ def _load_covered_codes(start: str, end: str, min_rows: int = 100) -> set[str]:
         return {r[0] for r in cur.fetchall()}
 
 
+def _fetch_one(
+    code: str, start: str, end: str
+) -> tuple[str, Optional[list[dict]], Optional[str]]:
+    """worker 线程内调用: 拉一只股票并做行规范化. 不访问 DB.
+
+    返回 (code, rows_or_None, error_or_None).
+    """
+    mgr = get_manager()
+    try:
+        df = mgr.get_daily_kline(code, start, end)
+        rows = df_to_rows(df, COLMAP)
+        if not rows:
+            return code, None, None
+        for r in rows:
+            r.setdefault("ts_code", code)
+            r["trade_date"] = normalize_date(r.get("trade_date"))
+        _normalize_pct(rows)
+        # 批内去重 (同 ts_code+trade_date 只保留最后一条)
+        dedup: dict = {}
+        for r in rows:
+            dedup[(r.get("ts_code"), r.get("trade_date"))] = r
+        return code, list(dedup.values()), None
+    except Exception as e:  # noqa: BLE001
+        return code, None, str(e)
+
+
 def run(
     start: str,
     end: str,
     codes: Optional[List[str]] = None,
     skip_existing: bool = True,
     min_rows: int = 100,
+    workers: int = 4,
+    range_mode: str = "month_reverse",
 ) -> int:
     """抓取日K线。
 
@@ -127,8 +237,68 @@ def run(
         skip_existing: 增量幂等. True 时, 已有 [start,end] 内行数 >= min_rows
             的 ts_code 自动跳过。重启任务不会重复拉取已有数据。
         min_rows: 判断"已覆盖"的最小行数阈值。
+        workers: 并发线程数 (2026-04-18 新增). 推荐 4, 新浪源实测 100+ RPS,
+            配合 BaseDataAdapter._rate_lock 全局限流不会超限. workers=1 时
+            退化为串行(便于排障).
+        range_mode:
+            - 'month_reverse' (默认): 按月反向切分 [start,end], 从最近月到
+              最远月依次采集. 每段内走并发 fetch, 保证近端数据最先落盘.
+              跳过 trade_calendar 里无交易日的月份.
+            - 'single' / 其它: 整段 [start,end] 一次性采集 (旧行为).
     """
-    mgr = get_manager()
+    # month_reverse 在最外层迭代, 每段再走 single 主体
+    if range_mode == "month_reverse":
+        segs = _iter_month_segments_reverse(start, end)
+        if not segs:
+            logger.warning(f"[ingest.kline] 空区间: {start}~{end}")
+            return 0
+        logger.info(
+            f"[ingest.kline] 月反向模式: {len(segs)} 段, "
+            f"首段={segs[0]}, 末段={segs[-1]}"
+        )
+        grand_total = 0
+        for i, (seg_s, seg_e) in enumerate(segs, 1):
+            if not _has_any_trading_day(seg_s, seg_e):
+                logger.info(
+                    f"[ingest.kline] 段 {i}/{len(segs)} {seg_s}~{seg_e} "
+                    f"无交易日, 跳过"
+                )
+                continue
+            logger.info(
+                f"[ingest.kline] ===== 段 {i}/{len(segs)} {seg_s}~{seg_e} ====="
+            )
+            grand_total += _run_single_range(
+                seg_s, seg_e, codes=codes,
+                skip_existing=skip_existing, min_rows=min_rows,
+                workers=workers,
+            )
+        logger.info(
+            f"[ingest.kline] 月反向完成: 所有段累计 {grand_total} 行"
+        )
+        return grand_total
+
+    return _run_single_range(
+        start, end, codes=codes,
+        skip_existing=skip_existing, min_rows=min_rows,
+        workers=workers,
+    )
+
+
+def _run_single_range(
+    start: str,
+    end: str,
+    codes: Optional[List[str]] = None,
+    skip_existing: bool = True,
+    min_rows: int = 100,
+    workers: int = 4,
+) -> int:
+    """整段 [start,end] 的采集主体 (旧 run() 实现). 由 run() 的
+    range_mode='month_reverse' 分段调度, 或直接走 single 模式.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    # 触发 manager 在主线程先初始化(避免 worker 竞态建 adapter)
+    get_manager()
 
     if not codes or codes == ["all"]:
         codes = _load_all_ts_codes()
@@ -138,48 +308,91 @@ def run(
 
     original_n = len(codes)
     if skip_existing:
-        covered = _load_covered_codes(start, end, min_rows)
+        # 动态估算 min_rows: 段内预期交易日数 × 0.9 (容忍停牌/上市短)
+        # 单月段约 20 交易日, 年段约 240 交易日; 写死 100 对月段不友好.
+        effective_min = _estimate_min_rows(start, end, fallback=min_rows)
+        covered = _load_covered_codes(start, end, effective_min)
         if covered:
             codes = [c for c in codes if c not in covered]
             logger.info(
-                f"[ingest.kline] 增量模式: {len(covered)} 只已覆盖, "
-                f"跳过 / 待拉 {len(codes)} 只 (原 {original_n} 只)"
+                f"[ingest.kline] 增量模式: {len(covered)} 只已覆盖 "
+                f"(min_rows={effective_min}), 跳过 / 待拉 {len(codes)} 只 "
+                f"(原 {original_n} 只)"
             )
 
     total = 0
     fail = 0
-    logger.info(f"[ingest.kline] 开始: {len(codes)} 只股票, {start}~{end}")
+    n_codes = len(codes)
+    logger.info(
+        f"[ingest.kline] 开始: {n_codes} 只股票, {start}~{end}, workers={workers}"
+    )
 
-    with pg_conn() as conn:
-        for idx, code in enumerate(codes, 1):
-            try:
-                df = mgr.get_daily_kline(code, start, end)
-                rows = df_to_rows(df, COLMAP)
+    # workers=1 时走串行路径, 避免线程池调度开销
+    if workers <= 1:
+        with pg_conn() as conn:
+            for idx, code in enumerate(codes, 1):
+                code, rows, err = _fetch_one(code, start, end)
+                if err:
+                    fail += 1
+                    logger.warning(f"[ingest.kline] {code} 失败: {err}")
+                    continue
                 if not rows:
                     continue
-                for r in rows:
-                    r.setdefault("ts_code", code)
-                    r["trade_date"] = normalize_date(r.get("trade_date"))
-                _normalize_pct(rows)
-                # 批内去重 (同 ts_code+trade_date 只保留最后一条)
-                dedup: dict = {}
-                for r in rows:
-                    dedup[(r.get("ts_code"), r.get("trade_date"))] = r
-                rows = list(dedup.values())
-                n = upsert_kline_daily(conn, rows)
-                total += n
+                try:
+                    n = upsert_kline_daily(conn, rows)
+                    total += n
+                except Exception as e:  # noqa: BLE001
+                    fail += 1
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(f"[ingest.kline] {code} upsert 失败: {e}")
                 if idx % 100 == 0:
                     conn.commit()
-                    logger.info(f"[ingest.kline] 进度 {idx}/{len(codes)}  累计 {total} 行")
-            except Exception as e:
+                    logger.info(
+                        f"[ingest.kline] 进度 {idx}/{n_codes}  累计 {total} 行"
+                    )
+            conn.commit()
+        logger.info(f"[ingest.kline] 完成(串行): 共 {total} 行, 失败 {fail} 只")
+        return total
+
+    # 并发路径: fetch 在线程池, upsert 串行在主线程
+    # 原因: psycopg2 connection 非线程安全, 且同表 upsert 并发会拉高 lock;
+    # 实测 fetch 是瓶颈(HTTP 0.5~2s), upsert 单行 <1ms, 完全跟得上.
+    with pg_conn() as conn, ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(_fetch_one, c, start, end): c for c in codes}
+        done_n = 0
+        for fut in as_completed(futures):
+            done_n += 1
+            try:
+                code, rows, err = fut.result()
+            except Exception as e:  # noqa: BLE001
                 fail += 1
+                logger.warning(f"[ingest.kline] future 异常: {e}")
+                continue
+            if err:
+                fail += 1
+                logger.warning(f"[ingest.kline] {code} 失败: {err}")
+            elif rows:
                 try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                logger.warning(f"[ingest.kline] {code} 失败: {e}")
+                    n = upsert_kline_daily(conn, rows)
+                    total += n
+                except Exception as e:  # noqa: BLE001
+                    fail += 1
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(f"[ingest.kline] {code} upsert 失败: {e}")
+            if done_n % 100 == 0:
+                conn.commit()
+                logger.info(
+                    f"[ingest.kline] 进度 {done_n}/{n_codes}  累计 {total} 行  失败 {fail}"
+                )
+        conn.commit()
 
-        conn.commit()  # 末轮 flush
-
-    logger.info(f"[ingest.kline] 完成: 共 {total} 行, 失败 {fail} 只")
+    logger.info(
+        f"[ingest.kline] 完成(并发 workers={workers}): 共 {total} 行, 失败 {fail} 只"
+    )
     return total

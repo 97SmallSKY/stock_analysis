@@ -33,6 +33,8 @@ class BaseDataAdapter(ABC):
         rate_limit: int = 60,
         timeout: int = 30,
     ):
+        import threading as _threading
+
         self.name = name
         self.config = config or {}
         self.rate_limit = rate_limit  # 每分钟最大请求数
@@ -40,6 +42,9 @@ class BaseDataAdapter(ABC):
         self._last_request_time: float = 0
         self._request_count: int = 0
         self._minute_start: float = 0
+        # 限流状态的线程锁: 并发采集时多 worker 共享同一 adapter,
+        # _request_count / _minute_start 的读改写必须互斥, 否则会超限
+        self._rate_lock = _threading.Lock()
 
         # 每个适配器自带熔断器
         self.circuit_breaker = CircuitBreaker(
@@ -128,25 +133,34 @@ class BaseDataAdapter(ABC):
     # ================================================================
 
     def _check_rate_limit(self):
-        """限流检查，超限则等待到下一个窗口"""
-        now = time.time()
+        """限流检查，超限则等待到下一个窗口。
 
-        if now - self._minute_start >= 60:
-            self._minute_start = now
-            self._request_count = 0
+        并发安全: 读改写 _request_count / _minute_start 用 _rate_lock
+        保护, 保证多 worker 共享时 QPS 不会因竞态越限.
+        注意: sleep 放在锁外, 避免持有锁期间把其它 worker 全堵死.
+        """
+        wait_time = 0.0
+        with self._rate_lock:
+            now = time.time()
+            if now - self._minute_start >= 60:
+                self._minute_start = now
+                self._request_count = 0
 
-        self._request_count += 1
+            self._request_count += 1
 
-        if self._request_count > self.rate_limit:
-            wait_time = 60 - (now - self._minute_start)
-            if wait_time > 0:
-                logger.warning(
-                    f"[{self.name.value}] 触发限流，等待 {wait_time:.1f}s "
-                    f"({self._request_count}/{self.rate_limit} per min)"
-                )
-                time.sleep(wait_time)
-                self._minute_start = time.time()
-                self._request_count = 1
+            if self._request_count > self.rate_limit:
+                wait_time = 60 - (now - self._minute_start)
+                if wait_time > 0:
+                    logger.warning(
+                        f"[{self.name.value}] 触发限流，等待 {wait_time:.1f}s "
+                        f"({self._request_count}/{self.rate_limit} per min)"
+                    )
+                    # 重置窗口预留, 等 sleep 结束后让锁外 worker 可正常进入
+                    self._minute_start = now + wait_time
+                    self._request_count = 1
+
+        if wait_time > 0:
+            time.sleep(wait_time)
 
     # ----------------------------------------------------------------
     # 可重试异常的判定 —— 关键字白名单
