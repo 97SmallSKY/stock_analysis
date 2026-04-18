@@ -118,6 +118,17 @@ class DataRouter:
 
         last_error = None
 
+        # 从 kwargs/args 提取业务标识, 日志里带上方便定位
+        # 约定: ts_code/trade_date/symbol 是最常见的关键字段
+        _tag_parts = []
+        for _k in ("ts_code", "trade_date", "symbol", "start_date", "end_date"):
+            _v = kwargs.get(_k)
+            if _v:
+                _tag_parts.append(f"{_k}={_v}")
+        if not _tag_parts and args:
+            _tag_parts.append(f"arg0={args[0]}")
+        _tag = " ".join(_tag_parts) if _tag_parts else "(no-tag)"
+
         for adapter_name in chain:
             adapter = self._adapters.get(adapter_name)
 
@@ -150,7 +161,7 @@ class DataRouter:
                 if result is not None and isinstance(result, pd.DataFrame) and not result.empty:
                     logger.info(
                         f"[Router] ✅ {category.value} 通过 {adapter_name.value} "
-                        f"获取成功 ({len(result)}行)"
+                        f"获取成功 ({len(result)}行) [{_tag}]"
                     )
                     audit.record(
                         category=category.value,
@@ -176,7 +187,7 @@ class DataRouter:
                     error_msg="empty",
                 )
                 logger.debug(
-                    f"[Router] {adapter_name.value} 返回空数据，降级下一个"
+                    f"[Router] {adapter_name.value} 返回空数据，降级下一个 [{_tag}]"
                 )
 
             except Exception as e:
@@ -192,17 +203,32 @@ class DataRouter:
                     error_msg=last_error,
                 )
                 logger.warning(
-                    f"[Router] {adapter_name.value}.{method_name} 异常: {e}，"
+                    f"[Router] {adapter_name.value}.{method_name} 异常 [{_tag}]: {e}，"
                     f"降级下一个"
                 )
                 continue
 
         # 全部失败
         logger.error(
-            f"[Router] ❌ {category.value}.{method_name} 全部数据源失败! "
+            f"[Router] ❌ {category.value}.{method_name} 全部数据源失败 [{_tag}]! "
             f"链路: {[a.value for a in chain]}, "
             f"最后错误: {last_error}"
         )
+        # 落盘失败清单, 供后续按 ts_code/trade_date 补采使用
+        try:
+            from backend.data_gateway.failed_registry import record_failure
+            record_failure(
+                category=category.value,
+                method=method_name,
+                tag=_tag,
+                ts_code=kwargs.get("ts_code") or (args[0] if args else None),
+                trade_date=kwargs.get("trade_date"),
+                start_date=kwargs.get("start_date"),
+                end_date=kwargs.get("end_date"),
+                last_error=last_error,
+            )
+        except Exception as _reg_err:  # noqa: BLE001
+            logger.debug(f"[Router] failed_registry 写入失败(忽略): {_reg_err}")
         return None
 
     # ================================================================
