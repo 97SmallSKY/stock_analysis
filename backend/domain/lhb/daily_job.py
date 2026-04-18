@@ -324,6 +324,24 @@ def run_seats_only_single(conn, manager, trade_date: str) -> dict:
     for (ts, td), _id in id_map.items():
         recs.append(LhbRecord(ts_code=ts, trade_date=td, seats=[]))
     attached = attach_seats(recs, seats_by_key)
+    # akshare 在一只股票多次上榜时会把同一席位重复返回,这里按
+    # (broker_name, direction) 去重避免 ON CONFLICT DO UPDATE 触发 CardinalityViolation。
+    for r in recs:
+        if not r.seats:
+            continue
+        seen: dict[tuple, object] = {}
+        for s in r.seats:
+            k = (s.broker_name, s.direction)
+            # 同 key 若有多条,保留 buy_amount + sell_amount + net_amount 绝对值较大的(更有信息量)
+            prev = seen.get(k)
+            if prev is None:
+                seen[k] = s
+            else:
+                score_new = abs(s.buy_amount) + abs(s.sell_amount) + abs(s.net_amount)
+                score_old = abs(prev.buy_amount) + abs(prev.sell_amount) + abs(prev.net_amount)
+                if score_new > score_old:
+                    seen[k] = s
+        r.seats = list(seen.values())
     # upsert_seats 期望 id_map key 用 _norm_date 后的 date
     from backend.domain.lhb.ingestor import _norm_date
     id_map_norm = {(ts, _norm_date(td)): _id for (ts, td), _id in id_map.items()}
