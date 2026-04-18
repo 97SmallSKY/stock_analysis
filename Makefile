@@ -61,6 +61,13 @@ ingest-sentiment: ## 抓取市场情绪 market_sentiment
 
 ingest-all: ingest-stock-info ingest-calendar ingest-kline ingest-lhb ingest-sentiment ## 一键全量灌库
 
+# ---------- 评分 ----------
+score: ## 批量计算龙虎榜评分 (FROM/TO 可选)
+	$(PYTHON) -m backend.cli score --from $(FROM) --to $(TO)
+
+score-empty: ## 仅对 score=0 的行评分(断点续跑)
+	$(PYTHON) -m backend.cli score --from $(FROM) --to $(TO) --only-empty
+
 # ---------- 部署（jd 服务器） ----------
 deploy: ## ssh jd 拉代码 + 重启服务
 	ssh jd "cd ~/stock_analysis && git pull && bash scripts/deploy.sh"

@@ -6,6 +6,7 @@
     python -m backend.cli ingest kline    --from 20200101 --to 20260417 [--codes 000001.SZ,600519.SH | all]
     python -m backend.cli ingest lhb      --from 20240101 --to 20260417
     python -m backend.cli ingest sentiment --from 20240101 --to 20260417
+    python -m backend.cli score          --from 20240101 --to 20241231 [--only-empty] [--limit 100]
 """
 
 from __future__ import annotations
@@ -48,6 +49,14 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--from", dest="start", default="20240101")
     st.add_argument("--to", dest="end", default=_today())
 
+    sc = sub.add_parser("score", help="龙虎榜评分批量计算")
+    sc.add_argument("--from", dest="start", default="20240101")
+    sc.add_argument("--to", dest="end", default=_today())
+    sc.add_argument("--only-empty", action="store_true",
+                    help="只处理 score=0 的行(断点续跑)")
+    sc.add_argument("--limit", type=int, default=None,
+                    help="最多处理多少行(调试用)")
+
     args = parser.parse_args(argv)
 
     from backend.core.startup import bootstrap
@@ -71,6 +80,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.dataset == "sentiment":
             from backend.ingest import sentiment
             sentiment.run(args.start, args.end)
+    elif args.cmd == "score":
+        from backend.scoring import runner as score_runner
+        score_runner.run(
+            args.start, args.end,
+            only_empty=args.only_empty,
+            limit=args.limit,
+        )
     return 0
 
 
