@@ -12,8 +12,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "ag-grid-community": "^35.2.1",
+    "ag-grid-vue3": "^35.2.1",
     "ant-design-vue": "^4.2.6",
     "axios": "^1.7.7",
+    "dayjs": "^1.11.20",
     "echarts": "^5.5.1",
     "pinia": "^2.2.4",
     "vue": "^3.5.12",
