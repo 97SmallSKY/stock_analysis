@@ -96,3 +96,40 @@ describe('PNL_COLORS', () => {
     expect(PNL_COLORS.score).toBe('#722ed1')
   })
 })
+
+describe('aggregateByReason - P16.5 TN 维度', () => {
+  it('avg_t1 / avg_t5 / t5_win_rate 计算', () => {
+    const rows = [
+      make({ reason: 'A', t1_pnl_pct: 0.02, t5_pnl_pct: 0.05 }),
+      make({ reason: 'A', t1_pnl_pct: -0.01, t5_pnl_pct: -0.02 }),
+      make({ reason: 'A', t1_pnl_pct: 0.03, t5_pnl_pct: 0.08 }),
+    ]
+    const out = aggregateByReason(rows, 10)
+    const A = out.find((x) => x.reason === 'A')!
+    expect(A.avg_t1).toBeCloseTo((0.02 - 0.01 + 0.03) / 3, 6)
+    expect(A.avg_t5).toBeCloseTo((0.05 - 0.02 + 0.08) / 3, 6)
+    expect(A.t5_win_rate).toBeCloseTo(2 / 3, 6)
+  })
+
+  it('无 TN 数据 → avg_t1/avg_t5/t5_win_rate=null', () => {
+    const rows = [make({ reason: 'X' }), make({ reason: 'X' })]
+    const out = aggregateByReason(rows)
+    const X = out.find((x) => x.reason === 'X')!
+    expect(X.avg_t1).toBeNull()
+    expect(X.avg_t5).toBeNull()
+    expect(X.t5_win_rate).toBeNull()
+  })
+
+  it('忽略 NaN/null 的 TN 值', () => {
+    const rows = [
+      make({ reason: 'B', t1_pnl_pct: 0.04, t5_pnl_pct: null }),
+      make({ reason: 'B', t1_pnl_pct: NaN, t5_pnl_pct: 0.10 }),
+      make({ reason: 'B', t1_pnl_pct: 0.02, t5_pnl_pct: 0.05 }),
+    ]
+    const out = aggregateByReason(rows)
+    const B = out.find((x) => x.reason === 'B')!
+    expect(B.avg_t1).toBeCloseTo((0.04 + 0.02) / 2, 6)
+    expect(B.avg_t5).toBeCloseTo((0.10 + 0.05) / 2, 6)
+    expect(B.t5_win_rate).toBe(1)
+  })
+})

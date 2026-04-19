@@ -21,7 +21,7 @@
       </a-form>
     </a-card>
 
-    <a-card :bordered="false" style="margin-top: 12px;" title="按上榜原因聚合(净买入 / 上榜次数 / 平均评分)">
+    <a-card :bordered="false" style="margin-top: 12px;" title="按上榜原因聚合(净买入 / 上榜次数 / 平均评分 / 平均 T+5 收益)">
       <a-empty v-if="!loading && reasonAgg.length === 0" description="无数据" />
       <div v-else ref="chartRef" style="width: 100%; height: 380px;"></div>
       <div class="legend-hint" v-if="reasonAgg.length > 0">
@@ -29,7 +29,40 @@
         <span class="dot" :style="{ background: PNL_COLORS.netNeg }"></span>净买入(负)
         <span class="dot" :style="{ background: PNL_COLORS.count }"></span>上榜次数
         <span class="dot" :style="{ background: PNL_COLORS.score }"></span>平均评分
+        <span class="dot" :style="{ background: '#13c2c2' }"></span>平均 T+5 (%)
       </div>
+
+      <!-- P16.5: 原因维度 TN 明细表 -->
+      <a-table
+        v-if="reasonAgg.length > 0"
+        style="margin-top: 12px;"
+        :data-source="reasonAgg"
+        :columns="reasonTnColumns"
+        :pagination="false"
+        :row-key="(r: ReasonAgg) => r.reason"
+        size="small"
+      >
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'avg_t1' || column.key === 'avg_t5'">
+            <span
+              v-if="record[column.key] != null"
+              :style="{ color: (record[column.key] ?? 0) >= 0 ? '#d4380d' : '#389e0d', fontFamily: 'SF Mono, Menlo, monospace' }"
+            >
+              {{ (record[column.key] * 100).toFixed(2) }}%
+            </span>
+            <span v-else style="color: rgba(0,0,0,.25)">-</span>
+          </template>
+          <template v-else-if="column.key === 't5_win_rate'">
+            <span v-if="record.t5_win_rate != null">
+              {{ (record.t5_win_rate * 100).toFixed(1) }}%
+            </span>
+            <span v-else style="color: rgba(0,0,0,.25)">-</span>
+          </template>
+          <template v-else-if="column.key === 'avg_score'">
+            {{ record.avg_score != null ? record.avg_score.toFixed(1) : '-' }}
+          </template>
+        </template>
+      </a-table>
     </a-card>
 
     <a-row :gutter="12" style="margin-top: 12px;">
@@ -115,6 +148,35 @@ const form = reactive<FormState>({ range: null, topN: 10 })
 const loading = ref(false)
 const rows = ref<LhbRow[]>([])
 
+// P16.5: 原因维度 TN 明细表 columns
+const reasonTnColumns = [
+  {
+    title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true,
+    sorter: (a: ReasonAgg, b: ReasonAgg) => a.reason.localeCompare(b.reason),
+  },
+  {
+    title: '上榜次数', dataIndex: 'count', key: 'count', width: 100, align: 'right' as const,
+    sorter: (a: ReasonAgg, b: ReasonAgg) => a.count - b.count,
+    defaultSortOrder: 'descend' as const,
+  },
+  {
+    title: '平均评分', dataIndex: 'avg_score', key: 'avg_score', width: 100, align: 'right' as const,
+    sorter: (a: ReasonAgg, b: ReasonAgg) => (a.avg_score ?? -1) - (b.avg_score ?? -1),
+  },
+  {
+    title: '平均 T+1', dataIndex: 'avg_t1', key: 'avg_t1', width: 100, align: 'right' as const,
+    sorter: (a: ReasonAgg, b: ReasonAgg) => (a.avg_t1 ?? -999) - (b.avg_t1 ?? -999),
+  },
+  {
+    title: '平均 T+5', dataIndex: 'avg_t5', key: 'avg_t5', width: 100, align: 'right' as const,
+    sorter: (a: ReasonAgg, b: ReasonAgg) => (a.avg_t5 ?? -999) - (b.avg_t5 ?? -999),
+  },
+  {
+    title: 'T+5 胜率', dataIndex: 't5_win_rate', key: 't5_win_rate', width: 100, align: 'right' as const,
+    sorter: (a: ReasonAgg, b: ReasonAgg) => (a.t5_win_rate ?? -1) - (b.t5_win_rate ?? -1),
+  },
+]
+
 const stockColumns = [
   {
     title: '股票', dataIndex: 'ts_code', key: 'ts_code', width: 180,
@@ -155,6 +217,7 @@ async function load() {
       order_by: 'trade_date',
       order_desc: true,
       limit: 1000,
+      with_tn: true,
     })
     rows.value = data.rows ?? []
   } catch {
@@ -200,6 +263,7 @@ function renderChart() {
         { name: '净买入(亿)', itemStyle: { color: PNL_COLORS.netPos } },
         { name: '上榜次数', itemStyle: { color: PNL_COLORS.count } },
         { name: '平均评分', itemStyle: { color: PNL_COLORS.score } },
+        { name: '平均 T+5 (%)', itemStyle: { color: '#13c2c2' } },
       ],
       top: 0,
     },
@@ -230,6 +294,11 @@ function renderChart() {
         name: '平均评分', type: 'bar', yAxisIndex: 1,
         data: data.map((d) => (d.avg_score != null ? +d.avg_score.toFixed(1) : 0)),
         itemStyle: { color: PNL_COLORS.score },
+      },
+      {
+        name: '平均 T+5 (%)', type: 'bar', yAxisIndex: 1,
+        data: data.map((d) => (d.avg_t5 != null ? +(d.avg_t5 * 100).toFixed(2) : 0)),
+        itemStyle: { color: '#13c2c2' },
       },
     ],
   }, true)
