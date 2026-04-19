@@ -133,7 +133,23 @@ grep -rn --include='*.py' -E '(from|import) (sqlalchemy|alembic)' backend/ scrip
 3. **代理**:任何新入口脚本第一行必须调用 `bootstrap()`;所有 `requests.Session` 都要 `trust_env=False`。
 4. **文件编码**:文档中文习惯用全角标点(`:` `(` `,`),搜索替换时注意码点差异,推荐用 Python 脚本做精确字节匹配。
 5. **测试**:新代码必须配测试,`MagicMock` + `_FakeConn/_FakeCursor` 模式见 `tests/test_aggregator.py`。
+6. **金额单位**(2026-04-20 P14):
+   - **LHB 席位 + 主表的 `buy_amount / sell_amount / net_amount` 单位是「万元」**(AkShare 原始;后端未做单位换算)。前端展示需要用 `fmtAmountWan`,**不能**用 `fmtAmount`(后者把数值当元处理,会多除一次 1e4)。
+   - K 线 `amount` / 回测 `total_assets / cash` / 机器人 `cash / total_assets` 单位是「元」,用 `fmtAmount`。
+   - 改任何 `*_amount` 字段的展示前,先确认后端 SQL 是直接存 AkShare 原值(万元)还是有换算(元)。
+7. **前端页面拆分原则**(2026-04-20 P13):新功能能独立成路由的就独立(`/backtest`-对比 + `/backtest-run`-任务历史),而不是塞 Tab;Tab 用于同一业务的「视图切换」而非「功能切换」。
+8. **聚合/KPI 纯函数必须独立到 `utils/*.ts` 并配单测**(参考 `utils/signals_agg.ts` / `backtest_history.ts`),不要把统计逻辑留在 `.vue` 的 `<script setup>` 里(Vue 组件测试成本高)。
+
+## 10. 常见任务入口映射
+
+| 用户诉求 | 改动文件 |
+|---|---|
+| 加 API 端点 | `backend/api/<mod>.py` + `tests/test_api_<mod>.py` |
+| 改 LHB 字段 | `backend/api/lhb.py`(SQL)+ `frontend/src/api/lhb.ts`(类型)+ 消费页 |
+| 加前端页 | `frontend/src/pages/X.vue` + `router/index.ts` + `App.vue`(菜单)|
+| 加机器人字段 | `backend/domain/robot/robot.py`(`RobotSnapshot`)+ `api/robots.py`(`_snapshot_to_dict`)+ `frontend/src/api/robots.ts` |
+| 加聚合纯函数 | `frontend/src/utils/<x>.ts` + `<x>.test.ts` |
 
 ---
 
-**最后更新:2025-04-18**(若与 PROGRESS.md 冲突,以 PROGRESS.md 为准)
+**最后更新:2026-04-20**(若与 PROGRESS.md 冲突,以 PROGRESS.md 为准)

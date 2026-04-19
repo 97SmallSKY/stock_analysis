@@ -92,3 +92,10 @@
 - **2026-04-20 P12**:机器人手动添加。
   - 后端:`POST /api/robots/create`(Pydantic `CreateRobotReq`:`robot_id?` / `cash` / `max_positions` / `per_position_pct` / `enabled`),`robot_id` 未传自动分配 `max(reg)+1`;冲突返回 409,参数越界返回 422;3 个 e2e 单测覆盖 auto-id / explicit-id 409 / bad-params 422。732 passed。
   - 前端:`api/robots.ts` 新增 `createRobot`;`Robots.vue` 顶部「新建机器人」按钮 + `<a-modal>` 表单(机器人 ID 留空自动分配 / 初始现金 / 最大持仓 / 单仓占比 / 立即启用),提交后即插入列表头并弹 `message.success`;`api/robots.test.ts` 5 个单测覆盖 list/status/create/4 个动作端点。vitest 11 files / 60 tests 全绿,vue-tsc 0 error。
+- **2026-04-20 P13**:回测页独立路由(保留 `Backtest.vue` 策略对比原 Tab 不动,新增 `/backtest-run` 页 `BacktestRun.vue`)。
+  - 新增 `utils/backtest_history.ts` 纯函数 `summarizeHistory`(total / success / successRate / avgReturn / bestSharpe),3 个单测覆盖空数组 / null 过滤 / 正常聚合。
+  - `BacktestRun.vue` 顶部 4 个 KPI (`a-statistic`:总任务 / 成功率 / 平均收益 / 最佳 Sharpe,颜色依赖值正负),保留 Backtest.vue 历史 Tab 原列定义;搜索头部加「去策略对比」按钮跳 `/backtest`;`router/index.ts` 注册 `/backtest-run`。vitest 12 files / 63 tests 全绿,vue-tsc 0 error。
+- **2026-04-20 P14 (进行中)**:LHB 席位金额单位修复。
+  - **发现**:AkShare 提供的 `buy_amount / sell_amount / net_amount` 原始单位已经是**万元**,但前端 `fmtAmount` 把它当元处理,导致 `5811.81 万` 被显示成 `5811.81`(无单位歧义)或在更大数值上显示为 `58118.10 万`(把万当元再 /1e4)。
+  - **修复计划**:(a) 新增 `fmtAmountWan(v)`:输入即为万元,>=1e4 万时转 `x.xx 亿`,否则 `x.xx 万`;(b) LhbList 席位抽屉 + 主表 + Signals / LhbPnl / Dashboard 表格凡金额列改用 `fmtAmountWan`;(c) 单测覆盖边界(0 / 100万 / 1亿 / 负值)。
+  - **待部署**:修完后 `git push jd` 一次,smoke 确认显示正确。
