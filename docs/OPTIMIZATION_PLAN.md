@@ -156,3 +156,8 @@
 ## 六、回合审计(每 20 分钟一条)
 
 - **R0 · 2026-04-20** 数据盘点完成,发现 seats 仅 68 日、score 9% 覆盖率,落本方案。TaskList 同步见 P16.0 / P16.1 / P16.2 / P16.3 / P16.4 / P16.5 / P16.6。
+- **R1 · 2026-04-20 22:50** P16.2 + P16.3a/b/c 完成部署:
+  - 代码:`LiveRobotEngine.strategy` + `select_candidates`;`/api/robots/create` 接受 `strategy_name/params`;新增 `GET /api/robots/strategies`;前端 Robots 表格加「策略」列 + 创建对话框策略下拉;LhbPnl 三柱图固定色 + 图例 dot 提示 + 新增「平均净买入」列;抽 `utils/pnl_agg.ts` + 7 case 单测。
+  - 测试:`pytest 732 passed` → `738 passed`(+6 新单测);`vitest 74 passed`(+7 新单测);`vue-tsc 0 error`。
+  - 部署:`make deploy` 前端打包 31 files ✅;systemd restart ✅;首次 healthcheck 因 restart 窗口假失败,`sleep 3` 后 healthz=200;`make smoke` 11 端点 10/11 200(`/api/lhb/seats` 422 是 query 缺必填参数,非回归)。`/api/robots/strategies` 返回 `lhb_hot_money` + `lhb_institution` 两策略 + 默认参数,链路畅通。
+  - P16.1 回填:2025 全年完成(46536 seat_rows);2024/2023 + score 用 `setsid` 后台续跑中。`lhb_seats` 从 6666 → **84838 行,68 → 468 个交易日**。
