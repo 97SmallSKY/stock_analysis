@@ -6,6 +6,15 @@
 
 ---
 
+### 2026-04-20 · feature · Changelog 页面加「返回顶部」按钮 + 刷新按钮 icon 写法改良
+
+- 条目多时滚到底部可一键回顶(antd `a-back-top`,visibility-height=240)
+- 刷新按钮从 `:icon="h(ReloadOutlined)"` 改为 `<template #icon>` 插槽写法,更符合 antd 惯用法
+- 顺手去掉 `h` 的 import
+- vue-tsc clean,vitest 88 passed
+
+---
+
 ### 2026-04-20 · fix · `ingest_status.sh` 业务日志回退扫描(Top5)
 
 - 现象:循环 #4 巡检时,`p16_9_chain.log` 每分钟心跳 `waiting p16-kline-2025...` 让它成为「最活跃」日志,于是脚本只 grep 它 → 「阶段里程碑」「最近异常」两段全空,丢失 kline 真实进度

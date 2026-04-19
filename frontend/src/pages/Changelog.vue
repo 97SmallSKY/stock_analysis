@@ -17,7 +17,8 @@
           style="width: 220px"
           allow-clear
         />
-        <a-button :icon="h(ReloadOutlined)" size="small" :loading="loading" @click="load">
+        <a-button size="small" :loading="loading" @click="load">
+          <template #icon><ReloadOutlined /></template>
           刷新
         </a-button>
       </a-space>
@@ -57,11 +58,14 @@
         数据源:<code>docs/CHANGELOG.md</code> · 每次优化完成后追加条目(时间倒序)
       </a-typography-text>
     </div>
+
+    <!-- 返回顶部:条目多时滚到底部回弹一键 -->
+    <a-back-top :visibility-height="240" />
   </a-card>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, h } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { HistoryOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { fetchChangelog, CHANGELOG_TYPE_META, type ChangelogEntry } from '@/api/changelog'
 
