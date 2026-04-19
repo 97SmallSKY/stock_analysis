@@ -10,8 +10,12 @@ WorkingDirectory=/root/stock_analysis
 # 建议在 /etc/default/stock_analysis 里配置 DB_* / TUSHARE_TOKEN 等环境
 EnvironmentFile=-/etc/default/stock_analysis
 ExecStart=/bin/bash /root/stock_analysis/scripts/daily_update.sh
-StandardOutput=append:/root/stock_analysis/logs/daily_update.systemd.log
-StandardError=append:/root/stock_analysis/logs/daily_update.systemd.log
+# 兼容 systemd 239(CentOS 8):append: 语法需 240+,这里改用 journal。
+# daily_update.sh 内部已经用 tee -a 写 logs/daily_update.log,无需再复制一份。
+StandardOutput=journal
+StandardError=journal
+# journal 里靠 SyslogIdentifier 快速过滤:journalctl -t stock_daily
+SyslogIdentifier=stock_daily
 # 失败了 exit>0 由 systemctl 记状态,配套 OnFailure 可选
 TimeoutStartSec=3h
 

@@ -6,6 +6,15 @@
 
 ---
 
+### 2026-04-20 · fix · `daily.service` systemd 239 兼容性(CentOS 8)
+
+- `StandardOutput=append:/path` 需要 systemd 240+,CentOS 8 的 systemd 是 239 → 两行被 systemd 直接忽略
+- 现象:timer 已排程,但 service 跑完后日志丢失到 journal,看起来像「从未运行」
+- 修复:改为 `StandardOutput=journal` + `SyslogIdentifier=stock_daily`,daily_update.sh 内部 tee -a 已经负责写 `logs/daily_update.log`,journal 只做兜底
+- 验证:`journalctl -t stock_daily -n 100 --no-pager`
+
+---
+
 ### 2026-04-20 · feature · 新增「特性介绍」页面
 
 - 前端新增 `/changelog` 路由,顶部菜单「特性介绍」
