@@ -14,20 +14,39 @@ cd "$(dirname "$0")/.."
 
 FAIL=0
 WARN=0
+# 事故教训 (2026-04-20 #7): deploy.sh 刚 systemctl restart 完就跑 healthcheck,
+# uvicorn/PG 连接还没稳,导致一次性探测失败。重试 3 次 × 1s 间隔足以覆盖启动窗口。
+RETRY="${HEALTHCHECK_RETRY:-3}"
+RETRY_INTERVAL="${HEALTHCHECK_RETRY_INTERVAL:-1}"
+
+# _probe_with_retry <cmd...>: 成功一次就返回 0;全部失败返回最后一次退出码。
+_probe_with_retry() {
+    local i rc
+    for ((i=1; i<=RETRY; i++)); do
+        if "$@" >/dev/null 2>&1; then
+            return 0
+        fi
+        rc=$?
+        if [[ $i -lt $RETRY ]]; then
+            sleep "$RETRY_INTERVAL"
+        fi
+    done
+    return "${rc:-1}"
+}
 
 check() {
     local name="$1"; shift
-    if "$@" >/dev/null 2>&1; then
+    if _probe_with_retry "$@"; then
         echo "  ✓ $name"
     else
-        echo "  ✗ $name"
+        echo "  ✗ $name (重试 ${RETRY} 次仍失败)"
         FAIL=$((FAIL + 1))
     fi
 }
 
 warn_check() {
     local name="$1"; shift
-    if "$@" >/dev/null 2>&1; then
+    if _probe_with_retry "$@"; then
         echo "  ✓ $name"
     else
         echo "  ⚠ $name (软失败,不阻断)"

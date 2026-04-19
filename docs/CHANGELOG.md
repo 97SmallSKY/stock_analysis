@@ -6,6 +6,14 @@
 
 ---
 
+### 2026-04-20 · perf · `healthcheck.sh` 加重试(3×1s)消除 deploy 时序假失败
+
+- 现象:`deploy.sh` 末尾跑 healthcheck,systemctl 刚 restart 完 API,uvicorn/PG 还没稳,一次性探测报 `postgres ✗ / API ✗ / SPA ✗`,但几秒后手工 curl 全部正常
+- 修复:`check()` / `warn_check()` 共用 `_probe_with_retry`,默认 3 次 × 1s 间隔,可通过环境变量 `HEALTHCHECK_RETRY` / `HEALTHCHECK_RETRY_INTERVAL` 覆盖
+- 影响:deploy 日志不再假红,真实失败依旧会在 3 次都失败后报告
+
+---
+
 ### 2026-04-20 · fix · `daily.service` systemd 239 兼容性(CentOS 8)
 
 - `StandardOutput=append:/path` 需要 systemd 240+,CentOS 8 的 systemd 是 239 → 两行被 systemd 直接忽略
