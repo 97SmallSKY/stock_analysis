@@ -57,6 +57,15 @@
                   {{ record.score != null ? Number(record.score).toFixed(1) : '-' }}
                 </a-tag>
               </template>
+              <template v-else-if="column.key === 't1_pnl_pct' || column.key === 't5_pnl_pct'">
+                <span
+                  v-if="record[column.key] != null"
+                  :style="{ color: (record[column.key] ?? 0) >= 0 ? '#d4380d' : '#389e0d', fontFamily: 'SF Mono, Menlo, monospace' }"
+                >
+                  {{ ((record[column.key] ?? 0) * 100).toFixed(2) }}%
+                </span>
+                <span v-else style="color: rgba(0,0,0,.25)">-</span>
+              </template>
               <template v-else-if="column.key === 'score_detail'">
                 <a-tooltip v-if="record.score_detail" :title="formatDetail(record.score_detail)">
                   <a-button type="link" size="small">详情</a-button>
@@ -77,6 +86,22 @@
             </a-descriptions-item>
             <a-descriptions-item label="净买入合计">{{ fmtAmountWan(summary.netSum) }}</a-descriptions-item>
             <a-descriptions-item label="净买入均值">{{ fmtAmountWan(summary.netAvg) }}</a-descriptions-item>
+            <a-descriptions-item label="T+1 平均">
+              <span :style="{ color: (tnSummary.t1Avg ?? 0) >= 0 ? '#d4380d' : '#389e0d' }">
+                {{ tnSummary.t1Avg != null ? (tnSummary.t1Avg * 100).toFixed(2) + '%' : '-' }}
+              </span>
+              <span style="color: rgba(0,0,0,.45); margin-left:6px">
+                ({{ tnSummary.t1Cnt }} 有效)
+              </span>
+            </a-descriptions-item>
+            <a-descriptions-item label="T+1 胜率">
+              {{ tnSummary.t1WinRate != null ? (tnSummary.t1WinRate * 100).toFixed(1) + '%' : '-' }}
+            </a-descriptions-item>
+            <a-descriptions-item label="T+5 平均">
+              <span :style="{ color: (tnSummary.t5Avg ?? 0) >= 0 ? '#d4380d' : '#389e0d' }">
+                {{ tnSummary.t5Avg != null ? (tnSummary.t5Avg * 100).toFixed(2) + '%' : '-' }}
+              </span>
+            </a-descriptions-item>
           </a-descriptions>
           <a-divider style="margin: 12px 0;" />
           <div style="font-weight: 500; margin-bottom: 8px;">前 5 上榜原因</div>
@@ -159,6 +184,7 @@ import StockLink from '@/components/StockLink.vue'
 import {
   summarize, scoreBuckets, netBuckets, dailyBuckets,
 } from '@/utils/signals_agg'
+import { tnSummarize } from '@/utils/tn_summary'
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
@@ -195,6 +221,15 @@ const columns = [
     sorter: (a: LhbRow, b: LhbRow) => (a.score ?? -1) - (b.score ?? -1),
     defaultSortOrder: 'descend' as const,
   },
+  // P16.5: T+1 / T+5 次日收益 (lhb_tn_price JOIN)
+  {
+    title: 'T+1', key: 't1_pnl_pct', dataIndex: 't1_pnl_pct', width: 90, align: 'right' as const,
+    sorter: (a: LhbRow, b: LhbRow) => (a.t1_pnl_pct ?? -999) - (b.t1_pnl_pct ?? -999),
+  },
+  {
+    title: 'T+5', key: 't5_pnl_pct', dataIndex: 't5_pnl_pct', width: 90, align: 'right' as const,
+    sorter: (a: LhbRow, b: LhbRow) => (a.t5_pnl_pct ?? -999) - (b.t5_pnl_pct ?? -999),
+  },
   { title: '评分明细', key: 'score_detail', width: 90 },
 ]
 
@@ -223,6 +258,7 @@ async function load() {
       order_by: 'score',
       order_desc: true,
       limit: 500,
+      with_tn: true,
     })
     rows.value = data.rows ?? []
   } catch {
@@ -241,6 +277,7 @@ function onReset() {
 }
 
 const summary = computed(() => summarize(rows.value, 5))
+const tnSummary = computed(() => tnSummarize(rows.value))
 const dimScore = computed(() => scoreBuckets(rows.value))
 const dimNet = computed(() => netBuckets(rows.value))
 const dimDaily = computed(() => dailyBuckets(rows.value))

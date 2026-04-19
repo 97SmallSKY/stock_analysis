@@ -15,6 +15,11 @@ export interface LhbRow {
   net_amount: number | null
   score: number | null
   score_detail: Record<string, unknown> | null
+  // P16.5: 仅当 with_tn=true 时存在
+  t1_pnl_pct?: number | null
+  t1_limit_up?: boolean | null
+  t5_pnl_pct?: number | null
+  t5_high_pct?: number | null
 }
 
 export interface LhbListResp {
@@ -35,6 +40,8 @@ export interface LhbListParams {
   order_desc?: boolean
   limit?: number
   offset?: number
+  // P16.5: 透出 t1/t5 次日收益字段
+  with_tn?: boolean
 }
 
 export async function fetchLhb(params: LhbListParams = {}): Promise<LhbListResp> {
