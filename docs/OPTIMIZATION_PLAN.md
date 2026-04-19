@@ -176,3 +176,9 @@
   - 单点验证(2024 kline 有数据):`/api/lhb?ts_code=002920.SZ&date_from=20240419&with_tn=true` 返回 `t1_pnl_pct=-0.0355 / t5_pnl_pct=-0.0306` ✅。API 逻辑正常,只是数据缺。
   - 部署:deploy 无 restart(systemd unit 标记未安装自动跳过),手动 `systemctl restart stock_analysis_api` 后 healthz=200。冒烟通过。
   - P16.1 进度:2025+2024 seats 完成;2023 seats 跑中。**`lhb_seats` 从 6666 → 148,775 行 / 795 个交易日(从 68 日 → 全覆盖 2023-01-03 → 2026-04-17)**,数据层核心空洞修复完毕。
+
+- **R4 · 2026-04-20 23:50** P16.5c LhbPnl 多维 + P16.9 链式回填:
+  - P16.5c:`utils/pnl_agg.ts` `ReasonAgg` 扩 `avg_t1/avg_t5/t5_win_rate`;`aggregateByReason` 收集 TN 值按 Mean 聚合,`t5_win_rate = count(t5>0)/len(t5)`。LhbPnl.vue ECharts 从三柱升四柱(第 4 色 `#13c2c2` 青)+ 独立「原因维度 TN 明细表」(count / 平均评分 / 平均T+1 / 平均T+5 / T+5 胜率,数字 mono font + 涨跌染色)。fetchLhb 带 `with_tn=true`。vitest 14/82 tests(+3)。vue-tsc 零错。
+  - P16.9 链式:`systemd-run p16-chain.service` 循环检测 `p16-kline-2025` 状态,inactive 后自动跑 `lhb-tn-price --force 2025-01~10` + `score 2025-01~10` + 最终数据核对。脚本 `/root/stock_analysis/scripts/p16_9_chain.sh`,日志 `logs/p16_9_chain.log`,正在等待中。
+  - 部署:`make deploy` ✅(soft warning: unit 没通过 install_units.sh 注册,但 healthz/SPA 都 200);smoke 3 端点绿;`/api/lhb?ts_code=002920.SZ&with_tn=true` 返回 `t1_pnl_pct=-0.0355 / t5_pnl_pct=-0.0306` ✅。
+  - P16.8 进度:kline 回填 `1630 / 5504 = 30%`,akshare 限流拖慢,预计再要 1+ 小时。P16.9 会自动接管 chain。
