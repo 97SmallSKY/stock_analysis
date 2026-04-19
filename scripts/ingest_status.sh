@@ -88,8 +88,11 @@ else
   echo '============ 3. 最近 5 条异常(活跃日志,非进度条)============'
 fi
 if [ -n "$ERROR_LOG" ] && [ -f "$ERROR_LOG" ]; then
+  # 2026-04-20 #11: 用 sed 清掉所有 ANSI 转义序列(tqdm 进度条用 \x1b[A 刷屏,
+  # \x1b[0m 重置色,\x1b[K 清行等),之前只过滤了 |%|\[0m,不完整。
   grep -E "$_ERROR_RE" "$ERROR_LOG" \
-    | grep -v -E "%\||\[0m" \
+    | grep -v -E "%\|" \
+    | sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g' \
     | tail -5 || echo '  (clean)'
 else
   echo '  (clean)'

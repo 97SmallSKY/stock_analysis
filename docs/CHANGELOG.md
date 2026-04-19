@@ -6,6 +6,15 @@
 
 ---
 
+### 2026-04-20 · fix · `ingest_status.sh` 异常段 ANSI 转义清理
+
+- 现象:最近 5 条异常输出里有 tqdm 进度条残留的 `\x1b[A` 光标上移码,显示为 `[A[A[A2026-04-20 ERROR...`
+- 之前只过滤了 `%|` 和 `\[0m`,不完整
+- 修复:加 `sed -E 's/\x1b\[[0-9;]*[A-Za-z]//g'` 清掉所有 ANSI 转义序列
+- 纯监控输出改良,bash -n 通过
+
+---
+
 ### 2026-04-20 · perf · LHB API 加 `skip_total` 消除深分页 COUNT 开销
 
 - 体检发现 `GET /api/lhb?offset=10000` 耗时 2.2s,而首页仅 309ms
