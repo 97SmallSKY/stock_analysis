@@ -23,7 +23,7 @@
         </a-form-item>
         <a-form-item>
           <a-space>
-            <a-button type="primary" html-type="submit" :loading="store.loading">查询</a-button>
+            <a-button type="primary" :loading="store.loading" @click="onSearch">查询</a-button>
             <a-button @click="onReset">重置</a-button>
           </a-space>
         </a-form-item>
@@ -220,9 +220,13 @@ const page = computed(() => Math.floor((store.list.offset ?? 0) / (store.list.li
 const pageSize = computed(() => store.list.limit ?? 50)
 
 function buildParams(): Partial<LhbListParams> {
+  // BUG: form.range 可能是 ['YYYY-MM-DD', 'YYYY-MM-DD'] 或 [null, null];
+  // 后端 _to_iso 支持两种,但为了与 Signals/LhbPnl 一致统一转 YYYYMMDD.
+  const from = form.range?.[0]
+  const to = form.range?.[1]
   return {
-    date_from: form.range?.[0] || undefined,
-    date_to: form.range?.[1] || undefined,
+    date_from: from ? String(from).replace(/-/g, '') : undefined,
+    date_to: to ? String(to).replace(/-/g, '') : undefined,
     ts_code: form.ts_code || undefined,
     reason: form.reason || undefined,
     net_amount_min: form.net_amount_min ?? undefined,

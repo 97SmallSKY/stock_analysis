@@ -14,7 +14,7 @@
         </a-form-item>
         <a-form-item>
           <a-space>
-            <a-button type="primary" html-type="submit" :loading="loading">分析</a-button>
+            <a-button type="primary" :loading="loading" @click="onSearch">分析</a-button>
             <a-button @click="onReset">重置</a-button>
           </a-space>
         </a-form-item>
