@@ -6,6 +6,15 @@
 
 ---
 
+### 2026-04-20 · fix · Dashboard 涨跌家数卡片 fallback 改 `'-'` 避免误导
+
+- 体检发现 `market_sentiment` 表的 `up_count/down_count` 大量 NULL(任务 #11 待修)
+- 之前前端 fallback 是 `?? 0`,数据缺失时显示「0 / 0」,用户会误以为「今天全市场没涨跌」
+- 改为 `?? '-'`,清晰传递「数据缺失」语义
+- 涨停/跌停卡片 `limit_up_count/limit_down_count` 有真实数据,保持 `?? 0`
+
+---
+
 ### 2026-04-20 · feature · Changelog 页面加「返回顶部」按钮 + 刷新按钮 icon 写法改良
 
 - 条目多时滚到底部可一键回顶(antd `a-back-top`,visibility-height=240)

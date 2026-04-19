@@ -16,10 +16,12 @@
       <a-col :xs="12" :md="6">
         <a-card :bordered="false" class="kpi-card kpi-up" :loading="loadingFirst">
           <div class="kpi-title"><RiseOutlined /> 涨 / 跌</div>
+          <!-- 2026-04-20: market_sentiment 表的 up_count/down_count 暂未聚合(任务 #11),
+               fallback 从 0 改为 '-',避免误导用户「今天全市场没涨跌」 -->
           <div class="kpi-value">
-            <span class="up">{{ s?.up_count ?? 0 }}</span>
+            <span class="up">{{ s?.up_count ?? '-' }}</span>
             <span class="divider">/</span>
-            <span class="down">{{ s?.down_count ?? 0 }}</span>
+            <span class="down">{{ s?.down_count ?? '-' }}</span>
           </div>
           <div class="kpi-sub">均幅 {{ fmtPct(s?.avg_pct_change) }}</div>
         </a-card>
