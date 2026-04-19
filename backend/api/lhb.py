@@ -56,41 +56,50 @@ def list_lhb(
     }
     order_col = ORDER_COL.get(order_by, "trade_date")
 
+    # P10.1: 所有 where 过滤走主表 alias 'l.', 便于 LEFT JOIN stock_info 时
+    # 不触发列名歧义
     where = ["1=1"]
     params: list = []
     if date_from:
-        where.append("trade_date >= %s")
+        where.append("l.trade_date >= %s")
         params.append(_to_iso(date_from))
     if date_to:
-        where.append("trade_date <= %s")
+        where.append("l.trade_date <= %s")
         params.append(_to_iso(date_to))
     if ts_code:
-        where.append("ts_code = %s")
+        where.append("l.ts_code = %s")
         params.append(ts_code)
     if reason:
-        where.append("reason ILIKE %s")
+        where.append("l.reason ILIKE %s")
         params.append(f"%{reason}%")
     if net_amount_min is not None:
-        where.append("l_net >= %s")
+        where.append("l.l_net >= %s")
         params.append(net_amount_min)
     if score_min is not None:
-        where.append("score >= %s")
+        where.append("l.score >= %s")
         params.append(score_min)
 
     order_dir = "DESC" if order_desc else "ASC"
+    # P10.1: LEFT JOIN stock_info 补股票简称 name;stock_info 为空也不影响主查询
     sql = f"""
-        SELECT ts_code, trade_date, reason,
-               l_buy   AS buy_amount,
-               l_sell  AS sell_amount,
-               l_net   AS net_amount,
-               amount  AS turnover,
-               score, score_detail
-        FROM lhb_stock_daily
+        SELECT l.ts_code,
+               si.name AS name,
+               l.trade_date, l.reason,
+               l.l_buy   AS buy_amount,
+               l.l_sell  AS sell_amount,
+               l.l_net   AS net_amount,
+               l.amount  AS turnover,
+               l.score, l.score_detail
+        FROM lhb_stock_daily l
+        LEFT JOIN stock_info si ON si.ts_code = l.ts_code
         WHERE {' AND '.join(where)}
-        ORDER BY {order_col} {order_dir}, ts_code
+        ORDER BY l.{order_col} {order_dir}, l.ts_code
         LIMIT %s OFFSET %s
     """
-    count_sql = f"SELECT COUNT(*) FROM lhb_stock_daily WHERE {' AND '.join(where)}"
+    count_sql = (
+        f"SELECT COUNT(*) FROM lhb_stock_daily l "
+        f"WHERE {' AND '.join(where)}"
+    )
     try:
         with pg_conn() as conn, conn.cursor() as cur:
             cur.execute(count_sql, params)
@@ -115,22 +124,26 @@ def list_seats(
     direction: Optional[str] = Query(None, pattern="^(BUY|SELL)$"),
     limit: int = Query(200, ge=1, le=2000),
 ):
-    """席位明细 lhb_seats."""
-    where = ["trade_date = %s"]
+    """席位明细 lhb_seats. P10.1 补 name(股票简称)."""
+    where = ["s.trade_date = %s"]
     params: list = [_to_iso(trade_date)]
     if ts_code:
-        where.append("ts_code = %s")
+        where.append("s.ts_code = %s")
         params.append(ts_code)
     if direction:
-        where.append("direction = %s")
+        where.append("s.direction = %s")
         params.append(direction)
     # 注:lhb_seats.rank 列名与 SQL 关键字同名,必须用双引号转义
     sql = f"""
-        SELECT ts_code, trade_date, broker_name, direction,
-               buy_amount, sell_amount, net_amount, "rank" AS rank_no
-        FROM lhb_seats
+        SELECT s.ts_code,
+               si.name AS name,
+               s.trade_date, s.broker_name, s.direction,
+               s.buy_amount, s.sell_amount, s.net_amount,
+               s."rank" AS rank_no
+        FROM lhb_seats s
+        LEFT JOIN stock_info si ON si.ts_code = s.ts_code
         WHERE {' AND '.join(where)}
-        ORDER BY net_amount DESC NULLS LAST
+        ORDER BY s."rank" ASC NULLS LAST, s.net_amount DESC NULLS LAST
         LIMIT %s
     """
     try:

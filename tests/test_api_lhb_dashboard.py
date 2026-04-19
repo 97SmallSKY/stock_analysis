@@ -92,12 +92,12 @@ def client_factory(monkeypatch):
 # /api/lhb — 列表
 # ---------------------------------------------------------------------
 def test_list_lhb_pagination(monkeypatch):
-    # 预设: count=3 + 3 行
+    # 预设: count=3 + 3 行;P10.1 后 SQL JOIN stock_info, cols 增加 name
     rows = [
-        ("000001.SZ", dt.date(2026, 4, 18), "日振幅值达到7%",
+        ("000001.SZ", "平安银行", dt.date(2026, 4, 18), "日振幅值达到7%",
          1000.0, 500.0, 500.0, 3000.0, 8.5, {"x": 1}),
     ] * 3
-    cols = ["ts_code", "trade_date", "reason",
+    cols = ["ts_code", "name", "trade_date", "reason",
             "buy_amount", "sell_amount", "net_amount", "turnover",
             "score", "score_detail"]
     canned = [  # 一次 pg_conn(), 内部两次 cursor()
@@ -118,6 +118,7 @@ def test_list_lhb_pagination(monkeypatch):
     assert body["total"] == 3
     assert len(body["rows"]) == 3
     assert body["rows"][0]["ts_code"] == "000001.SZ"
+    assert body["rows"][0]["name"] == "平安银行"  # P10.1
     assert body["rows"][0]["trade_date"] == "2026-04-18"  # ISO 化
 
 
@@ -133,11 +134,12 @@ def test_list_lhb_bad_date():
 
 
 def test_list_seats(monkeypatch):
+    # P10.1 后 cols 增加 name
     rows = [
-        ("000001.SZ", dt.date(2026, 4, 18), "国泰君安上海分公司",
-         "BUY", 1e8, 0, 1e8, 1),
+        ("000001.SZ", "平安银行", dt.date(2026, 4, 18),
+         "国泰君安上海分公司", "BUY", 1e8, 0, 1e8, 1),
     ]
-    cols = ["ts_code", "trade_date", "broker_name", "direction",
+    cols = ["ts_code", "name", "trade_date", "broker_name", "direction",
             "buy_amount", "sell_amount", "net_amount", "rank_no"]
     canned = [[(rows, cols)]]
     monkeypatch.setattr(
@@ -181,8 +183,11 @@ def test_dashboard_minimal(monkeypatch):
     sent_cols = ["trade_date", "total_stocks", "up_count", "down_count",
                  "limit_up_count", "limit_down_count",
                  "avg_pct_change", "sentiment_score"]
-    lhb_rows = [("000001.SZ", dt.date(2026, 4, 18), "r", 100.0, 8.0)]
-    lhb_cols = ["ts_code", "trade_date", "reason", "net_amount", "score"]
+    # P10.1 dashboard top_lhb SELECT 已加 name + buy/sell_amount
+    lhb_rows = [("000001.SZ", "平安银行", dt.date(2026, 4, 18), "r",
+                 100.0, 120.0, 20.0, 8.0)]
+    lhb_cols = ["ts_code", "name", "trade_date", "reason",
+                "net_amount", "buy_amount", "sell_amount", "score"]
 
     canned = [
         [([sent_row], sent_cols)],

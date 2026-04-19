@@ -46,7 +46,13 @@
     </div>
 
     <a-spin :spinning="loading" tip="拉取行情中...">
-      <div v-if="emptyReason" class="empty-box">
+      <div v-if="emptyReason && tab === 'minute'" class="empty-box minute-empty" data-test="minute-empty">
+        <div class="big-none">无</div>
+        <div class="big-none-sub">{{ emptyTitle }}</div>
+        <div class="empty-sub">{{ emptyText }}</div>
+        <a-button v-if="emptyReason==='out_of_range'" size="small" @click="tab='daily';load()">返回日K</a-button>
+      </div>
+      <div v-else-if="emptyReason" class="empty-box">
         <a-empty :image="simpleImage" :description="null">
           <template #description>
             <div class="empty-title">{{ emptyTitle }}</div>
@@ -287,6 +293,19 @@ watch(
   border-radius: 6px; overflow: hidden;
 }
 .empty-box { padding: 80px 0; }
+.minute-empty { text-align: center; }
+.big-none {
+  font-size: 120px;
+  font-weight: 200;
+  color: #bfbfbf;
+  line-height: 1;
+  letter-spacing: 8px;
+  margin-bottom: 12px;
+  user-select: none;
+}
+.big-none-sub {
+  font-size: 14px; color: #595959; font-weight: 500; margin-bottom: 6px;
+}
 .empty-title {
   font-size: 14px; color: #595959; font-weight: 500; margin-bottom: 4px;
 }

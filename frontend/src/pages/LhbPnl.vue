@@ -38,7 +38,7 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'ts_code'">
-                <StockLink :code="record.ts_code" />
+                <StockLink :code="record.ts_code" :name="record.name" />
               </template>
               <template v-else-if="['net_sum','buy_sum','sell_sum'].includes(column.key)">
                 <span :style="column.key === 'net_sum' ? { color: record.net_sum >= 0 ? '#d4380d' : '#389e0d' } : {}">
@@ -63,7 +63,7 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'ts_code'">
-                <StockLink :code="record.ts_code" />
+                <StockLink :code="record.ts_code" :name="record.name" />
               </template>
               <template v-else-if="['net_sum','buy_sum','sell_sum'].includes(column.key)">
                 <span :style="column.key === 'net_sum' ? { color: record.net_sum >= 0 ? '#d4380d' : '#389e0d' } : {}">
@@ -112,6 +112,7 @@ interface ReasonAgg {
 }
 interface StockAgg {
   ts_code: string
+  name: string | null
   net_sum: number
   buy_sum: number
   sell_sum: number
@@ -121,7 +122,7 @@ interface StockAgg {
 
 const stockColumns = [
   {
-    title: '股票', dataIndex: 'ts_code', key: 'ts_code', width: 110,
+    title: '股票', dataIndex: 'ts_code', key: 'ts_code', width: 180,
     sorter: (a: StockAgg, b: StockAgg) => a.ts_code.localeCompare(b.ts_code),
   },
   {
@@ -193,9 +194,10 @@ const reasonAgg = computed<ReasonAgg[]>(() => {
 })
 
 const stockAgg = computed<StockAgg[]>(() => {
-  const m = new Map<string, { buy: number; sell: number; net: number; cnt: number; scores: number[] }>()
+  const m = new Map<string, { name: string | null; buy: number; sell: number; net: number; cnt: number; scores: number[] }>()
   for (const r of rows.value) {
-    const cur = m.get(r.ts_code) ?? { buy: 0, sell: 0, net: 0, cnt: 0, scores: [] }
+    const cur = m.get(r.ts_code) ?? { name: null, buy: 0, sell: 0, net: 0, cnt: 0, scores: [] }
+    if (!cur.name && r.name) cur.name = r.name
     cur.buy += r.buy_amount ?? 0
     cur.sell += r.sell_amount ?? 0
     cur.net += r.net_amount ?? 0
@@ -205,6 +207,7 @@ const stockAgg = computed<StockAgg[]>(() => {
   }
   return [...m.entries()].map(([ts_code, v]) => ({
     ts_code,
+    name: v.name,
     buy_sum: v.buy,
     sell_sum: v.sell,
     net_sum: v.net,

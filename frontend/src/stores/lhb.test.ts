@@ -62,15 +62,22 @@ describe('useLhbStore', () => {
   })
 
   it('loadSeats 写入 seats, 切换 seatsLoading', async () => {
+    // P10.1: 后端 seats 字段对齐到 broker_name / rank_no / name / BUY
     fetchLhbSeatsMock.mockResolvedValue({
       rows: [
-        { ts_code: 'X', trade_date: '2025-01-10', direction: 'buy', seat_name: 'S1', buy_amount: 1, sell_amount: 0, net_amount: 1, rank: 1 },
+        {
+          ts_code: 'X', name: '测试股份', trade_date: '2025-01-10',
+          direction: 'BUY', broker_name: 'S1',
+          buy_amount: 1, sell_amount: 0, net_amount: 1, rank_no: 1,
+        },
       ],
     })
     const store = useLhbStore()
     await store.loadSeats({ trade_date: '2025-01-10', ts_code: 'X' })
     expect(store.seats).toHaveLength(1)
-    expect(store.seats[0].seat_name).toBe('S1')
+    expect(store.seats[0].broker_name).toBe('S1')
+    expect(store.seats[0].rank_no).toBe(1)
+    expect(store.seats[0].name).toBe('测试股份')
     expect(store.seatsLoading).toBe(false)
   })
 })

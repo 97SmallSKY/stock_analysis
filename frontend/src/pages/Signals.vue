@@ -44,7 +44,7 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'ts_code'">
-                <StockLink :code="record.ts_code" />
+                <StockLink :code="record.ts_code" :name="record.name" />
               </template>
               <template v-else-if="column.key === 'trade_date'">{{ fmtDate(record.trade_date) }}</template>
               <template v-else-if="column.key === 'net_amount'">
@@ -118,7 +118,7 @@ const loading = ref(false)
 
 const columns = [
   {
-    title: '股票', dataIndex: 'ts_code', key: 'ts_code', width: 110,
+    title: '股票', dataIndex: 'ts_code', key: 'ts_code', width: 180,
     sorter: (a: LhbRow, b: LhbRow) => a.ts_code.localeCompare(b.ts_code),
   },
   {

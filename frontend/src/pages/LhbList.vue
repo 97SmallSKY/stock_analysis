@@ -74,8 +74,8 @@
         >
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'direction'">
-              <a-tag :color="record.direction === 'buy' ? 'red' : 'green'">
-                {{ record.direction === 'buy' ? '买入' : '卖出' }}
+              <a-tag :color="record.direction === 'BUY' ? 'red' : 'green'">
+                {{ record.direction === 'BUY' ? '买入' : '卖出' }}
               </a-tag>
             </template>
             <template v-else-if="['buy_amount','sell_amount','net_amount'].includes(column.key)">
@@ -98,7 +98,7 @@ import {
 } from 'ag-grid-community'
 import 'ag-grid-community/styles/ag-theme-quartz.css'
 import { useLhbStore } from '@/stores/lhb'
-import type { LhbRow, LhbListParams } from '@/api/lhb'
+import type { LhbRow, LhbListParams, LhbSeatRow } from '@/api/lhb'
 import { fmtAmount, fmtPct, fmtDate } from '@/utils/format'
 import { useStockDrill } from '@/composables/useStockDrill'
 
@@ -127,10 +127,16 @@ const gridApi = ref<GridApi | null>(null)
 
 const columnDefs = computed<ColDef<LhbRow>[]>(() => [
   {
-    headerName: '股票', field: 'ts_code', width: 120, pinned: 'left',
+    headerName: '股票', field: 'ts_code', width: 200, pinned: 'left',
     filter: 'agTextColumnFilter',
-    cellRenderer: (p: { value: string }) =>
-      `<a class="stock-link" data-ts="${p.value}">${p.value}</a>`,
+    cellRenderer: (p: { value: string; data: LhbRow }) => {
+      const code = p.value ?? ''
+      const name = p.data?.name ?? ''
+      const nameHtml = name
+        ? `<span style="color:#595959;font-weight:500;margin-left:6px;">${name}</span>`
+        : ''
+      return `<a class="stock-link" data-ts="${code}" style="color:#1677ff;font-family:'SF Mono',Menlo,monospace;">${code}</a>${nameHtml}`
+    },
     onCellClicked: (ev: { value: string }) => {
       if (ev.value) drill.open(String(ev.value))
     },
@@ -232,20 +238,44 @@ const drawerOpen = ref(false)
 const drawerRow = ref<LhbRow | null>(null)
 const drawerTitle = computed(() => {
   if (!drawerRow.value) return '席位明细'
-  return `席位明细 · ${drawerRow.value.ts_code} · ${fmtDate(drawerRow.value.trade_date)}`
+  const r = drawerRow.value
+  const nameTag = r.name ? ` ${r.name}` : ''
+  return `席位明细 · ${r.ts_code}${nameTag} · ${fmtDate(r.trade_date)}`
 })
 
+// P10.4: 对齐后端实际字段 rank_no / broker_name, 金额走 fmtAmount 自动万/亿
 const seatColumns = [
-  { title: '方向', dataIndex: 'direction', key: 'direction', width: 70 },
-  { title: '排名', dataIndex: 'rank', key: 'rank', width: 70 },
-  { title: '席位', dataIndex: 'seat_name', key: 'seat_name', ellipsis: true },
-  { title: '买入', dataIndex: 'buy_amount', key: 'buy_amount', width: 110, align: 'right' },
-  { title: '卖出', dataIndex: 'sell_amount', key: 'sell_amount', width: 110, align: 'right' },
-  { title: '净额', dataIndex: 'net_amount', key: 'net_amount', width: 110, align: 'right' },
+  {
+    title: '方向', dataIndex: 'direction', key: 'direction', width: 70,
+    sorter: (a: LhbSeatRow, b: LhbSeatRow) => a.direction.localeCompare(b.direction),
+  },
+  {
+    title: '排位', dataIndex: 'rank_no', key: 'rank_no', width: 70, align: 'right' as const,
+    sorter: (a: LhbSeatRow, b: LhbSeatRow) => (a.rank_no ?? 99) - (b.rank_no ?? 99),
+    defaultSortOrder: 'ascend' as const,
+  },
+  {
+    title: '席位名称', dataIndex: 'broker_name', key: 'broker_name', ellipsis: true,
+    sorter: (a: LhbSeatRow, b: LhbSeatRow) =>
+      (a.broker_name ?? '').localeCompare(b.broker_name ?? ''),
+  },
+  {
+    title: '买入', dataIndex: 'buy_amount', key: 'buy_amount', width: 110, align: 'right' as const,
+    sorter: (a: LhbSeatRow, b: LhbSeatRow) => (a.buy_amount ?? 0) - (b.buy_amount ?? 0),
+  },
+  {
+    title: '卖出', dataIndex: 'sell_amount', key: 'sell_amount', width: 110, align: 'right' as const,
+    sorter: (a: LhbSeatRow, b: LhbSeatRow) => (a.sell_amount ?? 0) - (b.sell_amount ?? 0),
+  },
+  {
+    title: '净额', dataIndex: 'net_amount', key: 'net_amount', width: 110, align: 'right' as const,
+    sorter: (a: LhbSeatRow, b: LhbSeatRow) => (a.net_amount ?? 0) - (b.net_amount ?? 0),
+    defaultSortOrder: 'descend' as const,
+  },
 ]
 
-function seatRowKey(r: { seat_name: string; direction: string; rank: number | null }) {
-  return `${r.direction}-${r.rank ?? 0}-${r.seat_name}`
+function seatRowKey(r: LhbSeatRow) {
+  return `${r.direction}-${r.rank_no ?? 0}-${r.broker_name}`
 }
 
 function onRowClick(ev: RowClickedEvent<LhbRow>) {

@@ -4,6 +4,7 @@ import http from './http'
 export interface LhbRow {
   id?: number
   ts_code: string
+  name: string | null    // P10.1 JOIN stock_info
   trade_date: string | null
   reason: string | null
   close: number | null
@@ -43,13 +44,14 @@ export async function fetchLhb(params: LhbListParams = {}): Promise<LhbListResp>
 
 export interface LhbSeatRow {
   ts_code: string
+  name: string | null   // P10.1 JOIN stock_info
   trade_date: string | null
-  direction: 'buy' | 'sell' | string
-  seat_name: string
+  direction: 'BUY' | 'SELL' | string
+  broker_name: string   // 对齐后端实际字段名
   buy_amount: number | null
   sell_amount: number | null
   net_amount: number | null
-  rank: number | null
+  rank_no: number | null  // 对齐后端 AS 别名 (SQL 'rank' 是关键字)
 }
 
 export interface LhbSeatParams {

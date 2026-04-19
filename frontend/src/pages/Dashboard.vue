@@ -39,7 +39,7 @@
         <a-card :bordered="false" class="kpi-card kpi-top1" :loading="loadingFirst">
           <div class="kpi-title"><CrownOutlined /> 今日龙虎榜 Top1</div>
           <div class="kpi-value">
-            <StockLink v-if="top1" :code="top1.ts_code" />
+            <StockLink v-if="top1" :code="top1.ts_code" :name="top1.name" />
             <span v-else>-</span>
           </div>
           <div class="kpi-sub">
@@ -88,7 +88,7 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'ts_code'">
-                <StockLink :code="record.ts_code" />
+                <StockLink :code="record.ts_code" :name="record.name" />
               </template>
               <template v-else-if="column.key === 'trade_date'">
                 {{ fmtDate(record.trade_date) }}
@@ -169,7 +169,7 @@ const loadingFirst = computed(() => store.loading && !store.data)
 
 const lhbColumns = [
   {
-    title: '股票', dataIndex: 'ts_code', key: 'ts_code', width: 110,
+    title: '股票', dataIndex: 'ts_code', key: 'ts_code', width: 180,
     sorter: (a: TopLhbRow, b: TopLhbRow) => a.ts_code.localeCompare(b.ts_code),
   },
   {

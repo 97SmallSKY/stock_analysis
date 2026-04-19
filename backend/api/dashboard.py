@@ -68,13 +68,15 @@ def _latest_sentiment() -> Optional[dict]:
 def _top_lhb(top_n: int) -> list[dict]:
     try:
         with pg_conn() as conn, conn.cursor() as cur:
+            # P10.1 JOIN stock_info 补股票简称 name
             cur.execute(
-                """SELECT ts_code, trade_date, reason,
-                          l_net AS net_amount, l_buy AS buy_amount,
-                          l_sell AS sell_amount, score
-                   FROM lhb_stock_daily
-                   WHERE trade_date = (SELECT MAX(trade_date) FROM lhb_stock_daily)
-                   ORDER BY score DESC NULLS LAST, l_net DESC NULLS LAST
+                """SELECT l.ts_code, si.name AS name, l.trade_date, l.reason,
+                          l.l_net AS net_amount, l.l_buy AS buy_amount,
+                          l.l_sell AS sell_amount, l.score
+                   FROM lhb_stock_daily l
+                   LEFT JOIN stock_info si ON si.ts_code = l.ts_code
+                   WHERE l.trade_date = (SELECT MAX(trade_date) FROM lhb_stock_daily)
+                   ORDER BY l.score DESC NULLS LAST, l.l_net DESC NULLS LAST
                    LIMIT %s""",
                 (top_n,),
             )

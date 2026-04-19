@@ -14,9 +14,12 @@ export interface Sentiment {
 
 export interface TopLhbRow {
   ts_code: string
+  name: string | null    // P10.1 JOIN stock_info
   trade_date: string | null
   reason: string | null
   net_amount: number | null
+  buy_amount: number | null
+  sell_amount: number | null
   score: number | null
 }
 
