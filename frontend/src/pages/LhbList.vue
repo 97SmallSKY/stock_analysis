@@ -138,7 +138,7 @@ const gridApi = ref<GridApi | null>(null)
 const columnDefs = computed<ColDef<LhbRow>[]>(() => [
   {
     headerName: '股票', field: 'ts_code', width: 200, pinned: 'left',
-    filter: 'agTextColumnFilter',
+    filter: false,  // P18.2 关闭列筛选,交给顶部 a-form 做全库筛选
     cellRenderer: (p: { value: string; data: LhbRow }) => {
       const code = p.value ?? ''
       const name = p.data?.name ?? ''
@@ -211,9 +211,11 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
   },
 ])
 
+// P18.2: 关闭 floatingFilter。AG Grid 客户端筛选只作用于当前页(后端分页 + clientSide rowModel)
+// 体感像「全库筛选不生效」。全库筛选统一由顶部 a-form 驱动。
 const defaultColDef: ColDef = {
   resizable: true, sortable: true,
-  filter: true, floatingFilter: true,
+  filter: false, floatingFilter: false,
 }
 
 const page = computed(() => Math.floor((store.list.offset ?? 0) / (store.list.limit ?? 50)) + 1)

@@ -67,9 +67,12 @@
                 <span v-else style="color: rgba(0,0,0,.25)">-</span>
               </template>
               <template v-else-if="column.key === 'score_detail'">
-                <a-tooltip v-if="record.score_detail" :title="formatDetail(record.score_detail)">
+                <a-popover v-if="record.score_detail" placement="left" :overlay-style="{ maxWidth: '360px' }">
+                  <template #content>
+                    <pre class="score-detail-pre">{{ formatDetail(record.score_detail) }}</pre>
+                  </template>
                   <a-button type="link" size="small">详情</a-button>
-                </a-tooltip>
+                </a-popover>
                 <span v-else>-</span>
               </template>
             </template>
@@ -185,6 +188,7 @@ import {
   summarize, scoreBuckets, netBuckets, dailyBuckets,
 } from '@/utils/signals_agg'
 import { tnSummarize } from '@/utils/tn_summary'
+import { formatScoreDetail } from '@/utils/score_detail'
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
@@ -242,10 +246,8 @@ function scoreColor(s: number | null) {
   return 'default'
 }
 
-function formatDetail(d: Record<string, unknown> | null) {
-  if (!d) return ''
-  return Object.entries(d).map(([k, v]) => `${k}: ${v}`).join('\n')
-}
+// P18.2: 改用递归格式化避免嵌套对象显示 [object Object]
+const formatDetail = (d: Record<string, unknown> | null) => formatScoreDetail(d)
 
 async function load() {
   loading.value = true
@@ -317,4 +319,18 @@ onMounted(load)
   color: #262626; font-weight: 500;
 }
 .daily-rows { max-height: 220px; overflow-y: auto; }
+</style>
+
+<style>
+/* 非 scoped: popover 内容在 teleport 节点里, scoped class 不能穿透 */
+.score-detail-pre {
+  margin: 0;
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #333;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-width: 340px;
+}
 </style>
