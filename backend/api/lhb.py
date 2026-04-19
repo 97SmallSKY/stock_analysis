@@ -43,6 +43,10 @@ def list_lhb(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     with_tn: bool = Query(False, description="P16.5: 透出 T+1/T+5 收益字段"),
+    skip_total: bool = Query(
+        False,
+        description="P18.11: 跳过 COUNT(*) 加速深分页(total 返回 -1);前端翻页场景第 2 页后可启用",
+    ),
 ):
     """分页查询龙虎榜主表 lhb_stock_daily.
 
@@ -115,8 +119,12 @@ def list_lhb(
     )
     try:
         with pg_conn() as conn, conn.cursor() as cur:
-            cur.execute(count_sql, params)
-            total = cur.fetchone()[0]
+            # P18.11: skip_total=True 时不跑 COUNT,深分页/翻页场景可 5~10x 加速
+            if skip_total:
+                total = -1
+            else:
+                cur.execute(count_sql, params)
+                total = cur.fetchone()[0]
             cur.execute(sql, params + [limit, offset])
             cols = [c.name for c in cur.description]
             rows = [dict(zip(cols, r)) for r in cur.fetchall()]

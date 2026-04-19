@@ -6,6 +6,17 @@
 
 ---
 
+### 2026-04-20 · perf · LHB API 加 `skip_total` 消除深分页 COUNT 开销
+
+- 体检发现 `GET /api/lhb?offset=10000` 耗时 2.2s,而首页仅 309ms
+- 瓶颈:每次查询都跑 `COUNT(*) FROM lhb_stock_daily`(52K 行)+ `OFFSET 10000` 跳行
+- 修复:新增 `skip_total: bool = False` 参数,True 时 `total` 返回 `-1`,不跑 COUNT
+- 使用建议:前端翻页场景第 2 页后启用,即可 5~10x 加速
+- 默认 False,**向后兼容**,不影响现有前端调用
+- 单测 +2 case (skip_total=true / default false),pytest 756 passed,覆盖率 75.81%
+
+---
+
 ### 2026-04-20 · fix · Dashboard 涨跌家数卡片 fallback 改 `'-'` 避免误导
 
 - 体检发现 `market_sentiment` 表的 `up_count/down_count` 大量 NULL(任务 #11 待修)

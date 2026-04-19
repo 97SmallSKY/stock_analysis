@@ -213,3 +213,54 @@ def test_dashboard_minimal(monkeypatch):
     assert len(body["top_lhb"]) == 1
     assert body["top_lhb"][0]["ts_code"] == "000001.SZ"
     assert body["adapters"] == []
+
+
+# ---------------------------------------------------------------------
+# P18.11: skip_total 消除深分页 COUNT 开销
+# ---------------------------------------------------------------------
+def test_list_lhb_skip_total(monkeypatch):
+    """skip_total=true 时应返回 total=-1,且不触发 COUNT SQL。"""
+    rows = [
+        ("000001.SZ", "平安银行", dt.date(2026, 4, 18), "xxx",
+         1000.0, 500.0, 500.0, 3000.0, 8.5, {}),
+    ] * 2
+    cols = ["ts_code", "name", "trade_date", "reason",
+            "buy_amount", "sell_amount", "net_amount", "turnover",
+            "score", "score_detail"]
+    # skip_total=True 时只应有 1 次 cursor.execute(数据查询),不跑 count。
+    # 这里 canned 只放 1 条,若代码错误地跑了 count 会导致 rows 数据错位或空。
+    canned = [[(rows, cols)]]
+    monkeypatch.setattr("backend.api.lhb.pg_conn", _make_pg_conn(canned))
+    from backend.api.lhb import router as lhb_router
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.include_router(lhb_router, prefix="/api/lhb")
+    c = TestClient(app)
+
+    r = c.get("/api/lhb?limit=2&offset=0&skip_total=true")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == -1  # P18.11 语义:跳过 count
+    assert len(body["rows"]) == 2
+    assert body["rows"][0]["ts_code"] == "000001.SZ"
+
+
+def test_list_lhb_skip_total_default_false(monkeypatch):
+    """不传 skip_total 应保持旧行为(真实 count)。"""
+    rows = [("000001.SZ", "平安银行", dt.date(2026, 4, 18), "xxx",
+             1.0, 1.0, 0.0, 0.0, 5.0, {})]
+    cols = ["ts_code", "name", "trade_date", "reason",
+            "buy_amount", "sell_amount", "net_amount", "turnover",
+            "score", "score_detail"]
+    # 默认路径:先 count 再 select
+    canned = [[([(42,)], ["count"]), (rows, cols)]]
+    monkeypatch.setattr("backend.api.lhb.pg_conn", _make_pg_conn(canned))
+    from backend.api.lhb import router as lhb_router
+    from fastapi import FastAPI
+    app = FastAPI()
+    app.include_router(lhb_router, prefix="/api/lhb")
+    c = TestClient(app)
+
+    r = c.get("/api/lhb?limit=5")
+    assert r.status_code == 200
+    assert r.json()["total"] == 42
