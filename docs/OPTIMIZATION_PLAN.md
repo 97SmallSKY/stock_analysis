@@ -151,7 +151,8 @@
 
 ## 五、问题追踪(审计中发现的 bug)
 
-> 按回合追加。
+- **BUG #1 · R3 发现** `kline_daily` 完全缺 **2025-01-01 ~ 2025-10-31** 整 10 个月(`count(*)`月度统计显示 2024 年每月有 ~22 日 × 3300 股 ~ 7 万行,但 2025-01~10 全部为 0)。此外 2024 个别日期也有缺失(示例:`000737.SZ @ 2024-03-29`)。**直接后果**:`lhb_tn_price` 回填 78700 行(远低于预期 17 万),`/api/lhb?with_tn=true` 大多返回 null。
+  - 处理:P16.8 启动 `systemd-run p16-kline-2025.service ingest kline --from 20250101 --to 20251031 --workers 4`。akshare 限流 90/min → 每批 ~200s 冷却,预计 1-2 小时。跑完后需重跑 `make lhb-tn-price FROM=20250101 TO=20251031`。
 
 ## 六、回合审计(每 20 分钟一条)
 
@@ -167,4 +168,11 @@
   - P16.5 多维指标:发现 `lhb_tn_price` 表早就存在(schema 第 482 行)但 0 行数据。新建 `backend/domain/lhb/tn_price_backfill.py`,纯 SQL CTE + window function 一次 upsert 全部 N=1/2/3/5/10 组合;CLI `python -m backend.cli lhb-tn-price`;Makefile `make lhb-tn-price FROM= TO=`;9 case 单测覆盖日期解析+参数化+默认 N_days。`/api/lhb` 加 `with_tn=true` query 参数,透出 `t1_pnl_pct / t1_limit_up / t5_pnl_pct / t5_high_pct` 四字段,LEFT JOIN `lhb_tn_price` 两次(tn1/tn5)。默认行为不变。
   - 测试:`pytest 747 passed`(+9)。vitest/vue-tsc 本轮未改前端逻辑无回归。
   - 部署:`make deploy` ✅ → restart 窗口假失败 → `sleep 4` 后 healthz=200;`/api/lhb?with_tn=true` 200 返回含 4 个新 key(实际值 null 因 tn_price 尚未回填);冒烟通过。systemd transient unit `p16-tnprice.service` 启动 2024-01-01 → 2026-04-17 全量回填(并行跑,不影响 P16.1)。
+
+- **R3 · 2026-04-20 23:40** P16.5b 前端消费 TN + P16.8 kline 缺口修复:
+  - P16.5b:`LhbRow` 加 TN 四字段 optional; `LhbListParams.with_tn`;Signals 表格加「T+1」「T+5」列(`fontFamily:mono` + 涨跌染色);右侧统计加「T+1 平均」「T+1 胜率」「T+5 平均」(有效样本数提示);抽 `utils/tn_summary.ts` + 5 case 单测。`vitest 14/79 tests` 绿。
+  - **审计发现重大 BUG #1**:TN 回填只 78700 行(预期 17w+)。根因:`kline_daily` 完全缺 2025-01-01 ~ 2025-10-31。这直接导致 TN SQL 的 kline JOIN 拿不到 T+N 行。
+  - P16.8:启动 `p16-kline-2025.service systemd unit`(workers=4) 后台回填 2025 前 10 个月。被 akshare 限流每分钟 90 次,每批冷却 ~200s,预计 1-2 小时。跑完需重跑 `make lhb-tn-price FROM=20250101 TO=20251031` + 可能重跑 score。
+  - 单点验证(2024 kline 有数据):`/api/lhb?ts_code=002920.SZ&date_from=20240419&with_tn=true` 返回 `t1_pnl_pct=-0.0355 / t5_pnl_pct=-0.0306` ✅。API 逻辑正常,只是数据缺。
+  - 部署:deploy 无 restart(systemd unit 标记未安装自动跳过),手动 `systemctl restart stock_analysis_api` 后 healthz=200。冒烟通过。
   - P16.1 进度:2025+2024 seats 完成;2023 seats 跑中。**`lhb_seats` 从 6666 → 148,775 行 / 795 个交易日(从 68 日 → 全覆盖 2023-01-03 → 2026-04-17)**,数据层核心空洞修复完毕。

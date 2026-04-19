@@ -39,3 +39,4 @@ frontend/.vite/
 # Tooling
 .codeflicker/
 .direnv/
+.claude/
