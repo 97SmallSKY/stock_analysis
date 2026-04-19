@@ -37,6 +37,12 @@
               {{ record.enabled ? '启用' : '禁用' }}
             </a-tag>
           </template>
+          <template v-else-if="column.key === 'strategy_name'">
+            <a-tag v-if="record.strategy_name" color="purple">
+              {{ record.strategy_name }}
+            </a-tag>
+            <span v-else style="color: rgba(0,0,0,.35)">未绑定</span>
+          </template>
           <template v-else-if="column.key === 'cash' || column.key === 'total_assets'">
             {{ fmtAmount(record[column.key]) }}
           </template>
@@ -149,6 +155,16 @@
             style="width:100%"
           />
         </a-form-item>
+        <a-form-item label="策略" help="留空则机器人无策略,不会自动选股">
+          <a-select
+            v-model:value="createForm.strategy_name"
+            allow-clear
+            placeholder="-- 不绑定 --"
+            style="width:100%"
+            :options="strategyOptions"
+            :loading="strategiesLoading"
+          />
+        </a-form-item>
         <a-form-item label="立即启用灰度">
           <a-switch v-model:checked="createForm.enabled" />
         </a-form-item>
@@ -158,12 +174,12 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Empty, message } from 'ant-design-vue'
 import {
   listRobots, pauseRobot, resumeRobot, enableRobot, disableRobot,
-  createRobot,
-  type RobotSnapshot, type RobotPosition,
+  createRobot, listStrategies,
+  type RobotSnapshot, type RobotPosition, type StrategyMeta,
 } from '@/api/robots'
 import { fmtAmount, fmtPct, fmtDate } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
@@ -190,6 +206,11 @@ const columns = [
     title: '灰度', dataIndex: 'enabled', key: 'enabled', width: 90,
     sorter: (a: RobotSnapshot, b: RobotSnapshot) =>
       Number(!!a.enabled) - Number(!!b.enabled),
+  },
+  {
+    title: '策略', dataIndex: 'strategy_name', key: 'strategy_name', width: 150,
+    sorter: (a: RobotSnapshot, b: RobotSnapshot) =>
+      (a.strategy_name ?? '').localeCompare(b.strategy_name ?? ''),
   },
   {
     title: '现金', dataIndex: 'cash', key: 'cash', width: 140, align: 'right' as const,
@@ -298,6 +319,7 @@ interface CreateForm {
   max_positions: number
   per_position_pct: number
   enabled: boolean
+  strategy_name: string | null
 }
 const defaultCreateForm = (): CreateForm => ({
   robot_id: null,
@@ -305,12 +327,31 @@ const defaultCreateForm = (): CreateForm => ({
   max_positions: 5,
   per_position_pct: 0.2,
   enabled: false,
+  strategy_name: null,
 })
 const createForm = reactive<CreateForm>(defaultCreateForm())
+
+// P16.3c: 可用策略下拉
+const strategies = ref<StrategyMeta[]>([])
+const strategiesLoading = ref(false)
+const strategyOptions = computed(() => strategies.value.map((s) => ({
+  value: s.name,
+  label: s.description ? `${s.name} · ${s.description}` : s.name,
+})))
+async function loadStrategies() {
+  if (strategies.value.length || strategiesLoading.value) return
+  strategiesLoading.value = true
+  try {
+    const { strategies: list } = await listStrategies()
+    strategies.value = list
+  } catch { /* toast 已处理 */ }
+  finally { strategiesLoading.value = false }
+}
 
 function openCreate() {
   Object.assign(createForm, defaultCreateForm())
   createOpen.value = true
+  loadStrategies()
 }
 
 async function submitCreate() {
@@ -322,6 +363,7 @@ async function submitCreate() {
       max_positions: createForm.max_positions,
       per_position_pct: createForm.per_position_pct,
       enabled: createForm.enabled,
+      strategy_name: createForm.strategy_name ?? undefined,
     })
     robots.value = [snapshot, ...robots.value]
     message.success(`机器人 ${snapshot.robot_id} 创建成功`)

@@ -108,12 +108,62 @@ class LiveRobotEngine:
         max_buys_per_tick: int = 1,
         max_sells_per_tick: int = 2,
         enabled: bool = False,          # W12-1 灰度: 默认 OFF
+        strategy=None,                   # P16.3a: BaseStrategy 实例, 可选
     ):
         self.snapshot = snapshot
         self.sell_policy = sell_policy
         self.max_buys_per_tick = max_buys_per_tick
         self.max_sells_per_tick = max_sells_per_tick
         self.enabled = bool(enabled)
+        # P16.3a: 策略绑定, 用于 select_candidates 生成 candidates
+        self.strategy = strategy
+
+    # ------------------------------------------------------------------
+    # P16.3b: 策略 -> candidates 映射
+    # ------------------------------------------------------------------
+
+    def select_candidates(self, ctx) -> list["Candidate"]:
+        """用绑定的策略从 MarketContext 生成 live_engine.Candidate 列表.
+
+        未绑定策略 -> 返回空并记 warning (历史行为: candidates 由外部传入).
+        """
+        if self.strategy is None:
+            logger.warning(
+                "[LiveRobotEngine] select_candidates 被调用但未绑定策略 (robot_id=%s)",
+                self.snapshot.robot_id,
+            )
+            return []
+        try:
+            strat_cands = self.strategy.select_stocks(ctx) or []
+        except Exception as e:  # noqa: BLE001
+            logger.exception(
+                "[LiveRobotEngine] strategy.select_stocks 异常 (robot_id=%s strategy=%s): %s",
+                self.snapshot.robot_id, getattr(self.strategy, "name", "?"), e,
+            )
+            return []
+        out: list[Candidate] = []
+        for c in strat_cands:
+            ts_code = getattr(c, "ts_code", None)
+            if not ts_code:
+                continue
+            out.append(Candidate(
+                ts_code=ts_code,
+                score=float(getattr(c, "score", 0) or 0),
+                reason=getattr(c, "reason", "") or "",
+            ))
+        return out
+
+    @property
+    def strategy_name(self) -> Optional[str]:
+        """当前绑定策略名, 未绑定返回 None."""
+        return getattr(self.strategy, "name", None) if self.strategy else None
+
+    @property
+    def strategy_params(self) -> dict:
+        """当前策略参数快照 (可能为空 dict)."""
+        if self.strategy is None:
+            return {}
+        return dict(getattr(self.strategy, "params", {}) or {})
 
     # ------------------------------------------------------------------
     # 灰度开关 (W12-1)

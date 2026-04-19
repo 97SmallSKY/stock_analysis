@@ -24,6 +24,12 @@
     <a-card :bordered="false" style="margin-top: 12px;" title="按上榜原因聚合(净买入 / 上榜次数 / 平均评分)">
       <a-empty v-if="!loading && reasonAgg.length === 0" description="无数据" />
       <div v-else ref="chartRef" style="width: 100%; height: 380px;"></div>
+      <div class="legend-hint" v-if="reasonAgg.length > 0">
+        <span class="dot" :style="{ background: PNL_COLORS.netPos }"></span>净买入(正)
+        <span class="dot" :style="{ background: PNL_COLORS.netNeg }"></span>净买入(负)
+        <span class="dot" :style="{ background: PNL_COLORS.count }"></span>上榜次数
+        <span class="dot" :style="{ background: PNL_COLORS.score }"></span>平均评分
+      </div>
     </a-card>
 
     <a-row :gutter="12" style="margin-top: 12px;">
@@ -40,8 +46,8 @@
               <template v-if="column.key === 'ts_code'">
                 <StockLink :code="record.ts_code" :name="record.name" />
               </template>
-              <template v-else-if="['net_sum','buy_sum','sell_sum'].includes(column.key)">
-                <span :style="column.key === 'net_sum' ? { color: record.net_sum >= 0 ? '#d4380d' : '#389e0d' } : {}">
+              <template v-else-if="['net_sum','buy_sum','sell_sum','avg_net'].includes(column.key)">
+                <span :style="['net_sum','avg_net'].includes(column.key) ? { color: record[column.key] >= 0 ? '#d4380d' : '#389e0d' } : {}">
                   {{ fmtAmountWan(record[column.key]) }}
                 </span>
               </template>
@@ -65,8 +71,8 @@
               <template v-if="column.key === 'ts_code'">
                 <StockLink :code="record.ts_code" :name="record.name" />
               </template>
-              <template v-else-if="['net_sum','buy_sum','sell_sum'].includes(column.key)">
-                <span :style="column.key === 'net_sum' ? { color: record.net_sum >= 0 ? '#d4380d' : '#389e0d' } : {}">
+              <template v-else-if="['net_sum','buy_sum','sell_sum','avg_net'].includes(column.key)">
+                <span :style="['net_sum','avg_net'].includes(column.key) ? { color: record[column.key] >= 0 ? '#d4380d' : '#389e0d' } : {}">
                   {{ fmtAmountWan(record[column.key]) }}
                 </span>
               </template>
@@ -92,6 +98,11 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
 import { fmtAmountWan } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
+import {
+  aggregateByReason, aggregateByStock,
+  PNL_COLORS,
+  type ReasonAgg, type StockAgg,
+} from '@/utils/pnl_agg'
 
 echarts.use([BarChart, GridComponent, LegendComponent, TooltipComponent, TitleComponent, CanvasRenderer])
 
@@ -103,22 +114,6 @@ const form = reactive<FormState>({ range: null, topN: 10 })
 
 const loading = ref(false)
 const rows = ref<LhbRow[]>([])
-
-interface ReasonAgg {
-  reason: string
-  net_sum: number
-  count: number
-  avg_score: number | null
-}
-interface StockAgg {
-  ts_code: string
-  name: string | null
-  net_sum: number
-  buy_sum: number
-  sell_sum: number
-  count: number
-  avg_score: number | null
-}
 
 const stockColumns = [
   {
@@ -140,6 +135,10 @@ const stockColumns = [
   {
     title: '净额', dataIndex: 'net_sum', key: 'net_sum', align: 'right' as const,
     sorter: (a: StockAgg, b: StockAgg) => a.net_sum - b.net_sum,
+  },
+  {
+    title: '平均净买入', dataIndex: 'avg_net', key: 'avg_net', align: 'right' as const,
+    sorter: (a: StockAgg, b: StockAgg) => a.avg_net - b.avg_net,
   },
   {
     title: '平均评分', dataIndex: 'avg_score', key: 'avg_score', width: 90, align: 'right' as const,
@@ -172,49 +171,8 @@ function onReset() {
   load()
 }
 
-const reasonAgg = computed<ReasonAgg[]>(() => {
-  const m = new Map<string, { net: number; cnt: number; scores: number[] }>()
-  for (const r of rows.value) {
-    const k = (r.reason ?? '').trim() || '(未知)'
-    const cur = m.get(k) ?? { net: 0, cnt: 0, scores: [] }
-    cur.net += r.net_amount ?? 0
-    cur.cnt += 1
-    if (r.score != null) cur.scores.push(r.score)
-    m.set(k, cur)
-  }
-  const arr: ReasonAgg[] = [...m.entries()].map(([reason, v]) => ({
-    reason,
-    net_sum: v.net,
-    count: v.cnt,
-    avg_score: v.scores.length ? v.scores.reduce((a, b) => a + b, 0) / v.scores.length : null,
-  }))
-  // 只展示 Top 10 reason, 按净额绝对值排序
-  arr.sort((a, b) => Math.abs(b.net_sum) - Math.abs(a.net_sum))
-  return arr.slice(0, 10)
-})
-
-const stockAgg = computed<StockAgg[]>(() => {
-  const m = new Map<string, { name: string | null; buy: number; sell: number; net: number; cnt: number; scores: number[] }>()
-  for (const r of rows.value) {
-    const cur = m.get(r.ts_code) ?? { name: null, buy: 0, sell: 0, net: 0, cnt: 0, scores: [] }
-    if (!cur.name && r.name) cur.name = r.name
-    cur.buy += r.buy_amount ?? 0
-    cur.sell += r.sell_amount ?? 0
-    cur.net += r.net_amount ?? 0
-    cur.cnt += 1
-    if (r.score != null) cur.scores.push(r.score)
-    m.set(r.ts_code, cur)
-  }
-  return [...m.entries()].map(([ts_code, v]) => ({
-    ts_code,
-    name: v.name,
-    buy_sum: v.buy,
-    sell_sum: v.sell,
-    net_sum: v.net,
-    count: v.cnt,
-    avg_score: v.scores.length ? v.scores.reduce((a, b) => a + b, 0) / v.scores.length : null,
-  }))
-})
+const reasonAgg = computed<ReasonAgg[]>(() => aggregateByReason(rows.value, 10))
+const stockAgg = computed<StockAgg[]>(() => aggregateByStock(rows.value))
 
 const topBuy = computed(() =>
   [...stockAgg.value].sort((a, b) => b.net_sum - a.net_sum).slice(0, form.topN),
@@ -232,8 +190,19 @@ function renderChart() {
   if (!chart) chart = echarts.init(chartRef.value)
   const data = reasonAgg.value
   chart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    legend: { data: ['净买入(亿)', '上榜次数', '平均评分'], top: 0 },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      valueFormatter: (v: number) => (typeof v === 'number' ? v.toFixed(2) : String(v)),
+    },
+    legend: {
+      data: [
+        { name: '净买入(亿)', itemStyle: { color: PNL_COLORS.netPos } },
+        { name: '上榜次数', itemStyle: { color: PNL_COLORS.count } },
+        { name: '平均评分', itemStyle: { color: PNL_COLORS.score } },
+      ],
+      top: 0,
+    },
     grid: { left: 50, right: 50, top: 30, bottom: 80 },
     xAxis: {
       type: 'category',
@@ -249,13 +218,18 @@ function renderChart() {
         name: '净买入(亿)', type: 'bar',
         data: data.map((d) => +(d.net_sum / 1e8).toFixed(2)),
         itemStyle: {
-          color: (p: { data: number }) => (p.data >= 0 ? '#d4380d' : '#389e0d'),
+          color: (p: { data: number }) => (p.data >= 0 ? PNL_COLORS.netPos : PNL_COLORS.netNeg),
         },
       },
-      { name: '上榜次数', type: 'bar', yAxisIndex: 1, data: data.map((d) => d.count) },
+      {
+        name: '上榜次数', type: 'bar', yAxisIndex: 1,
+        data: data.map((d) => d.count),
+        itemStyle: { color: PNL_COLORS.count },
+      },
       {
         name: '平均评分', type: 'bar', yAxisIndex: 1,
         data: data.map((d) => (d.avg_score != null ? +d.avg_score.toFixed(1) : 0)),
+        itemStyle: { color: PNL_COLORS.score },
       },
     ],
   }, true)
@@ -280,4 +254,20 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .lhb-pnl-page { padding: 12px; }
+.legend-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.legend-hint .dot {
+  display: inline-block;
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  margin: 0 4px 0 12px;
+}
+.legend-hint .dot:first-child { margin-left: 0; }
 </style>

@@ -60,6 +60,9 @@ def _snapshot_to_dict(snap, engine=None) -> dict:
     }
     if engine is not None:
         d["enabled"] = bool(getattr(engine, "enabled", False))
+        # P16.3a: 暴露策略绑定
+        d["strategy_name"] = getattr(engine, "strategy_name", None)
+        d["strategy_params"] = getattr(engine, "strategy_params", {}) or {}
     return d
 
 
@@ -122,6 +125,9 @@ class CreateRobotReq(BaseModel):
     max_positions: int = Field(5, ge=1, le=20)
     per_position_pct: float = Field(0.20, gt=0, le=1.0)
     enabled: bool = False
+    # P16.3a: 机器人采纳的策略
+    strategy_name: Optional[str] = Field(None, description="策略名 (见 GET /strategies); None 表示不绑定")
+    strategy_params: dict = Field(default_factory=dict, description="策略参数 override, 合并到 DEFAULT_PARAMS")
 
 
 def _alloc_robot_id(reg: dict) -> int:
@@ -135,10 +141,21 @@ def create_robot(body: CreateRobotReq, request: Request):
     from backend.domain.robot.live_engine import LiveRobotEngine
     from backend.domain.robot.robot import RobotSnapshot
     from backend.domain.robot.state import RobotState
+    # P16.3a: 策略实例化
+    import backend.domain.strategy.builtins  # noqa: F401 -- 触发装饰器注册
+    from backend.domain.strategy.registry import get_strategy
 
     rid = body.robot_id if body.robot_id is not None else _alloc_robot_id(reg)
     if rid in reg:
         raise HTTPException(409, f"robot {rid} 已存在")
+
+    strat = None
+    if body.strategy_name:
+        try:
+            cls = get_strategy(body.strategy_name)
+            strat = cls(params=body.strategy_params or None)
+        except KeyError as e:
+            raise HTTPException(400, str(e))
 
     snap = RobotSnapshot(
         robot_id=rid,
@@ -148,7 +165,34 @@ def create_robot(body: CreateRobotReq, request: Request):
         max_positions=body.max_positions,
         per_position_pct=body.per_position_pct,
     )
-    eng = LiveRobotEngine(snap, enabled=body.enabled)
+    eng = LiveRobotEngine(snap, enabled=body.enabled, strategy=strat)
     reg[rid] = eng
-    logger.info(f"[API] robot {rid} created (cash={body.cash}, enabled={body.enabled})")
+    logger.info(
+        f"[API] robot {rid} created (cash={body.cash}, enabled={body.enabled}, "
+        f"strategy={body.strategy_name})"
+    )
     return {"ok": True, "snapshot": _snapshot_to_dict(eng.snapshot, eng)}
+
+
+# ---------------------------------------------------------------
+# P16.3c: 列出可用策略 (供前端下拉)
+# ---------------------------------------------------------------
+
+
+@router.get("/strategies")
+def list_strategies_api():
+    # 本地 import 触发装饰器注册 (registry 是模块级 dict, 需 import 子类所在模块)
+    import backend.domain.strategy.builtins  # noqa: F401
+    from backend.domain.strategy.registry import _REGISTRY, list_strategies
+
+    names = list_strategies()
+    out = []
+    for n in names:
+        cls = _REGISTRY[n]
+        out.append({
+            "name": n,
+            "category": getattr(cls, "category", ""),
+            "description": getattr(cls, "description", ""),
+            "default_params": dict(getattr(cls, "DEFAULT_PARAMS", {}) or {}),
+        })
+    return {"strategies": out}

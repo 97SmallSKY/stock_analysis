@@ -18,7 +18,22 @@ export interface RobotSnapshot {
   daily_pnl_pct: number | null
   position_count: number
   enabled?: boolean
+  // P16.3a: 机器人绑定的策略
+  strategy_name?: string | null
+  strategy_params?: Record<string, unknown>
   positions: RobotPosition[]
+}
+
+// P16.3c: 可用策略元信息 (GET /api/robots/strategies)
+export interface StrategyMeta {
+  name: string
+  category: string
+  description: string
+  default_params: Record<string, unknown>
+}
+export async function listStrategies(): Promise<{ strategies: StrategyMeta[] }> {
+  const { data } = await http.get<{ strategies: StrategyMeta[] }>('/api/robots/strategies')
+  return data
 }
 
 export async function listRobots(): Promise<{ robots: RobotSnapshot[] }> {
@@ -48,6 +63,9 @@ export interface CreateRobotReq {
   max_positions?: number
   per_position_pct?: number
   enabled?: boolean
+  // P16.3a: 绑定策略
+  strategy_name?: string | null
+  strategy_params?: Record<string, unknown>
 }
 export async function createRobot(
   body: CreateRobotReq,
