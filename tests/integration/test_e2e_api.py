@@ -255,3 +255,58 @@ def test_ws_snapshot_receives_published(client):
         fake.publish("snapshot:E2E.SZ", json.dumps({"ts_code": "E2E.SZ", "price": 9.9}))
         msg = json.loads(ws.receive_text())
         assert msg["ts_code"] == "E2E.SZ"
+
+
+# --------------------------------------------------------------------
+# P12: POST /api/robots/create — 手动添加
+# --------------------------------------------------------------------
+
+
+def test_robot_create_auto_id(client):
+    from backend.api.main import app
+    reg = app.state.robot_registry
+    before = set(reg.keys())
+
+    r = client.post("/api/robots/create", json={
+        "cash": 500000, "max_positions": 3, "per_position_pct": 0.25,
+    })
+    assert r.status_code == 200
+    d = r.json()["snapshot"]
+    rid = d["robot_id"]
+    try:
+        assert rid not in before
+        assert d["cash"] == 500000
+        assert d["state"] == "IDLE"
+        assert d["enabled"] is False
+        # list 能看到它
+        lst = client.get("/api/robots").json()["robots"]
+        assert any(row["robot_id"] == rid for row in lst)
+    finally:
+        reg.pop(rid, None)
+
+
+def test_robot_create_explicit_id_and_duplicate(client):
+    from backend.api.main import app
+    reg = app.state.robot_registry
+
+    r = client.post("/api/robots/create", json={
+        "robot_id": 77777, "cash": 100000, "enabled": True,
+    })
+    assert r.status_code == 200
+    assert r.json()["snapshot"]["enabled"] is True
+
+    try:
+        # 再次同 id -> 409
+        r2 = client.post("/api/robots/create", json={"robot_id": 77777, "cash": 1000})
+        assert r2.status_code == 409
+    finally:
+        reg.pop(77777, None)
+
+
+def test_robot_create_bad_params(client):
+    # per_position_pct > 1 -> 422
+    r = client.post("/api/robots/create", json={"per_position_pct": 1.5})
+    assert r.status_code == 422
+    # 负现金 -> 422
+    r = client.post("/api/robots/create", json={"cash": -1})
+    assert r.status_code == 422

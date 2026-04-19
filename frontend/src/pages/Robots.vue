@@ -6,6 +6,7 @@
       </template>
       <template #extra>
         <a-space>
+          <a-button type="primary" @click="openCreate">新建机器人</a-button>
           <a-button :loading="loading" @click="refresh">刷新</a-button>
           <a-switch
             v-model:checked="autoRefresh"
@@ -108,6 +109,51 @@
         </template>
       </a-table>
     </a-card>
+
+    <a-modal
+      v-model:open="createOpen"
+      title="新建机器人"
+      :confirm-loading="creating"
+      ok-text="创建"
+      cancel-text="取消"
+      @ok="submitCreate"
+    >
+      <a-form layout="vertical" :model="createForm">
+        <a-form-item label="机器人 ID" help="留空自动分配 (当前最大+1)">
+          <a-input-number
+            v-model:value="createForm.robot_id"
+            :min="1"
+            style="width:100%"
+            placeholder="自动"
+          />
+        </a-form-item>
+        <a-form-item label="初始现金">
+          <a-input-number
+            v-model:value="createForm.cash"
+            :min="0"
+            :step="100000"
+            style="width:100%"
+          />
+        </a-form-item>
+        <a-form-item label="最大持仓数">
+          <a-input-number
+            v-model:value="createForm.max_positions"
+            :min="1" :max="20"
+            style="width:100%"
+          />
+        </a-form-item>
+        <a-form-item label="单仓占比">
+          <a-input-number
+            v-model:value="createForm.per_position_pct"
+            :min="0.01" :max="1" :step="0.05"
+            style="width:100%"
+          />
+        </a-form-item>
+        <a-form-item label="立即启用灰度">
+          <a-switch v-model:checked="createForm.enabled" />
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
@@ -116,6 +162,7 @@ import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { Empty, message } from 'ant-design-vue'
 import {
   listRobots, pauseRobot, resumeRobot, enableRobot, disableRobot,
+  createRobot,
   type RobotSnapshot, type RobotPosition,
 } from '@/api/robots'
 import { fmtAmount, fmtPct, fmtDate } from '@/utils/format'
@@ -241,6 +288,50 @@ watch(autoRefresh, (v) => { v ? startAuto() : stopAuto() })
 
 onMounted(refresh)
 onBeforeUnmount(stopAuto)
+
+// P12: 新建机器人对话框
+const createOpen = ref(false)
+const creating = ref(false)
+interface CreateForm {
+  robot_id: number | null
+  cash: number
+  max_positions: number
+  per_position_pct: number
+  enabled: boolean
+}
+const defaultCreateForm = (): CreateForm => ({
+  robot_id: null,
+  cash: 1_000_000,
+  max_positions: 5,
+  per_position_pct: 0.2,
+  enabled: false,
+})
+const createForm = reactive<CreateForm>(defaultCreateForm())
+
+function openCreate() {
+  Object.assign(createForm, defaultCreateForm())
+  createOpen.value = true
+}
+
+async function submitCreate() {
+  creating.value = true
+  try {
+    const { snapshot } = await createRobot({
+      robot_id: createForm.robot_id ?? undefined,
+      cash: createForm.cash,
+      max_positions: createForm.max_positions,
+      per_position_pct: createForm.per_position_pct,
+      enabled: createForm.enabled,
+    })
+    robots.value = [snapshot, ...robots.value]
+    message.success(`机器人 ${snapshot.robot_id} 创建成功`)
+    createOpen.value = false
+  } catch {
+    /* toast 已处理 */
+  } finally {
+    creating.value = false
+  }
+}
 </script>
 
 <style scoped>

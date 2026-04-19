@@ -17,6 +17,7 @@ from dataclasses import asdict
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -109,3 +110,45 @@ def list_robots(request: Request):
             _snapshot_to_dict(eng.snapshot, eng) for eng in reg.values()
         ],
     }
+
+
+# ---------------------------------------------------------------
+# P12: 手动添加机器人 (仅内存注册, 不落库; 供对话框即时创建)
+# ---------------------------------------------------------------
+
+class CreateRobotReq(BaseModel):
+    robot_id: Optional[int] = Field(None, ge=1, le=10**8, description="留空自动分配")
+    cash: float = Field(1_000_000.0, ge=0)
+    max_positions: int = Field(5, ge=1, le=20)
+    per_position_pct: float = Field(0.20, gt=0, le=1.0)
+    enabled: bool = False
+
+
+def _alloc_robot_id(reg: dict) -> int:
+    return (max(reg.keys()) + 1) if reg else 1
+
+
+@router.post("/create")
+def create_robot(body: CreateRobotReq, request: Request):
+    reg = _get_registry(request)
+    # 本地 import 规避循环 & 保证 test 可 monkeypatch
+    from backend.domain.robot.live_engine import LiveRobotEngine
+    from backend.domain.robot.robot import RobotSnapshot
+    from backend.domain.robot.state import RobotState
+
+    rid = body.robot_id if body.robot_id is not None else _alloc_robot_id(reg)
+    if rid in reg:
+        raise HTTPException(409, f"robot {rid} 已存在")
+
+    snap = RobotSnapshot(
+        robot_id=rid,
+        state=RobotState.IDLE,
+        cash=body.cash,
+        total_assets=body.cash,
+        max_positions=body.max_positions,
+        per_position_pct=body.per_position_pct,
+    )
+    eng = LiveRobotEngine(snap, enabled=body.enabled)
+    reg[rid] = eng
+    logger.info(f"[API] robot {rid} created (cash={body.cash}, enabled={body.enabled})")
+    return {"ok": True, "snapshot": _snapshot_to_dict(eng.snapshot, eng)}

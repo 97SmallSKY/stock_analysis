@@ -40,3 +40,18 @@ export const pauseRobot = (id: number) => post(id, 'pause')
 export const resumeRobot = (id: number) => post(id, 'resume')
 export const enableRobot = (id: number) => post(id, 'enable')
 export const disableRobot = (id: number) => post(id, 'disable')
+
+// P12: 手动添加机器人
+export interface CreateRobotReq {
+  robot_id?: number | null
+  cash?: number
+  max_positions?: number
+  per_position_pct?: number
+  enabled?: boolean
+}
+export async function createRobot(
+  body: CreateRobotReq,
+): Promise<{ ok: boolean; snapshot: RobotSnapshot }> {
+  const { data } = await http.post('/api/robots/create', body)
+  return data as { ok: boolean; snapshot: RobotSnapshot }
+}
