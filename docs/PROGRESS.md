@@ -88,3 +88,4 @@
   - P10.3 `StockDrillModal` 分钟 K 空态改造:120px 细体大号「无」+ 小字原因;2 个组件单测覆盖 minute / daily 空态双分支。
   - P10.4 `LhbList` 席位抽屉美化:`rank_no` 圆角徽章(rank-1 红 / 2 橙 / 3 金 / 其他灰),`net_amount` 正负染色 + 加粗;`rankClass` 提取 `utils/format.ts` 并附 7 分支单测。
   - P10.5 `Signals` 多维度分析:新增 `utils/signals_agg.ts` 纯函数(`scoreBuckets` / `netBuckets` / `dailyBuckets` / `summarize`),页面右侧统计卡补「涉及股票 / 净买入均值」、下方新增 3 张维度卡(评分段 / 净买入区间 / 分日数量)均用水平进度条展示占比(同页占比归一);9 个聚合单测 + 现有 46 个,vitest 10 files / 55 tests 全绿,vue-tsc 0 error。
+  - P10.6 jd 部署 + smoke:`git push` c501d96 → jd,`make deploy` 成功(npm install fallback + vite build 28 files);systemd 未装,手动 `setsid .venv/bin/uvicorn` 拉起 pid 4151017;11 端点 smoke 全 200(含 kline/daily/weekly/minute + robots + lhb/seats)。数据核对:`/api/lhb?limit=3` 返回 `000581.SZ 威孚高科`、`000586.SZ 汇源通信`、`000711.SZ ST京蓝` — `name` 字段真实透出;`/api/lhb/seats?trade_date=2026-04-17&ts_code=000581.SZ` 返回 5 行席位(rank 1/1/2/2/4,方向 BUY/SELL 并存,broker_name「机构专用 / 中泰证券 / 深股通专用」真实生产数据)。
