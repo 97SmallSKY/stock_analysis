@@ -97,6 +97,23 @@ def test_api_changelog_ok():
         assert set(e.keys()) >= {"date", "type", "title", "body"}
 
 
+def test_api_changelog_sorted_by_date_desc(tmp_path):
+    """即便 md 内条目顺序被人为打乱,接口也应按 date 倒序返回。"""
+    md_path = tmp_path / "CHANGELOG.md"
+    md_path.write_text(
+        "### 2026-01-01 · fix · 旧\n正文\n\n"
+        "### 2026-05-01 · feature · 新\n正文\n\n"
+        "### 2026-03-01 · docs · 中\n正文\n",
+        encoding="utf-8",
+    )
+    with patch("backend.api.changelog._CHANGELOG_PATH", md_path):
+        client = TestClient(_make_app())
+        r = client.get("/api/changelog")
+        assert r.status_code == 200
+        dates = [e["date"] for e in r.json()["entries"]]
+        assert dates == ["2026-05-01", "2026-03-01", "2026-01-01"]
+
+
 def test_api_changelog_missing_file(tmp_path):
     """CHANGELOG.md 不存在时,返回空列表 + error 字段,不应 500。"""
     fake = tmp_path / "nope.md"

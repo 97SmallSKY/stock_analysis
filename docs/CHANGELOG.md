@@ -6,6 +6,15 @@
 
 ---
 
+### 2026-04-20 · perf · Changelog API 显式按日期倒序
+
+- 之前依赖 md 文件内原顺序,一旦追加者没按顺序插入,时间线会跳乱
+- 现在后端 `sort(key=date, reverse=True)`(稳定排序,同日期保留文件内顺序)
+- 补单测 `test_api_changelog_sorted_by_date_desc`
+- pytest 754 passed · coverage 75.78%
+
+---
+
 ### 2026-04-20 · perf · `healthcheck.sh` 加重试(3×1s)消除 deploy 时序假失败
 
 - 现象:`deploy.sh` 末尾跑 healthcheck,systemctl 刚 restart 完 API,uvicorn/PG 还没稳,一次性探测报 `postgres ✗ / API ✗ / SPA ✗`,但几秒后手工 curl 全部正常

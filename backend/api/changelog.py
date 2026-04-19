@@ -59,6 +59,9 @@ def get_changelog() -> Dict[str, Any]:
         return {"entries": [], "types": [], "total": 0, "error": "CHANGELOG.md not found"}
     md = _CHANGELOG_PATH.read_text(encoding="utf-8")
     entries = parse_changelog(md)
+    # 显式按日期倒序(稳定排序:日期相同时保留文件内原顺序),
+    # 避免以后追加的条目没按日期顺序排列导致页面时间线乱跳。
+    entries.sort(key=lambda e: e["date"], reverse=True)
     types = sorted({e["type"] for e in entries})
     return {
         "entries": entries,
