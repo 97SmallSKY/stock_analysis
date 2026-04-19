@@ -89,6 +89,10 @@ score: ## 批量计算龙虎榜评分 (FROM/TO 可选)
 score-empty: ## 仅对 score=0 的行评分(断点续跑)
 	$(PYTHON) -m backend.cli score --from $(FROM) --to $(TO) --only-empty
 
+# ---------- P16.5 T+N 收益回填 ----------
+lhb-tn-price: ## 回填 lhb_tn_price (T+1/2/3/5/10 收益 + 涨跌停标记)
+	$(PYTHON) -m backend.cli lhb-tn-price --from $(FROM) --to $(TO) $(if $(N_DAYS),--n-days $(N_DAYS),) $(if $(FORCE),--force,)
+
 # ---------- 本地 dev（前后端） ----------
 dev-api: ## 本地启动 FastAPI (默认 :8000)
 	uvicorn backend.api.main:app --host 0.0.0.0 --port $(API_PORT) --reload

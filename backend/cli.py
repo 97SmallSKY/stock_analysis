@@ -70,6 +70,15 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--limit", type=int, default=None,
                     help="最多处理多少行(调试用)")
 
+    # P16.5: lhb_tn_price 回填 (T+1/2/3/5/10 次日收益指标)
+    tn = sub.add_parser("lhb-tn-price", help="回填 lhb_tn_price(T+N 日价格 + 涨跌幅)")
+    tn.add_argument("--from", dest="start", default="20240101")
+    tn.add_argument("--to", dest="end", default=_today())
+    tn.add_argument("--n-days", default="1,2,3,5,10",
+                    help="逗号分隔的 N 列表 (默认 1,2,3,5,10)")
+    tn.add_argument("--force", action="store_true",
+                    help="覆盖已 DONE 的行 (默认只填 PENDING)")
+
     args = parser.parse_args(argv)
 
     from backend.core.startup import bootstrap
@@ -108,6 +117,15 @@ def main(argv: list[str] | None = None) -> int:
             only_empty=args.only_empty,
             limit=args.limit,
         )
+    elif args.cmd == "lhb-tn-price":
+        from backend.domain.lhb.tn_price_backfill import run_range
+        n_days = [int(x) for x in args.n_days.split(",") if x.strip()]
+        stats = run_range(
+            args.start, args.end,
+            n_days=n_days,
+            only_pending=not args.force,
+        )
+        print("[lhb-tn-price] stats:", stats)
     return 0
 
 

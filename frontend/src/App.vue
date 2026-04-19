@@ -33,6 +33,10 @@
             <template #icon><LineChartOutlined /></template>
             策略对比
           </a-menu-item>
+          <a-menu-item key="/backtest-run">
+            <template #icon><LineChartOutlined /></template>
+            回测任务
+          </a-menu-item>
           <a-menu-item key="/robots">
             <template #icon><RobotOutlined /></template>
             机器人
