@@ -31,6 +31,15 @@ export function healthColor(ok: boolean | null | undefined): string {
   return '#d9d9d9'
 }
 
+// 龙虎榜席位排位 1/2/3 徽章样式
+export function rankClass(r: number | null | undefined): string {
+  if (r == null) return ''
+  if (r === 1) return 'rank-1'
+  if (r === 2) return 'rank-2'
+  if (r === 3) return 'rank-3'
+  return ''
+}
+
 // Circuit breaker 状态标签色
 export function cbColor(state: string | null | undefined): string {
   switch (state) {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  fmtAmount, fmtPct, fmtNumber, fmtDate, healthColor, cbColor,
+  fmtAmount, fmtPct, fmtNumber, fmtDate, healthColor, cbColor, rankClass,
 } from './format'
 
 describe('fmtAmount', () => {
@@ -63,5 +63,17 @@ describe('cbColor', () => {
     expect(cbColor('open')).toBe('red')
     expect(cbColor(null)).toBe('default')
     expect(cbColor('foo')).toBe('default')
+  })
+})
+
+describe('rankClass', () => {
+  it('1/2/3 专属色, 4+ 灰, null 空串', () => {
+    expect(rankClass(1)).toBe('rank-1')
+    expect(rankClass(2)).toBe('rank-2')
+    expect(rankClass(3)).toBe('rank-3')
+    expect(rankClass(4)).toBe('')
+    expect(rankClass(99)).toBe('')
+    expect(rankClass(null)).toBe('')
+    expect(rankClass(undefined)).toBe('')
   })
 })

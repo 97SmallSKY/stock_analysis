@@ -78,7 +78,17 @@
                 {{ record.direction === 'BUY' ? '买入' : '卖出' }}
               </a-tag>
             </template>
-            <template v-else-if="['buy_amount','sell_amount','net_amount'].includes(column.key)">
+            <template v-else-if="column.key === 'rank_no'">
+              <span class="rank-badge" :class="rankClass(record.rank_no)">
+                {{ record.rank_no ?? '-' }}
+              </span>
+            </template>
+            <template v-else-if="column.key === 'net_amount'">
+              <span :style="{ color: (record.net_amount ?? 0) >= 0 ? '#d4380d' : '#389e0d', fontWeight: 500 }">
+                {{ fmtAmount(record.net_amount) }}
+              </span>
+            </template>
+            <template v-else-if="['buy_amount','sell_amount'].includes(column.key)">
               {{ fmtAmount(record[column.key]) }}
             </template>
           </template>
@@ -99,7 +109,7 @@ import {
 import 'ag-grid-community/styles/ag-theme-quartz.css'
 import { useLhbStore } from '@/stores/lhb'
 import type { LhbRow, LhbListParams, LhbSeatRow } from '@/api/lhb'
-import { fmtAmount, fmtPct, fmtDate } from '@/utils/format'
+import { fmtAmount, fmtPct, fmtDate, rankClass } from '@/utils/format'
 import { useStockDrill } from '@/composables/useStockDrill'
 
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -298,4 +308,14 @@ onMounted(() => { onSearch() })
   display: flex; justify-content: space-between; align-items: center;
   margin-top: 12px; color: #8c8c8c;
 }
+.rank-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 22px; padding: 0 6px;
+  border-radius: 11px; font-size: 12px; font-weight: 600;
+  background: #f0f0f0; color: #595959;
+  font-family: 'SF Mono', Menlo, monospace;
+}
+.rank-badge.rank-1 { background: #d4380d; color: #fff; }
+.rank-badge.rank-2 { background: #fa8c16; color: #fff; }
+.rank-badge.rank-3 { background: #faad14; color: #fff; }
 </style>
