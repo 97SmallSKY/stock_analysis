@@ -161,3 +161,10 @@
   - 测试:`pytest 732 passed` → `738 passed`(+6 新单测);`vitest 74 passed`(+7 新单测);`vue-tsc 0 error`。
   - 部署:`make deploy` 前端打包 31 files ✅;systemd restart ✅;首次 healthcheck 因 restart 窗口假失败,`sleep 3` 后 healthz=200;`make smoke` 11 端点 10/11 200(`/api/lhb/seats` 422 是 query 缺必填参数,非回归)。`/api/robots/strategies` 返回 `lhb_hot_money` + `lhb_institution` 两策略 + 默认参数,链路畅通。
   - P16.1 回填:2025 全年完成(46536 seat_rows);2024/2023 + score 用 `setsid` 后台续跑中。`lhb_seats` 从 6666 → **84838 行,68 → 468 个交易日**。
+
+- **R2 · 2026-04-20 23:30** P16.4 + P16.5 完成部署:
+  - P16.4 回测页入口:`App.vue` 菜单新增「回测任务」指向 `/backtest-run`(Task #52 close)。
+  - P16.5 多维指标:发现 `lhb_tn_price` 表早就存在(schema 第 482 行)但 0 行数据。新建 `backend/domain/lhb/tn_price_backfill.py`,纯 SQL CTE + window function 一次 upsert 全部 N=1/2/3/5/10 组合;CLI `python -m backend.cli lhb-tn-price`;Makefile `make lhb-tn-price FROM= TO=`;9 case 单测覆盖日期解析+参数化+默认 N_days。`/api/lhb` 加 `with_tn=true` query 参数,透出 `t1_pnl_pct / t1_limit_up / t5_pnl_pct / t5_high_pct` 四字段,LEFT JOIN `lhb_tn_price` 两次(tn1/tn5)。默认行为不变。
+  - 测试:`pytest 747 passed`(+9)。vitest/vue-tsc 本轮未改前端逻辑无回归。
+  - 部署:`make deploy` ✅ → restart 窗口假失败 → `sleep 4` 后 healthz=200;`/api/lhb?with_tn=true` 200 返回含 4 个新 key(实际值 null 因 tn_price 尚未回填);冒烟通过。systemd transient unit `p16-tnprice.service` 启动 2024-01-01 → 2026-04-17 全量回填(并行跑,不影响 P16.1)。
+  - P16.1 进度:2025+2024 seats 完成;2023 seats 跑中。**`lhb_seats` 从 6666 → 148,775 行 / 795 个交易日(从 68 日 → 全覆盖 2023-01-03 → 2026-04-17)**,数据层核心空洞修复完毕。
