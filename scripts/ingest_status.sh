@@ -42,20 +42,57 @@ else
   ACTIVE_LOG=""
 fi
 
+# 事故教训 (2026-04-20 循环#4): 仅看「活跃日志」会被心跳日志(chain.log 每分钟写一行
+# waiting)抢走焦点, 业务日志(kline.log 每几十秒一行进度)反而成为非活跃, 导致
+# 「阶段里程碑」和「异常」段全空。现在自动回退: 如果活跃日志 grep 不到业务关键词,
+# 就从 Top5 里挑第一个 grep 到的作为「业务日志」。
+_MILESTONE_RE='=== 阶段|完成|失败.*只|失败.*天|行业覆盖|增量模式|进度'
+_ERROR_RE='ERROR|失败:|触发限流|熔断|RemoteDisconnected'
+
+find_business_log() {
+  local regex="$1"
+  local f
+  # 先看活跃日志本身
+  if [ -n "$ACTIVE_LOG" ] && [ -f "$ACTIVE_LOG" ] && grep -qE "$regex" "$ACTIVE_LOG" 2>/dev/null; then
+    echo "$ACTIVE_LOG"; return 0
+  fi
+  # 活跃日志没命中,从 Top5 依次找
+  for f in "${RECENT_LOGS[@]}"; do
+    [ "$f" = "$ACTIVE_LOG" ] && continue
+    if [ -f "$f" ] && grep -qE "$regex" "$f" 2>/dev/null; then
+      echo "$f"; return 0
+    fi
+  done
+  return 1
+}
+
+MILESTONE_LOG=$(find_business_log "$_MILESTONE_RE" || true)
+ERROR_LOG=$(find_business_log "$_ERROR_RE" || true)
+
 echo
-echo '============ 2. 阶段里程碑(活跃日志)============'
-if [ -n "$ACTIVE_LOG" ] && [ -f "$ACTIVE_LOG" ]; then
-  grep -E "=== 阶段|完成|失败.*只|失败.*天|行业覆盖|增量模式|进度" "$ACTIVE_LOG" | tail -15
+if [ -n "$MILESTONE_LOG" ] && [ "$MILESTONE_LOG" != "$ACTIVE_LOG" ]; then
+  echo "============ 2. 阶段里程碑(业务日志: $MILESTONE_LOG)============"
 else
-  echo '  (no active log)'
+  echo '============ 2. 阶段里程碑(活跃日志)============'
+fi
+if [ -n "$MILESTONE_LOG" ] && [ -f "$MILESTONE_LOG" ]; then
+  grep -E "$_MILESTONE_RE" "$MILESTONE_LOG" | tail -15
+else
+  echo '  (no business milestone found in recent logs)'
 fi
 
 echo
-echo '============ 3. 最近 5 条异常(活跃日志,非进度条)============'
-if [ -n "$ACTIVE_LOG" ] && [ -f "$ACTIVE_LOG" ]; then
-  grep -E "ERROR|失败:|触发限流|熔断|RemoteDisconnected" "$ACTIVE_LOG" \
+if [ -n "$ERROR_LOG" ] && [ "$ERROR_LOG" != "$ACTIVE_LOG" ]; then
+  echo "============ 3. 最近 5 条异常(业务日志: $ERROR_LOG,非进度条)============"
+else
+  echo '============ 3. 最近 5 条异常(活跃日志,非进度条)============'
+fi
+if [ -n "$ERROR_LOG" ] && [ -f "$ERROR_LOG" ]; then
+  grep -E "$_ERROR_RE" "$ERROR_LOG" \
     | grep -v -E "%\||\[0m" \
     | tail -5 || echo '  (clean)'
+else
+  echo '  (clean)'
 fi
 
 echo

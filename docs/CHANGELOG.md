@@ -6,6 +6,14 @@
 
 ---
 
+### 2026-04-20 · fix · `ingest_status.sh` 业务日志回退扫描(Top5)
+
+- 现象:循环 #4 巡检时,`p16_9_chain.log` 每分钟心跳 `waiting p16-kline-2025...` 让它成为「最活跃」日志,于是脚本只 grep 它 → 「阶段里程碑」「最近异常」两段全空,丢失 kline 真实进度
+- 修复:新增 `find_business_log()`,若活跃日志无业务关键词,从 Top5 依次回退扫描;输出区分「活跃日志」与「业务日志」
+- 效果:心跳/噪音日志不再劫持监控焦点
+
+---
+
 ### 2026-04-20 · fix · `deploy.sh` service 探测改用 `systemctl cat` 避免误报
 
 - 旧实现:`systemctl list-unit-files | grep -q "^$svc"` 在 `set -o pipefail` + 全量 unit 输出下偶发误判,打印「Skip … 未安装」,但紧接着 healthcheck 却显示 `active ✓`
