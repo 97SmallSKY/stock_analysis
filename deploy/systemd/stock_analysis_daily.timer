@@ -1,0 +1,12 @@
+[Unit]
+Description=Trigger stock_analysis_daily every A-share trading day 18:40 CST
+
+[Timer]
+# 周一至周五 18:40(服务器时区 Asia/Shanghai,由 /etc/timezone 保障)
+OnCalendar=Mon..Fri 18:40:00
+# 错过(如宕机)立即补跑
+Persistent=true
+Unit=stock_analysis_daily.service
+
+[Install]
+WantedBy=timers.target

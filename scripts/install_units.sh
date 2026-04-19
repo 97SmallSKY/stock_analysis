@@ -21,10 +21,19 @@ DRY_RUN="${DRY_RUN:-0}"
 #   - stock_analysis_api.service        常驻: uvicorn + APScheduler + WS
 #   - stock_analysis_smoke.service      oneshot: 集成冒烟(由 timer 触发)
 #   - stock_analysis_smoke.timer        每天 16:30 触发 smoke
+#   - stock_analysis_daily.service      oneshot: 盘后数据更新(由 timer 触发)
+#   - stock_analysis_daily.timer        工作日 18:40 触发 daily
 ACTIVE_UNITS=(
     "stock_analysis_api.service"
     "stock_analysis_smoke.service"
     "stock_analysis_smoke.timer"
+    "stock_analysis_daily.service"
+    "stock_analysis_daily.timer"
+)
+# oneshot 类 unit,只 enable 不 start(由 timer 或手动拉起)
+ONESHOT_UNITS=(
+    "stock_analysis_smoke.service"
+    "stock_analysis_daily.service"
 )
 # 已废弃的 unit —— 安装时顺便清理
 LEGACY_UNITS=("stock_analysis_worker.service" "stock_analysis_scheduler.service")
@@ -79,8 +88,12 @@ done
 run "systemctl daemon-reload"
 for u in "${ACTIVE_UNITS[@]}"; do
     run "systemctl enable '${u}'"
-    # smoke service 是 oneshot,跳过 start/restart
-    if [[ "${u}" == "stock_analysis_smoke.service" ]]; then
+    # oneshot 类 service 只 enable,不 start(由 timer 触发)
+    skip_start=0
+    for o in "${ONESHOT_UNITS[@]}"; do
+        if [[ "${u}" == "${o}" ]]; then skip_start=1; break; fi
+    done
+    if [[ ${skip_start} -eq 1 ]]; then
         log "${u} 是 oneshot,跳过 start(由 timer 触发)"
         continue
     fi
