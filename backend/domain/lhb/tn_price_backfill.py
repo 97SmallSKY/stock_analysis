@@ -112,7 +112,11 @@ def run_range(
               a.stock_daily_id, a.ts_code, a.t0, %(n)s,
               a.target_date, a.tn_close, a.pnl,
               a.high_price, a.low_price, a.high_pct_calc, a.low_pct_calc,
-              a.pnl >= %(lim)s, a.pnl <= -%(lim)s, 'DONE', NOW()
+              -- P16.5 修正: is_limit_up 仅在 N=1 时有严格「T+N 当天涨停」语义.
+              -- N>1 时 pnl 是 T0 → T+N 累计涨幅, 不等于当天涨停, 因此置 NULL 避免误导.
+              CASE WHEN %(n)s = 1 THEN (a.pnl >= %(lim)s) ELSE NULL END,
+              CASE WHEN %(n)s = 1 THEN (a.pnl <= -%(lim)s) ELSE NULL END,
+              'DONE', NOW()
             FROM agg a
             ON CONFLICT (stock_daily_id, n_day) DO UPDATE SET
               target_date = EXCLUDED.target_date,

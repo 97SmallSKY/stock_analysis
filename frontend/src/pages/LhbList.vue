@@ -186,6 +186,29 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
     valueFormatter: (p) => (p.value != null ? Number(p.value).toFixed(1) : '-'),
     sortable: true,
   },
+  // P16.5: T+1 / T+5 次日收益 (依赖 with_tn=true)
+  {
+    headerName: 'T+1', field: 't1_pnl_pct', width: 90, type: 'numericColumn',
+    valueFormatter: (p) =>
+      (p.value != null ? (Number(p.value) * 100).toFixed(2) + '%' : '-'),
+    cellStyle: (p) => ({
+      color: p.value == null ? 'rgba(0,0,0,.25)' :
+        Number(p.value) >= 0 ? '#d4380d' : '#389e0d',
+      fontFamily: 'SF Mono, Menlo, monospace',
+    }),
+    sortable: true,
+  },
+  {
+    headerName: 'T+5', field: 't5_pnl_pct', width: 90, type: 'numericColumn',
+    valueFormatter: (p) =>
+      (p.value != null ? (Number(p.value) * 100).toFixed(2) + '%' : '-'),
+    cellStyle: (p) => ({
+      color: p.value == null ? 'rgba(0,0,0,.25)' :
+        Number(p.value) >= 0 ? '#d4380d' : '#389e0d',
+      fontFamily: 'SF Mono, Menlo, monospace',
+    }),
+    sortable: true,
+  },
 ])
 
 const defaultColDef: ColDef = {

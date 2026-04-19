@@ -15,6 +15,8 @@ export const useLhbStore = defineStore('lhb', () => {
     offset: 0,
     order_by: 'trade_date',
     order_desc: true,
+    // P16.5: 龙虎榜主列表默认带 T+N 收益字段, 便于 AG Grid 展示
+    with_tn: true,
   })
 
   async function search(partial?: Partial<LhbListParams>, resetOffset = true) {
