@@ -64,7 +64,7 @@
             >
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'net_amount'">
-                  {{ fmtAmount(record.net_amount) }}
+                  {{ fmtAmountWan(record.net_amount) }}
                 </template>
               </template>
             </a-table>
@@ -104,7 +104,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { fetchWeeklyReport, generateWeeklyReport, type WeeklyReport } from '@/api/reports'
-import { fmtAmount, fmtPct } from '@/utils/format'
+import { fmtAmount, fmtAmountWan, fmtPct } from '@/utils/format'
 import { downloadCsv, rowsToCsv } from '@/utils/csv'
 
 const range = ref<[string, string] | null>(null)

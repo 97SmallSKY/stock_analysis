@@ -42,7 +42,7 @@
               </template>
               <template v-else-if="['net_sum','buy_sum','sell_sum'].includes(column.key)">
                 <span :style="column.key === 'net_sum' ? { color: record.net_sum >= 0 ? '#d4380d' : '#389e0d' } : {}">
-                  {{ fmtAmount(record[column.key]) }}
+                  {{ fmtAmountWan(record[column.key]) }}
                 </span>
               </template>
               <template v-else-if="column.key === 'avg_score'">
@@ -67,7 +67,7 @@
               </template>
               <template v-else-if="['net_sum','buy_sum','sell_sum'].includes(column.key)">
                 <span :style="column.key === 'net_sum' ? { color: record.net_sum >= 0 ? '#d4380d' : '#389e0d' } : {}">
-                  {{ fmtAmount(record[column.key]) }}
+                  {{ fmtAmountWan(record[column.key]) }}
                 </span>
               </template>
               <template v-else-if="column.key === 'avg_score'">
@@ -90,7 +90,7 @@ import {
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
-import { fmtAmount } from '@/utils/format'
+import { fmtAmountWan } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
 
 echarts.use([BarChart, GridComponent, LegendComponent, TooltipComponent, TitleComponent, CanvasRenderer])

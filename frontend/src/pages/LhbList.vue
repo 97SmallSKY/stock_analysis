@@ -85,11 +85,11 @@
             </template>
             <template v-else-if="column.key === 'net_amount'">
               <span :style="{ color: (record.net_amount ?? 0) >= 0 ? '#d4380d' : '#389e0d', fontWeight: 500 }">
-                {{ fmtAmount(record.net_amount) }}
+                {{ fmtAmountWan(record.net_amount) }}
               </span>
             </template>
             <template v-else-if="['buy_amount','sell_amount'].includes(column.key)">
-              {{ fmtAmount(record[column.key]) }}
+              {{ fmtAmountWan(record[column.key]) }}
             </template>
           </template>
         </a-table>
@@ -109,7 +109,7 @@ import {
 import 'ag-grid-community/styles/ag-theme-quartz.css'
 import { useLhbStore } from '@/stores/lhb'
 import type { LhbRow, LhbListParams, LhbSeatRow } from '@/api/lhb'
-import { fmtAmount, fmtPct, fmtDate, rankClass } from '@/utils/format'
+import { fmtAmountWan, fmtPct, fmtDate, rankClass } from '@/utils/format'
 import { useStockDrill } from '@/composables/useStockDrill'
 
 ModuleRegistry.registerModules([AllCommunityModule])
@@ -168,16 +168,16 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
     sortable: true,
   },
   {
-    headerName: '买入', field: 'buy_amount', width: 120, type: 'numericColumn',
-    valueFormatter: (p) => fmtAmount(p.value as number | null),
+    headerName: '买入 (万)', field: 'buy_amount', width: 120, type: 'numericColumn',
+    valueFormatter: (p) => fmtAmountWan(p.value as number | null),
   },
   {
-    headerName: '卖出', field: 'sell_amount', width: 120, type: 'numericColumn',
-    valueFormatter: (p) => fmtAmount(p.value as number | null),
+    headerName: '卖出 (万)', field: 'sell_amount', width: 120, type: 'numericColumn',
+    valueFormatter: (p) => fmtAmountWan(p.value as number | null),
   },
   {
-    headerName: '净额', field: 'net_amount', width: 120, type: 'numericColumn',
-    valueFormatter: (p) => fmtAmount(p.value as number | null),
+    headerName: '净额 (万)', field: 'net_amount', width: 120, type: 'numericColumn',
+    valueFormatter: (p) => fmtAmountWan(p.value as number | null),
     cellStyle: (p) => ({ color: (p.value ?? 0) >= 0 ? '#d4380d' : '#389e0d' }),
     sortable: true,
   },

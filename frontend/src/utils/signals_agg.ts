@@ -28,7 +28,7 @@ export function scoreBuckets(rows: SignalLike[]): ScoreBucket[] {
   return defs
 }
 
-/** 净买入区间分布(亿元): <=-1 / -1~0 / 0~1 / 1~5 / >5 */
+/** 净买入区间分布 (LHB net_amount 单位是「万元」): <=-1亿 / -1亿~0 / 0~1亿 / 1亿~5亿 / >5亿 */
 export function netBuckets(rows: SignalLike[]): NetBucket[] {
   const defs: NetBucket[] = [
     { label: '≤ -1亿', count: 0 },
@@ -38,7 +38,8 @@ export function netBuckets(rows: SignalLike[]): NetBucket[] {
     { label: '> 5亿', count: 0 },
   ]
   for (const r of rows) {
-    const v = (r.net_amount ?? 0) / 1e8
+    // 1 亿 = 10000 万
+    const v = (r.net_amount ?? 0) / 1e4
     if (v <= -1) defs[0].count += 1
     else if (v < 0) defs[1].count += 1
     else if (v < 1) defs[2].count += 1

@@ -95,7 +95,9 @@
 - **2026-04-20 P13**:回测页独立路由(保留 `Backtest.vue` 策略对比原 Tab 不动,新增 `/backtest-run` 页 `BacktestRun.vue`)。
   - 新增 `utils/backtest_history.ts` 纯函数 `summarizeHistory`(total / success / successRate / avgReturn / bestSharpe),3 个单测覆盖空数组 / null 过滤 / 正常聚合。
   - `BacktestRun.vue` 顶部 4 个 KPI (`a-statistic`:总任务 / 成功率 / 平均收益 / 最佳 Sharpe,颜色依赖值正负),保留 Backtest.vue 历史 Tab 原列定义;搜索头部加「去策略对比」按钮跳 `/backtest`;`router/index.ts` 注册 `/backtest-run`。vitest 12 files / 63 tests 全绿,vue-tsc 0 error。
-- **2026-04-20 P14 (进行中)**:LHB 席位金额单位修复。
-  - **发现**:AkShare 提供的 `buy_amount / sell_amount / net_amount` 原始单位已经是**万元**,但前端 `fmtAmount` 把它当元处理,导致 `5811.81 万` 被显示成 `5811.81`(无单位歧义)或在更大数值上显示为 `58118.10 万`(把万当元再 /1e4)。
-  - **修复计划**:(a) 新增 `fmtAmountWan(v)`:输入即为万元,>=1e4 万时转 `x.xx 亿`,否则 `x.xx 万`;(b) LhbList 席位抽屉 + 主表 + Signals / LhbPnl / Dashboard 表格凡金额列改用 `fmtAmountWan`;(c) 单测覆盖边界(0 / 100万 / 1亿 / 负值)。
-  - **待部署**:修完后 `git push jd` 一次,smoke 确认显示正确。
+- **2026-04-20 P14**:LHB 席位金额单位修复(单位 = 万元,不是元)。
+  - **发现**:AkShare / `parser.py:32` 注明 `buy_amount: float = 0.0  # 万元`,但前端一直用 `fmtAmount` 把数值当元处理,导致 `5811.81 万` 被误显示成 `5811.81`。
+  - **`utils/format.ts`** 新增 `fmtAmountWan(v)`:输入即万元,绝对值 ≥ 1e4 万(= 1 亿)转 `x.xx 亿`,否则 `x.xx 万`;4 个单测覆盖 null / 正常 / 边界 9999万 vs 10000万 / 负值。
+  - **替换 5 个页面**:LhbList(AgGrid header 标注「买入 (万) / 卖出 (万) / 净额 (万)」+ drawer bodyCell)、LhbPnl(buy_sum/sell_sum/net_sum)、Signals(net_amount/netSum/netAvg)、Dashboard(Top1 net_amount + 龙虎榜表 net_amount)、Reports(lhb_top_net.net_amount)。Robots / Backtest / Reports.net_pnl 维持 `fmtAmount`(单位是元)。
+  - **`signals_agg.ts`** `netBuckets` 的阈值从 `/1e8`(亿元)改 `/1e4`(万→亿),同步更新 6 行单测的构造数据(`net_amount: 2e8 → 2e4` 等)。
+  - 全绿:vitest 12 files / 67 tests,vue-tsc 0 error。

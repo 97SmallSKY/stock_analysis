@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   fmtAmount, fmtPct, fmtNumber, fmtDate, healthColor, cbColor, rankClass,
+  fmtAmountWan,
 } from './format'
 
 describe('fmtAmount', () => {
@@ -63,6 +64,27 @@ describe('cbColor', () => {
     expect(cbColor('open')).toBe('red')
     expect(cbColor(null)).toBe('default')
     expect(cbColor('foo')).toBe('default')
+  })
+})
+
+describe('fmtAmountWan (单位已是万元)', () => {
+  it('null/undefined/NaN -> -', () => {
+    expect(fmtAmountWan(null)).toBe('-')
+    expect(fmtAmountWan(undefined)).toBe('-')
+    expect(fmtAmountWan(NaN)).toBe('-')
+  })
+  it('<1亿 保留万, >=1亿 (>=10000万) 转亿', () => {
+    expect(fmtAmountWan(5811.81)).toBe('5811.81 万')
+    expect(fmtAmountWan(9999)).toBe('9999.00 万')
+    expect(fmtAmountWan(10000)).toBe('1.00 亿')
+    expect(fmtAmountWan(25000)).toBe('2.50 亿')
+  })
+  it('负数', () => {
+    expect(fmtAmountWan(-7877.73)).toBe('-7877.73 万')
+    expect(fmtAmountWan(-12345)).toBe('-1.23 亿')
+  })
+  it('0 保留', () => {
+    expect(fmtAmountWan(0)).toBe('0.00 万')
   })
 })
 

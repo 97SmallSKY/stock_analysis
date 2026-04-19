@@ -31,19 +31,19 @@ describe('scoreBuckets', () => {
   })
 })
 
-describe('netBuckets', () => {
+describe('netBuckets (单位万元: 1亿=1e4万)', () => {
   it('五档区间', () => {
     const rows = [
-      make({ net_amount: -2e8 }),  // ≤ -1亿
-      make({ net_amount: -5e7 }),  // -1~0
-      make({ net_amount: 0 }),     // 0~1
-      make({ net_amount: 5e7 }),   // 0~1
-      make({ net_amount: 2e8 }),   // 1~5
-      make({ net_amount: 6e8 }),   // >5
+      make({ net_amount: -2e4 }),   // -2亿  -> ≤ -1亿
+      make({ net_amount: -5e3 }),   // -5千万 -> -1~0
+      make({ net_amount: 0 }),      // 0~1
+      make({ net_amount: 5e3 }),    // +5千万 -> 0~1
+      make({ net_amount: 2e4 }),    // +2亿  -> 1~5
+      make({ net_amount: 6e4 }),    // +6亿  -> >5
     ]
     expect(netBuckets(rows).map((x) => x.count)).toEqual([1, 1, 2, 1, 1])
   })
-  it('null 视为 0', () => {
+  it('null 视为 0 (0~1亿 桶)', () => {
     expect(netBuckets([make({ net_amount: null })]).map((x) => x.count))
       .toEqual([0, 0, 1, 0, 0])
   })

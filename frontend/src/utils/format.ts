@@ -8,6 +8,18 @@ export function fmtAmount(v: number | null | undefined): string {
   return v.toFixed(2)
 }
 
+/**
+ * 金额单位是「万元」时的格式化 (LHB buy_amount/sell_amount/net_amount)。
+ * 输入: 万元数值;>= 1e4 万 = 1 亿,转 `x.xx 亿`;否则保留 `x.xx 万`。
+ * 绝对小于 0.01 万(= 100 元)时视为 0。
+ */
+export function fmtAmountWan(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return '-'
+  const abs = Math.abs(v)
+  if (abs >= 1e4) return `${(v / 1e4).toFixed(2)} 亿`
+  return `${v.toFixed(2)} 万`
+}
+
 export function fmtPct(v: number | null | undefined, digits = 2): string {
   if (v === null || v === undefined || Number.isNaN(v)) return '-'
   return `${v.toFixed(digits)}%`

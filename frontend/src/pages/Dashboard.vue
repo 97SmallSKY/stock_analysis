@@ -45,7 +45,7 @@
           <div class="kpi-sub">
             净买入
             <span :style="{ color: (top1?.net_amount ?? 0) >= 0 ? '#d4380d' : '#389e0d' }">
-              {{ fmtAmount(top1?.net_amount) }}
+              {{ fmtAmountWan(top1?.net_amount) }}
             </span>
           </div>
         </a-card>
@@ -95,7 +95,7 @@
               </template>
               <template v-else-if="column.key === 'net_amount'">
                 <span :style="{ color: (record.net_amount ?? 0) >= 0 ? '#d4380d' : '#389e0d', fontWeight: 500 }">
-                  {{ fmtAmount(record.net_amount) }}
+                  {{ fmtAmountWan(record.net_amount) }}
                 </span>
               </template>
               <template v-else-if="column.key === 'score'">
@@ -154,7 +154,7 @@ import {
 import { useDashboardStore } from '@/stores/dashboard'
 import type { TopLhbRow } from '@/api/dashboard'
 import {
-  fmtAmount, fmtPct, fmtDate, healthColor, cbColor,
+  fmtAmountWan, fmtPct, fmtDate, healthColor, cbColor,
 } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
 

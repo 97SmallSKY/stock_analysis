@@ -49,7 +49,7 @@
               <template v-else-if="column.key === 'trade_date'">{{ fmtDate(record.trade_date) }}</template>
               <template v-else-if="column.key === 'net_amount'">
                 <span :style="{ color: (record.net_amount ?? 0) >= 0 ? '#d4380d' : '#389e0d' }">
-                  {{ fmtAmount(record.net_amount) }}
+                  {{ fmtAmountWan(record.net_amount) }}
                 </span>
               </template>
               <template v-else-if="column.key === 'score'">
@@ -75,8 +75,8 @@
             <a-descriptions-item label="平均评分">
               {{ summary.avgScore != null ? summary.avgScore.toFixed(2) : '-' }}
             </a-descriptions-item>
-            <a-descriptions-item label="净买入合计">{{ fmtAmount(summary.netSum) }}</a-descriptions-item>
-            <a-descriptions-item label="净买入均值">{{ fmtAmount(summary.netAvg) }}</a-descriptions-item>
+            <a-descriptions-item label="净买入合计">{{ fmtAmountWan(summary.netSum) }}</a-descriptions-item>
+            <a-descriptions-item label="净买入均值">{{ fmtAmountWan(summary.netAvg) }}</a-descriptions-item>
           </a-descriptions>
           <a-divider style="margin: 12px 0;" />
           <div style="font-weight: 500; margin-bottom: 8px;">前 5 上榜原因</div>
@@ -154,7 +154,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { Empty } from 'ant-design-vue'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
-import { fmtAmount, fmtDate } from '@/utils/format'
+import { fmtAmountWan, fmtDate } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
 import {
   summarize, scoreBuckets, netBuckets, dailyBuckets,
