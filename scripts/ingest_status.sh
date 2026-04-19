@@ -8,36 +8,52 @@ echo '============ 1. 进程 ============'
 ps -ef | grep -E "full_ingest|backend.cli ingest" | grep -v grep || echo '  (none)'
 
 echo
-echo '============ 1.5 日志心跳检查 ============'
+echo '============ 1.5 日志心跳检查(自动定位最近活跃日志)============'
 # 事故教训 (2026-04-18): 进程活着但日志长时间无增长 = 某个 HTTP 调用卡死.
-# 这里检测 full_ingest.log 最近修改时间, 静默超 10 分钟即红色警告.
-if [ -f logs/full_ingest.log ]; then
-  MTIME=$(stat -c %Y logs/full_ingest.log 2>/dev/null || stat -f %m logs/full_ingest.log)
+# 事故教训 (2026-04-20): 仅看 full_ingest.log 会漏掉 p16_*.log 等分流日志, 误报卡死.
+# 策略: 扫描 logs/*.log, 取 mtime 最新的那个作为"活跃日志", 同时列出前 3 个最近修改的.
+mapfile -t RECENT_LOGS < <(
+  find logs/ -maxdepth 1 -name '*.log' -type f -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | head -5 | awk '{print $2}'
+)
+if [ ${#RECENT_LOGS[@]} -gt 0 ]; then
+  ACTIVE_LOG="${RECENT_LOGS[0]}"
+  MTIME=$(stat -c %Y "$ACTIVE_LOG" 2>/dev/null || stat -f %m "$ACTIVE_LOG")
   NOW=$(date +%s)
   SILENT=$(( NOW - MTIME ))
+  echo "  活跃日志: $ACTIVE_LOG"
   if [ $SILENT -gt 600 ]; then
-    echo "  ⚠️  日志已静默 $((SILENT / 60)) 分钟 (>10 分钟), 疑似卡死"
+    echo "  ⚠️  已静默 $((SILENT / 60)) 分钟 (>10 分钟), 疑似卡死"
     echo "     排查: ss -tnp | grep <pid>  /  lsof -nP -p <pid> | grep TCP"
-    echo "     处置: kill -9 <pid> 让 full_ingest 进入下一阶段"
+    echo "     处置: kill -9 <pid> 让任务进入下一阶段"
   else
-    echo "  ✓ 日志 ${SILENT}s 前刚更新 (<10 分钟)"
+    echo "  ✓ ${SILENT}s 前刚更新 (<10 分钟)"
   fi
+  echo
+  echo '  最近修改的日志 Top5:'
+  for f in "${RECENT_LOGS[@]}"; do
+    m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f")
+    age=$(( NOW - m ))
+    sz=$(stat -c %s "$f" 2>/dev/null || stat -f %z "$f")
+    printf '    %-45s  age=%5ds  size=%s\n' "$f" "$age" "$sz"
+  done
 else
-  echo '  (no log)'
+  echo '  (no log files under logs/)'
+  ACTIVE_LOG=""
 fi
 
 echo
-echo '============ 2. 阶段里程碑 ============'
-if [ -f logs/full_ingest.log ]; then
-  grep -E "=== 阶段|完成|失败.*只|失败.*天|行业覆盖|增量模式|进度" logs/full_ingest.log | tail -15
+echo '============ 2. 阶段里程碑(活跃日志)============'
+if [ -n "$ACTIVE_LOG" ] && [ -f "$ACTIVE_LOG" ]; then
+  grep -E "=== 阶段|完成|失败.*只|失败.*天|行业覆盖|增量模式|进度" "$ACTIVE_LOG" | tail -15
 else
-  echo '  (no log)'
+  echo '  (no active log)'
 fi
 
 echo
-echo '============ 3. 最近 5 条异常(非进度条) ============'
-if [ -f logs/full_ingest.log ]; then
-  grep -E "ERROR|失败:|触发限流|熔断|RemoteDisconnected" logs/full_ingest.log \
+echo '============ 3. 最近 5 条异常(活跃日志,非进度条)============'
+if [ -n "$ACTIVE_LOG" ] && [ -f "$ACTIVE_LOG" ]; then
+  grep -E "ERROR|失败:|触发限流|熔断|RemoteDisconnected" "$ACTIVE_LOG" \
     | grep -v -E "%\||\[0m" \
     | tail -5 || echo '  (clean)'
 fi

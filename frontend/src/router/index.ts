@@ -55,6 +55,12 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/Signals.vue'),
     meta: { title: '决策辅助信号' },
   },
+  {
+    path: '/changelog',
+    name: 'changelog',
+    component: () => import('@/pages/Changelog.vue'),
+    meta: { title: '特性介绍' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 

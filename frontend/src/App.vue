@@ -49,6 +49,10 @@
             <template #icon><DatabaseOutlined /></template>
             数据源
           </a-menu-item>
+          <a-menu-item key="/changelog">
+            <template #icon><HistoryOutlined /></template>
+            特性介绍
+          </a-menu-item>
         </a-menu>
       </a-layout-header>
 
@@ -78,7 +82,7 @@ import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import {
   DashboardOutlined, TableOutlined, BulbOutlined, PieChartOutlined,
   LineChartOutlined, RobotOutlined, FileTextOutlined, DatabaseOutlined,
-  StockOutlined,
+  StockOutlined, HistoryOutlined,
 } from '@ant-design/icons-vue'
 import StockDrillModal from '@/components/StockDrillModal.vue'
 

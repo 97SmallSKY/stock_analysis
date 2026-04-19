@@ -1,0 +1,74 @@
+# 开发日志 / Changelog
+
+> 本文件是「特性介绍」页面(`/changelog`)的数据源。
+> 每次完成修复或新增特性,按时间倒序在顶部追加一条。
+> 条目格式:三级标题 `### YYYY-MM-DD · 类型 · 简要标题`,类型 ∈ {feature, fix, refactor, perf, docs, ops}
+
+---
+
+### 2026-04-20 · feature · 新增「特性介绍」页面
+
+- 前端新增 `/changelog` 路由,顶部菜单「特性介绍」
+- 页面渲染本文档(时间倒序 + 类型标签过滤)
+- 数据源:后端 `GET /api/changelog`,直接返回本 md 的结构化解析结果
+
+**动机**:之前每次修了什么、加了什么功能,只有 git log 和 PROGRESS.md 记录,用户难以直观感知迭代节奏。
+
+---
+
+### 2026-04-20 · fix · 灌库状态速览 `ingest_status.sh` 误报卡死
+
+- 旧版只监控 `logs/full_ingest.log`,但实际 P16 K 线回填日志分流到 `logs/p16_kline_2025.log`,导致误报「静默 1832 分钟 · 疑似卡死」
+- 新版改为扫描 `logs/*.log`,自动定位 mtime 最新的那个作为活跃日志,并列出 Top5 最近修改的日志文件
+
+**事故教训**:监控路径硬编码 → 任务日志路径变化时监控失效。
+
+---
+
+### 2026-04-20 · ops · 灌库进度巡检建立 20 分钟循环
+
+- 定时巡检:每 20 分钟自动 `ssh jd bash ~/stock_analysis/scripts/ingest_status.sh`
+- 对比上一轮进度,判断长耗时回填是否完成/卡死
+- P16 K 线 2025 全年回填进入尾声(~96%),预计 20 分钟内完成
+
+---
+
+### 2026-04-19 · fix · P18.2 Signals 评分详情 [object Object] 与 LhbList 列筛选误导
+
+- Signals 页评分详情某字段对象被直接字符串化
+- LhbList 列筛选表现与用户预期不一致
+- commit: `58f2d6e`
+
+---
+
+### 2026-04-19 · feature · P16 K 线数据回填 2025 全年
+
+- 全市场 5504 只股票,2025-01-01 → 2025-10-31,workers=4 并行
+- 数据源链路:akshare → sina → 自建 crawler,自动降级
+- 北交所 92* 开头股票暂无可用数据源(三家都返回异常),待后续适配
+
+---
+
+### 2026-04-18 · perf · 覆盖率门槛抬升到 75%
+
+- pytest `--cov-fail-under` 从 70 → 75
+- aggregator 补 11 个 case,实际覆盖率 75.81%
+
+---
+
+### 2026-04-18 · ops · 事故:进程活但日志静默 = HTTP 卡死
+
+- full_ingest 进程看起来在跑,但 10 分钟无日志输出
+- 根因:某个 akshare HTTP 调用 socket 卡死,未触发超时
+- 应急:`kill -9 <pid>` 让 full_ingest 进入下一阶段
+- 长期:`ingest_status.sh` 增加心跳检测
+
+---
+
+### 2026-04-17 · refactor · ADR-0001 清理 SQLAlchemy / Alembic 死引用
+
+- 统一使用 `psycopg2 + db/init/NN_xxx.sql` 版本化迁移
+- 删除 `data_sources/` 旧包(已被 `backend/data_gateway/` 替代)
+- `backend/ingest/lhb.py` 降级为薄壳,核心逻辑迁 `backend/domain/lhb/`
+
+---
