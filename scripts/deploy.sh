@@ -135,7 +135,11 @@ services=(
     stock_analysis_api.service
 )
 for svc in "${services[@]}"; do
-    if systemctl list-unit-files 2>/dev/null | grep -q "^${svc}"; then
+    # 2026-04-20 #8 修复:
+    #   旧实现 `systemctl list-unit-files | grep -q` 在 pipefail 下偶发误判,
+    #   且全量列出所有 unit 相对昂贵。改为针对单个 unit 的轻量探测:
+    #   `systemctl cat` 命中会打印 unit 内容(stdout 重定向掉),不存在则 exit≠0。
+    if sudo systemctl cat "$svc" >/dev/null 2>&1; then
         echo "==> Restarting $svc"
         sudo systemctl restart "$svc"
     else

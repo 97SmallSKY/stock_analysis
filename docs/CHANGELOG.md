@@ -6,6 +6,14 @@
 
 ---
 
+### 2026-04-20 · fix · `deploy.sh` service 探测改用 `systemctl cat` 避免误报
+
+- 旧实现:`systemctl list-unit-files | grep -q "^$svc"` 在 `set -o pipefail` + 全量 unit 输出下偶发误判,打印「Skip … 未安装」,但紧接着 healthcheck 却显示 `active ✓`
+- 新实现:`sudo systemctl cat $svc >/dev/null 2>&1`,针对单个 unit 的轻量探测,不存在时 exit≠0
+- 收益:deploy 输出不再矛盾,后续观察 1~2 轮部署无误报即关闭
+
+---
+
 ### 2026-04-20 · perf · Changelog API 显式按日期倒序
 
 - 之前依赖 md 文件内原顺序,一旦追加者没按顺序插入,时间线会跳乱
