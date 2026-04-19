@@ -82,3 +82,9 @@
   - `systemd unit 未安装` → `deploy.sh` 跳过 restart。手动 `ssh jd pkill uvicorn + nohup .venv/bin/uvicorn` 拉起新进程 pid 4054433(老 pid 4040791 停)。
   - 冒烟 11 端点全 200:`/healthz` / `/` SPA / `/api/dashboard` / `/api/lhb?limit=1` / `/api/reports/weekly` / `/api/backtest/history`(返回 {total:0, rows:[]})/ `/api/kline/daily`(返回 20 条真实 K 线)/ `/api/kline/weekly` / `/api/kline/minute`(返回 empty_reason=no_source_table)/ `/api/robots` / `/api/lhb/seats`。
   - TODO(非阻塞):`scripts/install_units.sh` 装 `stock_analysis_api.service`,让 `make deploy` 自动 restart 而不是依赖手动 pkill。
+- **2026-04-20 P10.1–P10.5**:龙虎榜 name 透出 + Drill 空态美化 + Signals 多维度。
+  - P10.1 `/api/lhb` + `/api/lhb/seats` JOIN `stock_info` 透出 `name`,后端单测覆盖 happy / empty / join-missing。
+  - P10.2 新增 `StockLink.vue` 支持 `name` prop(code · 简称一行),Dashboard / Signals / LhbPnl / Robots / Backtest 五页统一接入。
+  - P10.3 `StockDrillModal` 分钟 K 空态改造:120px 细体大号「无」+ 小字原因;2 个组件单测覆盖 minute / daily 空态双分支。
+  - P10.4 `LhbList` 席位抽屉美化:`rank_no` 圆角徽章(rank-1 红 / 2 橙 / 3 金 / 其他灰),`net_amount` 正负染色 + 加粗;`rankClass` 提取 `utils/format.ts` 并附 7 分支单测。
+  - P10.5 `Signals` 多维度分析:新增 `utils/signals_agg.ts` 纯函数(`scoreBuckets` / `netBuckets` / `dailyBuckets` / `summarize`),页面右侧统计卡补「涉及股票 / 净买入均值」、下方新增 3 张维度卡(评分段 / 净买入区间 / 分日数量)均用水平进度条展示占比(同页占比归一);9 个聚合单测 + 现有 46 个,vitest 10 files / 55 tests 全绿,vue-tsc 0 error。

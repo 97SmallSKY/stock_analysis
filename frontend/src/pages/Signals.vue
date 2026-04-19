@@ -71,13 +71,15 @@
         <a-card :bordered="false" title="统计">
           <a-descriptions :column="1" size="small" bordered>
             <a-descriptions-item label="信号总数">{{ summary.count }}</a-descriptions-item>
+            <a-descriptions-item label="涉及股票">{{ summary.uniqStocks }}</a-descriptions-item>
             <a-descriptions-item label="平均评分">
               {{ summary.avgScore != null ? summary.avgScore.toFixed(2) : '-' }}
             </a-descriptions-item>
             <a-descriptions-item label="净买入合计">{{ fmtAmount(summary.netSum) }}</a-descriptions-item>
+            <a-descriptions-item label="净买入均值">{{ fmtAmount(summary.netAvg) }}</a-descriptions-item>
           </a-descriptions>
           <a-divider style="margin: 12px 0;" />
-          <div style="font-weight: 500; margin-bottom: 8px;">前 3 上榜原因</div>
+          <div style="font-weight: 500; margin-bottom: 8px;">前 5 上榜原因</div>
           <a-empty v-if="summary.topReasons.length === 0" :image="simpleImage" description="" />
           <div v-else>
             <div
@@ -94,6 +96,57 @@
         </a-card>
       </a-col>
     </a-row>
+
+    <a-row :gutter="12" style="margin-top: 12px;" data-test="dim-cards">
+      <a-col :span="8">
+        <a-card :bordered="false" title="评分段分布" size="small" class="dim-card">
+          <div
+            v-for="b in dimScore"
+            :key="b.label"
+            class="dim-bar"
+          >
+            <span class="dim-label">{{ b.label }}</span>
+            <div class="dim-track">
+              <div class="dim-fill score" :style="{ width: pct(b.count, summary.count) + '%' }"></div>
+            </div>
+            <span class="dim-count">{{ b.count }}</span>
+          </div>
+        </a-card>
+      </a-col>
+      <a-col :span="8">
+        <a-card :bordered="false" title="净买入区间" size="small" class="dim-card">
+          <div
+            v-for="b in dimNet"
+            :key="b.label"
+            class="dim-bar"
+          >
+            <span class="dim-label">{{ b.label }}</span>
+            <div class="dim-track">
+              <div class="dim-fill net" :style="{ width: pct(b.count, summary.count) + '%' }"></div>
+            </div>
+            <span class="dim-count">{{ b.count }}</span>
+          </div>
+        </a-card>
+      </a-col>
+      <a-col :span="8">
+        <a-card :bordered="false" title="分日数量" size="small" class="dim-card">
+          <a-empty v-if="dimDaily.length === 0" :image="simpleImage" description="无" />
+          <div v-else class="daily-rows">
+            <div
+              v-for="b in dimDaily"
+              :key="b.date"
+              class="dim-bar"
+            >
+              <span class="dim-label mono">{{ b.date }}</span>
+              <div class="dim-track">
+                <div class="dim-fill daily" :style="{ width: pct(b.count, dailyMax) + '%' }"></div>
+              </div>
+              <span class="dim-count">{{ b.count }}</span>
+            </div>
+          </div>
+        </a-card>
+      </a-col>
+    </a-row>
   </div>
 </template>
 
@@ -103,6 +156,9 @@ import { Empty } from 'ant-design-vue'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
 import { fmtAmount, fmtDate } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
+import {
+  summarize, scoreBuckets, netBuckets, dailyBuckets,
+} from '@/utils/signals_agg'
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
@@ -184,27 +240,44 @@ function onReset() {
   load()
 }
 
-const summary = computed(() => {
-  const list = rows.value
-  const count = list.length
-  const scores = list.map((r) => r.score).filter((v): v is number => v != null)
-  const avgScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null
-  const netSum = list.reduce((a, r) => a + (r.net_amount ?? 0), 0)
-  const reasonCnt = new Map<string, number>()
-  for (const r of list) {
-    const k = (r.reason ?? '').trim() || '(未知)'
-    reasonCnt.set(k, (reasonCnt.get(k) ?? 0) + 1)
-  }
-  const topReasons = [...reasonCnt.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([reason, cnt]) => ({ reason, count: cnt }))
-  return { count, avgScore, netSum, topReasons }
-})
+const summary = computed(() => summarize(rows.value, 5))
+const dimScore = computed(() => scoreBuckets(rows.value))
+const dimNet = computed(() => netBuckets(rows.value))
+const dimDaily = computed(() => dailyBuckets(rows.value))
+const dailyMax = computed(() => dimDaily.value.reduce((m, b) => Math.max(m, b.count), 0) || 1)
+
+function pct(n: number, total: number): number {
+  if (!total) return 0
+  return Math.min(100, Math.round((n / total) * 100))
+}
 
 onMounted(load)
 </script>
 
 <style scoped>
 .signals-page { padding: 12px; }
+.dim-card :deep(.ant-card-body) { padding: 12px 16px; }
+.dim-bar {
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px; font-size: 12px;
+}
+.dim-label { min-width: 68px; color: #595959; }
+.dim-label.mono { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; }
+.dim-track {
+  flex: 1; height: 10px; background: #f5f5f5;
+  border-radius: 5px; overflow: hidden;
+}
+.dim-fill {
+  height: 100%; border-radius: 5px;
+  transition: width 0.3s ease;
+}
+.dim-fill.score { background: linear-gradient(90deg, #faad14, #d4380d); }
+.dim-fill.net { background: linear-gradient(90deg, #1677ff, #722ed1); }
+.dim-fill.daily { background: linear-gradient(90deg, #52c41a, #13c2c2); }
+.dim-count {
+  min-width: 32px; text-align: right;
+  font-family: 'SF Mono', Menlo, monospace;
+  color: #262626; font-weight: 500;
+}
+.daily-rows { max-height: 220px; overflow-y: auto; }
 </style>
