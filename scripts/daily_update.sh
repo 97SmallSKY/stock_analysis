@@ -22,14 +22,21 @@ ERR_COUNT=0
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG_FILE"; }
 
+# run_step <timeout_sec> <name> <cmd...>
+# 超时走 `timeout`,stderr/stdout 全部 append 到 LOG_FILE
 run_step() {
+  local tmo="$1"; shift
   local name="$1"; shift
-  log "==> BEGIN $name :: $*"
-  if "$@" >>"$LOG_FILE" 2>&1; then
+  log "==> BEGIN $name (timeout=${tmo}s) :: $*"
+  if timeout --preserve-status "$tmo" "$@" >>"$LOG_FILE" 2>&1; then
     log "<== OK $name"
   else
     local rc=$?
-    log "<== ERROR $name (rc=$rc)"
+    if [ "$rc" = "124" ]; then
+      log "<== TIMEOUT $name (exceeded ${tmo}s)"
+    else
+      log "<== ERROR $name (rc=$rc)"
+    fi
     ERR_COUNT=$((ERR_COUNT+1))
   fi
 }
@@ -43,20 +50,22 @@ if [ -f .venv/bin/activate ]; then
   log "venv activated: $(python -V 2>&1)"
 fi
 
-# 1) 龙虎榜主表(单日)
-run_step lhb_daily python -m backend.cli ingest lhb --from "$TODAY" --to "$TODAY"
+# 每步单独超时;总预算 ~= 各步 timeout 之和,与 systemd TimeoutStartSec=3h 对齐
 
-# 2) 席位 TOP10
-run_step lhb_seats python -m backend.cli ingest lhb-seats --from "$TODAY" --to "$TODAY" --top 10
+# 1) 龙虎榜主表(单日) — 轻量,10 分钟足够
+run_step 600 lhb_daily python -m backend.cli ingest lhb --from "$TODAY" --to "$TODAY"
 
-# 3) 市场情绪
-run_step sentiment python -m backend.cli ingest sentiment --from "$TODAY" --to "$TODAY"
+# 2) 席位 TOP10 — 中等,20 分钟
+run_step 1200 lhb_seats python -m backend.cli ingest lhb-seats --from "$TODAY" --to "$TODAY" --top 10
 
-# 4) 日K线(全市场增量)
-run_step kline python -m backend.cli ingest kline --from "$TODAY" --to "$TODAY" --codes all
+# 3) 市场情绪 — 轻量,5 分钟
+run_step 300 sentiment python -m backend.cli ingest sentiment --from "$TODAY" --to "$TODAY"
 
-# 5) 评分(仅空缺行)
-run_step score python -m backend.cli score --from "$TODAY" --to "$TODAY" --only-empty
+# 4) 日K线(全市场增量) — 重量级(5000 只 × akshare),90 分钟
+run_step 5400 kline python -m backend.cli ingest kline --from "$TODAY" --to "$TODAY" --codes all
+
+# 5) 评分(仅空缺行) — 轻量,10 分钟
+run_step 600 score python -m backend.cli score --from "$TODAY" --to "$TODAY" --only-empty
 
 ELAPSED=$(( $(date +%s) - START_TS ))
 log "################ daily_update END errors=$ERR_COUNT elapsed=${ELAPSED}s ################"
