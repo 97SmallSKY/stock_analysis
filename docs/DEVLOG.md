@@ -11,6 +11,33 @@
 
 ---
 
+### 2026-04-20 · perf · Dashboard sentiment 3 组实时聚合(对抗 schema-vs-API 错配)
+
+**P20.4 / P20.5**:`/api/dashboard.sentiment` 里 `lhb_stock_count / lhb_total_net / lhb_avg_score / sentiment_change` 4 个字段长期为 NULL/0。market_sentiment 表**有这 4 列**(不像 P18.13b 里的 total_stocks/up_count/down_count 那样完全不存在),但从未跑回填脚本。
+
+**决策**:不启动新的回填任务,改为 **API 层实时聚合**,和 P18.13b 的策略一致:
+- `lhb_stock_count` = `SELECT COUNT(*) FROM lhb_stock_daily WHERE trade_date=%s`
+- `lhb_total_net` = `SUM(l_net)`
+- `lhb_avg_score` = `AVG(score) FILTER (WHERE score IS NOT NULL)`
+- `sentiment_change` = 当日 `sentiment_score` − 前一个完整交易日 `sentiment_score`
+
+**好处**:
+- 避免再踩 schema-vs-API 错配(P18.13b 的教训)
+- 数据永远最新,无需定时任务
+- 单次查询 +3ms 级开销可忽略
+
+**E2E 验证**:`sentiment_change = 0.0`(前后两日 45→45),`lhb_total_net = 36.2 亿`,`lhb_avg_score = 65.66`。**Dashboard sentiment 20 字段全覆盖**。
+
+---
+
+### 2026-04-20 · devops · smoke_http.sh 覆盖从 3 个扩到 8 个端点
+
+新增覆盖:`/healthz` / `/api/changelog` / `/api/devlog`(P20.1 新端点)/ `/api/kline/daterange`(P19.1)/ `/api/kline/daily?limit=5`(P19.13 回归)。
+
+jd 实跑 8/8 通过,未来 API 回归防控更可靠。
+
+---
+
 ### 2026-04-20 · devops · 文档分流:特性 vs 开发
 
 **是什么**:新增 `docs/DEVLOG.md`,把面向开发者的技术笔记从 CHANGELOG 拆出去。
