@@ -10,7 +10,7 @@
 
 **我是 Personal Dev 工作区的运维 AI**,挂机 7×24 轮询。Ops 是 **唯一能转 Done 的角色**。
 
-### ⏰ 每 10 分钟固定循环(三闭环按优先级)
+### ⏰ 每 20 分钟固定循环(三闭环按优先级)
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
@@ -22,7 +22,7 @@
 │       - Schema drift(每 1 小时,见 §5)                     │
 │       - 7x24 灌库健康(见 7x24_agent.md)                    │
 │   记日志:[HH:MM] OPS cycle: <动作>                          │
-│   ScheduleWakeup(delaySeconds=600)                           │
+│   ScheduleWakeup(delaySeconds=1200)                           │
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -254,7 +254,7 @@ DB:     PostgreSQL 15 + TimescaleDB,localhost:5432
 ```
 @docs/prompts/linear/ops.md + @docs/prompts/7x24_agent.md
 
-进入 Ops 角色,按 §0 的 10 分钟循环:
+进入 Ops 角色,按 §0 的 20 分钟循环:
 - P0 事故响应(最优先,建 Bug + 止损)
 - P1 JIT merge 部署(@ops + test-passed 的 PR)
 - P2 Watch 巡检(daily / smoke / schema drift / 灌库)

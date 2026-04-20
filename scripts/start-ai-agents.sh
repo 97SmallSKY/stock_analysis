@@ -39,11 +39,11 @@ generate_prompt() {
     cat <<EOF
 请先读 @docs/prompts/linear/README.md 和 @docs/prompts/linear/${role}.md 和 @CLAUDE.md
 
-进入 ${role^^} 角色,按以下规则每 10 分钟轮询一次:
+进入 ${role^^} 角色,按以下规则每 20 分钟轮询一次:
 
 1. 按 ${role}.md 的「主动巡检 / 循环闭环」筛选自己的队列
 2. 队列非空时处理第一条(最多做完 1 条 issue 就停下)
-3. 队列为空时 ScheduleWakeup(delaySeconds=600),进入下一轮
+3. 队列为空时 ScheduleWakeup(delaySeconds=1200),进入下一轮
 4. 遇到 L4 决策(钱 / 不可逆 / 外部依赖)加 🔴 + Urgent + 保留 @pm
 5. 每轮开始和结束打印一行日志:\`[\$(date +%H:%M)] ${role^^} cycle: <动作摘要>\`
 
