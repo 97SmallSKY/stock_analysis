@@ -14,7 +14,9 @@
       <a-row :gutter="12">
         <a-col :span="10">
           <a-form-item label="日期范围">
-            <!-- P19.6d (2026-04-20): 日期范围快捷钮,需要宽点展示 -->
+            <!-- P19.6d (2026-04-20): 日期范围快捷钮。
+                 P19.10: Backtest 需手动触发「运行对比」,不自动 run(成本高),
+                 仅展示当前区间即可,无需 @change -->
             <DateRangeQuickPick v-model="range" />
           </a-form-item>
         </a-col>

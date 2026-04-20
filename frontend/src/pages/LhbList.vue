@@ -4,8 +4,9 @@
       <a-form layout="inline" :model="form" @submit.prevent="onSearch">
         <a-form-item label="日期">
           <!-- P19.6a (2026-04-20): 用 DateRangeQuickPick 替换 a-range-picker。
-               默认 1 年范围 + 快捷钮 1Y/季度/3M/1M/1W/5D/今天 -->
-          <DateRangeQuickPick v-model="form.range" />
+               默认 1 年范围 + 快捷钮 1Y/季度/3M/1M/1W/5D/今天
+               P19.10: 点击快捷钮或编辑日期即触发查询,无需再点查询 -->
+          <DateRangeQuickPick v-model="form.range" @change="onSearch" />
         </a-form-item>
         <a-form-item label="股票">
           <a-input v-model:value="form.ts_code" placeholder="000001.SZ" allow-clear style="width: 140px;" />

@@ -3,8 +3,9 @@
     <a-card :bordered="false" :body-style="{ paddingBottom: 8 }">
       <a-form layout="inline" :model="form" @submit.prevent="onSearch">
         <a-form-item label="日期">
-          <!-- P19.6b (2026-04-20): DateRangeQuickPick 替换 a-range-picker。默认 1 年。 -->
-          <DateRangeQuickPick v-model="form.range" />
+          <!-- P19.6b (2026-04-20): 默认 1 年。
+               P19.10: 点击即查 -->
+          <DateRangeQuickPick v-model="form.range" @change="onSearch" />
         </a-form-item>
         <a-form-item label="评分≥">
           <a-slider
@@ -177,34 +178,42 @@
       </a-col>
     </a-row>
 
-    <!-- P19.8 (2026-04-20): 评分明细 Modal,雷达图 + 中文标签明细表 -->
+    <!-- P19.8 (2026-04-20) · P19.10 布局优化: 上下结构
+         顶部:一行 header 紧凑显示股票/日期/评分/净买入/上榜原因
+         中部:雷达图居中 100% 宽
+         底部:2 列明细表,避免右侧挤、左下空 -->
     <a-modal
       v-model:open="detailOpen"
       :title="detailTitle"
-      width="720px"
+      width="640px"
       :footer="null"
       destroy-on-close
       @close="onDetailClose"
     >
-      <a-row v-if="detailRow" :gutter="16">
-        <a-col :span="14">
-          <div ref="radarEl" style="width: 100%; height: 360px;"></div>
-        </a-col>
-        <a-col :span="10">
-          <a-descriptions :column="1" size="small" bordered>
-            <a-descriptions-item label="股票">
-              <StockLink :code="detailRow.ts_code" :name="detailRow.name" />
-            </a-descriptions-item>
-            <a-descriptions-item label="日期">{{ fmtDate(detailRow.trade_date) }}</a-descriptions-item>
-            <a-descriptions-item label="综合评分">
-              <a-tag :color="scoreColor(detailRow.score)">{{ detailRow.score ?? '-' }}</a-tag>
-            </a-descriptions-item>
-            <a-descriptions-item label="净买入">{{ fmtAmountWan(detailRow.net_amount) }}</a-descriptions-item>
-            <a-descriptions-item label="上榜原因">{{ detailRow.reason }}</a-descriptions-item>
-          </a-descriptions>
-          <pre class="score-detail-pre" style="margin-top: 12px;">{{ formatDetail(detailRow.score_detail) }}</pre>
-        </a-col>
-      </a-row>
+      <div v-if="detailRow" class="detail-modal">
+        <!-- Header: 一行紧凑展示关键信息 -->
+        <a-descriptions :column="2" size="small" bordered class="detail-header">
+          <a-descriptions-item label="股票">
+            <StockLink :code="detailRow.ts_code" :name="detailRow.name" />
+          </a-descriptions-item>
+          <a-descriptions-item label="日期">{{ fmtDate(detailRow.trade_date) }}</a-descriptions-item>
+          <a-descriptions-item label="综合评分">
+            <a-tag :color="scoreColor(detailRow.score)">{{ detailRow.score ?? '-' }}</a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="净买入">{{ fmtAmountWan(detailRow.net_amount) }}</a-descriptions-item>
+          <a-descriptions-item label="上榜原因" :span="2">{{ detailRow.reason }}</a-descriptions-item>
+        </a-descriptions>
+
+        <!-- 雷达图 -->
+        <div class="detail-radar-wrap">
+          <div ref="radarEl" class="detail-radar"></div>
+        </div>
+
+        <!-- 明细分块:按维度分 3 列网格,避免单列过长 -->
+        <div class="detail-grid">
+          <pre class="score-detail-pre">{{ formatDetail(detailRow.score_detail) }}</pre>
+        </div>
+      </div>
     </a-modal>
   </div>
 </template>
@@ -449,10 +458,40 @@ onMounted(load)
   margin: 0;
   font-family: 'SF Mono', Menlo, monospace;
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.6;
   color: #333;
   white-space: pre-wrap;
-  word-break: break-all;
-  max-width: 340px;
+  word-break: break-word;
+  /* P19.10: Modal 里需要多列排版,不再硬限 340px */
+}
+
+/* P19.10 (2026-04-20): 评分明细 Modal 布局 */
+.detail-modal .detail-header {
+  margin-bottom: 12px;
+}
+.detail-modal .detail-radar-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+.detail-modal .detail-radar {
+  width: 100%;
+  max-width: 560px;
+  height: 340px;
+}
+.detail-modal .detail-grid {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #fafbfc;
+  border-radius: 6px;
+  /* 用 CSS column 让 pre 内容自然分 2 列 */
+  column-count: 2;
+  column-gap: 24px;
+  column-rule: 1px dashed #e7e7e7;
+}
+.detail-modal .detail-grid .score-detail-pre {
+  break-inside: avoid-column;
+  margin: 0;
+  font-size: 11.5px;
 }
 </style>

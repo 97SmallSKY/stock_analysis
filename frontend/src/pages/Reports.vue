@@ -3,8 +3,9 @@
     <a-card :bordered="false" title="周报">
       <template #extra>
         <a-space>
-          <!-- P19.6e (2026-04-20): 周报默认近 1 周(与功能语义匹配,不用一年) -->
-          <DateRangeQuickPick v-model="range" :options="['1m', '1w', '5d', 'today']" />
+          <!-- P19.6e (2026-04-20): 周报默认近 1 周(与功能语义匹配,不用一年)
+               P19.10: 点击即查 -->
+          <DateRangeQuickPick v-model="range" :options="['1m', '1w', '5d', 'today']" @change="load" />
           <a-button :loading="loading" @click="load">查询</a-button>
           <a-button type="primary" :loading="loading" @click="generate">
             生成本周报

@@ -3,8 +3,9 @@
     <a-card :bordered="false" :body-style="{ paddingBottom: 8 }">
       <a-form layout="inline" :model="form" @submit.prevent="onSearch">
         <a-form-item label="日期">
-          <!-- P19.6c (2026-04-20): 日期范围快捷选择 -->
-          <DateRangeQuickPick v-model="form.range" />
+          <!-- P19.6c (2026-04-20): 日期范围快捷选择
+               P19.10: 点击即查 -->
+          <DateRangeQuickPick v-model="form.range" @change="onSearch" />
         </a-form-item>
         <a-form-item label="TopN">
           <a-input-number v-model:value="form.topN" :min="5" :max="30" style="width: 90px;" />
