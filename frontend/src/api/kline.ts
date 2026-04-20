@@ -45,3 +45,23 @@ export async function fetchKlineMinute(
   })
   return data
 }
+
+// P19.1/P19.2 (2026-04-20): 查询某股票在某频率下的可用日期范围
+export interface KlineDaterange {
+  ts_code: string
+  freq: 'daily' | 'weekly' | 'minute'
+  min: string | null  // YYYY-MM-DD
+  max: string | null
+  count: number
+  empty_reason: string | null
+}
+
+export async function fetchKlineDaterange(
+  ts_code: string,
+  freq: 'daily' | 'weekly' | 'minute' = 'daily',
+): Promise<KlineDaterange> {
+  const { data } = await http.get<KlineDaterange>('/api/kline/daterange', {
+    params: { ts_code, freq },
+  })
+  return data
+}

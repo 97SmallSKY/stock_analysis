@@ -25,6 +25,28 @@
       />
     </a-tabs>
 
+    <!-- P19.2/P19.3 (2026-04-20): 快捷时间范围按钮(仅日 K / 周 K 显示) -->
+    <div v-if="tab !== 'minute'" class="drill-range-bar">
+      <a-space :size="6" wrap>
+        <a-button
+          v-for="opt in RANGE_OPTIONS"
+          :key="opt.key"
+          size="small"
+          :type="opt.key === rangeKey ? 'primary' : 'default'"
+          :disabled="loading"
+          @click="applyRange(opt.key)"
+        >
+          {{ opt.label }}
+        </a-button>
+        <span class="range-info">
+          {{ dateFrom || '—' }} ~ {{ dateTo || '—' }}
+          <span v-if="drRange" class="range-hint">
+            (本股数据 {{ drRange.min }} ~ {{ drRange.max }})
+          </span>
+        </span>
+      </a-space>
+    </div>
+
     <a-breadcrumb v-if="tab !== 'daily'" class="drill-bread" separator="→">
       <a-breadcrumb-item>
         <a @click="tab='daily'">日 K</a>
@@ -85,10 +107,25 @@ import {
 } from '@ant-design/icons-vue'
 import { useStockDrill } from '@/composables/useStockDrill'
 import {
-  fetchKlineDaily, fetchKlineWeekly, fetchKlineMinute, type KlineBar,
+  fetchKlineDaily, fetchKlineWeekly, fetchKlineMinute, fetchKlineDaterange,
+  type KlineBar, type KlineDaterange,
 } from '@/api/kline'
+import { addDays, addMonths, toYmd } from '@/utils/date_range'
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
+
+// P19.3 (2026-04-20): K 线快捷范围按钮
+type RangeKey = '1w' | '5d' | '2w' | '1m' | '3m' | '6m' | '1y' | 'latest'
+const RANGE_OPTIONS: { key: RangeKey; label: string }[] = [
+  { key: '1y', label: '1 年' },
+  { key: '6m', label: '6 个月' },
+  { key: '3m', label: '3 个月' },
+  { key: '1m', label: '1 个月' },
+  { key: '2w', label: '2 周' },
+  { key: '1w', label: '1 周' },
+  { key: '5d', label: '5 日' },
+  { key: 'latest', label: '最新' },
+]
 
 echarts.use([
   CandlestickChart, LineChart, BarChart,
@@ -103,6 +140,14 @@ const loading = ref(false)
 const rows = ref<KlineBar[]>([])
 const emptyReason = ref<string | null>(null)
 const pickedDate = ref<string | null>(null)
+
+// P19.2: 本股在当前频率下的可用日期范围 (后端 /api/kline/daterange)
+const drRange = ref<KlineDaterange | null>(null)
+// 当前拉取的日期区间(YYYY-MM-DD)
+const dateFrom = ref<string | null>(null)
+const dateTo = ref<string | null>(null)
+// 当前应用的快捷钮 key(默认 6 个月)
+const rangeKey = ref<RangeKey>('6m')
 
 const chartRef = ref<HTMLDivElement | null>(null)
 let chart: echarts.ECharts | null = null
@@ -140,17 +185,84 @@ function resetPicked() {
   if (tab.value !== 'daily') tab.value = 'daily'
 }
 
+/**
+ * P19.2 (2026-04-20): 根据 range key + daterange 计算 [from, to] ISO 日期。
+ * 锚定 = 本股最新有数据的那一天(drRange.max),而不是"今天"。
+ * 原因:停牌/次新股,drRange.max 可能比今天早很多,此时往回推最真实。
+ */
+function computeDateRange(key: RangeKey, dr: KlineDaterange | null): { from: string; to: string } | null {
+  if (!dr || !dr.max) return null
+  const anchor = dr.max  // YYYY-MM-DD
+  let from: string
+  switch (key) {
+    case 'latest':
+      // 最新 = 最近 60 个自然日 (≈ 40 交易日)
+      from = addDays(anchor, -60)
+      break
+    case '5d':  from = addDays(anchor, -7); break      // 约 5 交易日
+    case '1w':  from = addDays(anchor, -10); break     // 约 1 周
+    case '2w':  from = addDays(anchor, -20); break
+    case '1m':  from = addMonths(anchor, -1); break
+    case '3m':  from = addMonths(anchor, -3); break
+    case '6m':  from = addMonths(anchor, -6); break
+    case '1y':  from = addMonths(anchor, -12); break
+  }
+  // 不能早于 dr.min
+  if (dr.min && from < dr.min) from = dr.min
+  return { from, to: anchor }
+}
+
+function applyRange(key: RangeKey) {
+  rangeKey.value = key
+  const r = computeDateRange(key, drRange.value)
+  if (r) {
+    dateFrom.value = r.from
+    dateTo.value = r.to
+  }
+  load()
+}
+
+async function ensureDaterange() {
+  // P19.2: 打开/切股票 时调一次 daterange,缓存在 drRange
+  if (!drill.state.tsCode) return
+  if (tab.value === 'minute') return  // 分钟 K 用 pickedDate,不用 daterange
+  const freq = tab.value
+  try {
+    drRange.value = await fetchKlineDaterange(drill.state.tsCode, freq)
+  } catch {
+    drRange.value = null
+  }
+  // 用当前 rangeKey 计算 [from, to]
+  const r = computeDateRange(rangeKey.value, drRange.value)
+  if (r) {
+    dateFrom.value = r.from
+    dateTo.value = r.to
+  } else {
+    dateFrom.value = null
+    dateTo.value = null
+  }
+}
+
 async function load() {
   if (!drill.state.tsCode) return
   loading.value = true
   rows.value = []
   emptyReason.value = null
   try {
+    // 先确保 daterange 已拿(或已为本次股票+频率计算过)
+    if (tab.value !== 'minute' && !drRange.value) {
+      await ensureDaterange()
+    }
     let body
     if (tab.value === 'daily') {
-      body = await fetchKlineDaily(drill.state.tsCode)
+      // P19.2: 带 from/to 参数,默认 6 个月区间
+      const from = dateFrom.value ? toYmd(dateFrom.value) : undefined
+      const to = dateTo.value ? toYmd(dateTo.value) : undefined
+      body = await fetchKlineDaily(drill.state.tsCode, from, to, 2000)
     } else if (tab.value === 'weekly') {
-      body = await fetchKlineWeekly(drill.state.tsCode)
+      const from = dateFrom.value ? toYmd(dateFrom.value) : undefined
+      const to = dateTo.value ? toYmd(dateTo.value) : undefined
+      body = await fetchKlineWeekly(drill.state.tsCode, from, to, 500)
     } else {
       if (!pickedDate.value) {
         emptyReason.value = 'no_pick'
@@ -190,12 +302,47 @@ function render() {
   const dates = rows.value.map((r) => r.date)
   const kdata = rows.value.map((r) => [r.open ?? 0, r.close ?? 0, r.low ?? 0, r.high ?? 0])
 
+  // P19.4 (2026-04-20): 区间内最高价 / 最低价标注
+  // 找到 close 非空的最大/最小点
+  let maxIdx = -1, minIdx = -1
+  let maxVal = -Infinity, minVal = Infinity
+  for (let i = 0; i < rows.value.length; i++) {
+    const h = rows.value[i].high ?? null
+    const l = rows.value[i].low ?? null
+    if (h != null && h > maxVal) { maxVal = h; maxIdx = i }
+    if (l != null && l < minVal) { minVal = l; minIdx = i }
+  }
+  const markPoints: { name: string; coord: [number, number]; value: string; itemStyle: Record<string, unknown>; label: Record<string, unknown> }[] = []
+  if (maxIdx >= 0) {
+    markPoints.push({
+      name: '区间最高',
+      coord: [maxIdx, maxVal],
+      value: String(maxVal),
+      itemStyle: { color: '#d4380d' },
+      label: { color: '#fff', fontSize: 11, formatter: `▲ ${maxVal.toFixed(2)}` },
+    })
+  }
+  if (minIdx >= 0 && minIdx !== maxIdx) {
+    markPoints.push({
+      name: '区间最低',
+      coord: [minIdx, minVal],
+      value: String(minVal),
+      itemStyle: { color: '#389e0d' },
+      label: { color: '#fff', fontSize: 11, formatter: `▼ ${minVal.toFixed(2)}` },
+    })
+  }
+
   const series: Record<string, unknown>[] = [
     {
       name: 'K 线', type: 'candlestick', data: kdata,
       itemStyle: {
         color: '#d4380d', color0: '#389e0d',
         borderColor: '#d4380d', borderColor0: '#389e0d',
+      },
+      // P19.4: 标注最高/最低
+      markPoint: {
+        symbol: 'pin', symbolSize: 48,
+        data: markPoints,
       },
     },
   ]
@@ -219,9 +366,10 @@ function render() {
     grid: { left: 50, right: 30, top: 40, bottom: 60 },
     xAxis: { type: 'category', data: dates, boundaryGap: true, axisLine: { onZero: false } },
     yAxis: { scale: true, splitLine: { show: true } },
+    // P19.3: 数据已经按快捷钮精确限定范围,dataZoom 全显一目了然
     dataZoom: [
-      { type: 'inside', start: 60, end: 100 },
-      { type: 'slider', bottom: 10, height: 18, start: 60, end: 100 },
+      { type: 'inside', start: 0, end: 100 },
+      { type: 'slider', bottom: 10, height: 18, start: 0, end: 100 },
     ],
     series,
   })
@@ -244,7 +392,14 @@ function render() {
   })
 }
 
-function onTabChange() { load() }
+async function onTabChange() {
+  // P19.2: 切 tab 时(日 K / 周 K)重新拉 daterange
+  if (tab.value !== 'minute') {
+    drRange.value = null
+    await ensureDaterange()
+  }
+  load()
+}
 
 function onResize() { chart?.resize() }
 window.addEventListener('resize', onResize)
@@ -257,10 +412,16 @@ onBeforeUnmount(() => {
 // 打开时 / 切股票时 重置并加载
 watch(
   () => [drill.state.open, drill.state.tsCode],
-  ([open]) => {
+  async ([open]) => {
     if (!open) return
     tab.value = 'daily'
     pickedDate.value = null
+    // P19.2: 默认 6 个月,daterange 会由 ensureDaterange 拉取
+    rangeKey.value = '6m'
+    drRange.value = null
+    dateFrom.value = null
+    dateTo.value = null
+    await ensureDaterange()
     load()
   },
   { immediate: false },
@@ -280,6 +441,23 @@ watch(
   color: #8c8c8c; font-size: 13px; font-weight: 400;
 }
 .drill-tabs { margin-top: -4px; }
+.drill-range-bar {
+  margin: -4px 0 8px;
+  padding: 8px 12px;
+  background: #fafbfc;
+  border-radius: 6px;
+}
+.drill-range-bar .range-info {
+  margin-left: 12px;
+  font-size: 12px;
+  color: #595959;
+  font-family: 'SF Mono', Menlo, monospace;
+}
+.drill-range-bar .range-hint {
+  margin-left: 6px;
+  color: #bfbfbf;
+  font-size: 11px;
+}
 .drill-bread {
   margin: -4px 0 8px;
   padding: 6px 12px;
