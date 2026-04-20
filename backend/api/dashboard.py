@@ -109,6 +109,25 @@ def _latest_sentiment() -> Optional[dict]:
                         out["lhb_avg_score"] = round(float(lhb_agg[2]), 2) if lhb_agg[2] is not None else None
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"[dashboard] lhb agg fallback failed: {e}")
+
+                # P20.5 (2026-04-20): sentiment_change 实时计算(当日 - 前一个完整交易日)。
+                # market_sentiment 表有该列但长期 NULL,表示情绪温度环比变化。
+                # 若前一日缺数据或无变化则为 None / 0。
+                if out.get("sentiment_change") is None:
+                    try:
+                        cur.execute(
+                            """SELECT sentiment_score FROM market_sentiment
+                               WHERE trade_date < %s AND up_down_ratio IS NOT NULL
+                               ORDER BY trade_date DESC LIMIT 1""",
+                            (td,),
+                        )
+                        prev = cur.fetchone()
+                        curr_score = out.get("sentiment_score")
+                        if prev and prev[0] is not None and curr_score is not None:
+                            diff = float(curr_score) - float(prev[0])
+                            out["sentiment_change"] = round(diff, 2)
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning(f"[dashboard] sentiment_change calc failed: {e}")
             else:
                 out.setdefault("total_stocks", None)
                 out.setdefault("up_count", None)
