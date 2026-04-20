@@ -64,12 +64,16 @@
                 <span v-else style="color: rgba(0,0,0,.25)">-</span>
               </template>
               <template v-else-if="column.key === 'score_detail'">
-                <a-popover v-if="record.score_detail" placement="left" :overlay-style="{ maxWidth: '360px' }">
-                  <template #content>
-                    <pre class="score-detail-pre">{{ formatDetail(record.score_detail) }}</pre>
-                  </template>
-                  <a-button type="link" size="small">详情</a-button>
-                </a-popover>
+                <!-- P19.8 (2026-04-20): 改为打开 Modal,展示雷达图 + 明细。
+                     旧的 popover 难以在小空间里同时看五六个维度 -->
+                <a-button
+                  v-if="record.score_detail"
+                  type="link"
+                  size="small"
+                  @click="openDetailModal(record)"
+                >
+                  详情
+                </a-button>
                 <span v-else>-</span>
               </template>
             </template>
@@ -172,11 +176,41 @@
         </a-card>
       </a-col>
     </a-row>
+
+    <!-- P19.8 (2026-04-20): 评分明细 Modal,雷达图 + 中文标签明细表 -->
+    <a-modal
+      v-model:open="detailOpen"
+      :title="detailTitle"
+      width="720px"
+      :footer="null"
+      destroy-on-close
+      @close="onDetailClose"
+    >
+      <a-row v-if="detailRow" :gutter="16">
+        <a-col :span="14">
+          <div ref="radarEl" style="width: 100%; height: 360px;"></div>
+        </a-col>
+        <a-col :span="10">
+          <a-descriptions :column="1" size="small" bordered>
+            <a-descriptions-item label="股票">
+              <StockLink :code="detailRow.ts_code" :name="detailRow.name" />
+            </a-descriptions-item>
+            <a-descriptions-item label="日期">{{ fmtDate(detailRow.trade_date) }}</a-descriptions-item>
+            <a-descriptions-item label="综合评分">
+              <a-tag :color="scoreColor(detailRow.score)">{{ detailRow.score ?? '-' }}</a-tag>
+            </a-descriptions-item>
+            <a-descriptions-item label="净买入">{{ fmtAmountWan(detailRow.net_amount) }}</a-descriptions-item>
+            <a-descriptions-item label="上榜原因">{{ detailRow.reason }}</a-descriptions-item>
+          </a-descriptions>
+          <pre class="score-detail-pre" style="margin-top: 12px;">{{ formatDetail(detailRow.score_detail) }}</pre>
+        </a-col>
+      </a-row>
+    </a-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, nextTick } from 'vue'
 import { Empty } from 'ant-design-vue'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
 import { fmtAmountWan, fmtDate } from '@/utils/format'
@@ -187,7 +221,14 @@ import {
   summarize, scoreBuckets, netBuckets, dailyBuckets,
 } from '@/utils/signals_agg'
 import { tnSummarize } from '@/utils/tn_summary'
-import { formatScoreDetail } from '@/utils/score_detail'
+import { formatScoreDetail, extractRadarData } from '@/utils/score_detail'
+
+// P19.8: 按需引入 ECharts(雷达图)
+import * as echarts from 'echarts/core'
+import { RadarChart } from 'echarts/charts'
+import { TooltipComponent, TitleComponent, LegendComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+echarts.use([RadarChart, TooltipComponent, TitleComponent, LegendComponent, CanvasRenderer])
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
@@ -251,6 +292,83 @@ function scoreColor(s: number | null) {
 
 // P18.2: 改用递归格式化避免嵌套对象显示 [object Object]
 const formatDetail = (d: Record<string, unknown> | null) => formatScoreDetail(d)
+
+// =================================================================
+// P19.8: 评分明细 Modal + 雷达图
+// =================================================================
+const detailOpen = ref(false)
+const detailRow = ref<LhbRow | null>(null)
+const radarEl = ref<HTMLDivElement | null>(null)
+let radarChart: echarts.ECharts | null = null
+
+const detailTitle = computed(() => {
+  if (!detailRow.value) return '评分明细'
+  const r = detailRow.value
+  const name = r.name ? ` ${r.name}` : ''
+  return `评分明细 · ${r.ts_code}${name} · ${fmtDate(r.trade_date)}`
+})
+
+function openDetailModal(row: LhbRow) {
+  detailRow.value = row
+  detailOpen.value = true
+  nextTick(() => renderRadar(row))
+}
+
+function onDetailClose() {
+  if (radarChart) {
+    radarChart.dispose()
+    radarChart = null
+  }
+  detailRow.value = null
+}
+
+// 三组(fund/hist/tech)的配色,与 glossary 术语分类对齐
+const RADAR_GROUP_COLORS = ['#1677ff', '#faad14', '#52c41a']
+
+function renderRadar(row: LhbRow) {
+  if (!radarEl.value) return
+  const rd = extractRadarData(row.score_detail as Record<string, unknown> | null)
+  if (!rd.indicator.length) return
+
+  radarChart?.dispose()
+  radarChart = echarts.init(radarEl.value)
+  radarChart.setOption({
+    tooltip: { trigger: 'item' },
+    legend: { data: ['评分维度'], top: 8 },
+    radar: {
+      indicator: rd.indicator,
+      splitNumber: 4,
+      axisName: {
+        color: '#595959',
+        fontSize: 11,
+      },
+      splitLine: { lineStyle: { color: '#e7e7e7' } },
+      splitArea: { areaStyle: { color: ['#fafafa', '#fff'] } },
+    },
+    series: [
+      {
+        name: '评分维度',
+        type: 'radar',
+        data: [
+          {
+            name: '当前股票',
+            value: rd.value,
+            areaStyle: { color: 'rgba(212, 56, 13, 0.25)' },
+            lineStyle: { color: '#d4380d', width: 2 },
+            itemStyle: { color: '#d4380d' },
+          },
+        ],
+      },
+    ],
+    // 用颜色分组高亮坐标轴标签(可选装饰)
+    // 这里用最小实现,后续可进一步丰富
+  })
+  // 窗口 resize 时自适应
+  const onResize = () => radarChart?.resize()
+  window.addEventListener('resize', onResize, { once: true })
+  // 保存 color 数组避免 tree-shaking 报未使用
+  void RADAR_GROUP_COLORS
+}
 
 async function load() {
   loading.value = true
