@@ -3,11 +3,8 @@
     <a-card :bordered="false" title="周报">
       <template #extra>
         <a-space>
-          <a-range-picker
-            v-model:value="range"
-            value-format="YYYY-MM-DD"
-            :disabled="loading"
-          />
+          <!-- P19.6e (2026-04-20): 周报默认近 1 周(与功能语义匹配,不用一年) -->
+          <DateRangeQuickPick v-model="range" :options="['1m', '1w', '5d', 'today']" />
           <a-button :loading="loading" @click="load">查询</a-button>
           <a-button type="primary" :loading="loading" @click="generate">
             生成本周报
@@ -106,8 +103,11 @@ import { message } from 'ant-design-vue'
 import { fetchWeeklyReport, generateWeeklyReport, type WeeklyReport } from '@/api/reports'
 import { fmtAmount, fmtAmountWan, fmtPct } from '@/utils/format'
 import { downloadCsv, rowsToCsv } from '@/utils/csv'
+import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
+import { calcRange, type DateRange } from '@/utils/date_range'
 
-const range = ref<[string, string] | null>(null)
+// P19.6e: 周报默认 1 周,与功能语义匹配
+const range = ref<DateRange>(calcRange('1w'))
 const data = ref<WeeklyReport | null>(null)
 const loading = ref(false)
 
@@ -129,12 +129,12 @@ const btCols = [
 async function load() {
   loading.value = true
   try {
-    let end: string | undefined
+    // P19.6e: DateRange { start, end } 直接算 days
+    const end: string | undefined = range.value.end || undefined
     let days = 7
-    if (range.value && range.value.length === 2) {
-      end = range.value[1]
-      const a = new Date(range.value[0])
-      const b = new Date(range.value[1])
+    if (range.value.start && range.value.end) {
+      const a = new Date(range.value.start)
+      const b = new Date(range.value.end)
       days = Math.max(1, Math.round((b.getTime() - a.getTime()) / 86400000) + 1)
     }
     data.value = await fetchWeeklyReport(end, days)

@@ -3,11 +3,8 @@
     <a-card :bordered="false" :body-style="{ paddingBottom: 8 }">
       <a-form layout="inline" :model="form" @submit.prevent="onSearch">
         <a-form-item label="日期">
-          <a-range-picker
-            v-model:value="form.range"
-            value-format="YYYY-MM-DD"
-            allow-clear
-          />
+          <!-- P19.6b (2026-04-20): DateRangeQuickPick 替换 a-range-picker。默认 1 年。 -->
+          <DateRangeQuickPick v-model="form.range" />
         </a-form-item>
         <a-form-item label="评分≥">
           <a-slider
@@ -184,6 +181,8 @@ import { Empty } from 'ant-design-vue'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
 import { fmtAmountWan, fmtDate } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
+import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
+import { defaultRange, toYmd, type DateRange } from '@/utils/date_range'
 import {
   summarize, scoreBuckets, netBuckets, dailyBuckets,
 } from '@/utils/signals_agg'
@@ -193,11 +192,15 @@ import { formatScoreDetail } from '@/utils/score_detail'
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
 interface FormState {
-  range: [string, string] | null
+  range: DateRange        // P19.6b: 改用 DateRange
   scoreMin: number
   reason?: string
 }
-const form = reactive<FormState>({ range: null, scoreMin: 70, reason: undefined })
+const form = reactive<FormState>({
+  range: defaultRange(),  // P19.6b: 默认一年
+  scoreMin: 70,
+  reason: undefined,
+})
 
 const rows = ref<LhbRow[]>([])
 const loading = ref(false)
@@ -253,8 +256,9 @@ async function load() {
   loading.value = true
   try {
     const data = await fetchLhb({
-      date_from: form.range?.[0]?.replace(/-/g, '') || undefined,
-      date_to: form.range?.[1]?.replace(/-/g, '') || undefined,
+      // P19.6b: DateRange { start, end } 转 YYYYMMDD
+      date_from: form.range.start ? toYmd(form.range.start) : undefined,
+      date_to: form.range.end ? toYmd(form.range.end) : undefined,
       score_min: form.scoreMin,
       reason: form.reason || undefined,
       order_by: 'score',
@@ -272,7 +276,7 @@ async function load() {
 
 function onSearch() { load() }
 function onReset() {
-  form.range = null
+  form.range = defaultRange()  // P19.6b: 重置为默认一年
   form.scoreMin = 70
   form.reason = undefined
   load()

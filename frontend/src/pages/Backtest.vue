@@ -12,14 +12,10 @@
       </template>
 
       <a-row :gutter="12">
-        <a-col :span="6">
+        <a-col :span="10">
           <a-form-item label="日期范围">
-            <a-range-picker
-              v-model:value="range"
-              value-format="YYYY-MM-DD"
-              :disabled="running"
-              style="width: 100%;"
-            />
+            <!-- P19.6d (2026-04-20): 日期范围快捷钮,需要宽点展示 -->
+            <DateRangeQuickPick v-model="range" />
           </a-form-item>
         </a-col>
         <a-col :span="4">
@@ -202,10 +198,13 @@ import {
 } from '@/api/backtest'
 import { fmtAmount, fmtPct } from '@/utils/format'
 import { downloadCsv, rowsToCsv } from '@/utils/csv'
+import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
+import { defaultRange, type DateRange } from '@/utils/date_range'
 
 const activeTab = ref<'compare' | 'history'>('compare')
 
-const range = ref<[string, string] | null>(null)
+// P19.6d: 默认一年
+const range = ref<DateRange>(defaultRange())
 const initialCapital = ref(1_000_000)
 const maxPositions = ref(5)
 const perPositionPct = ref(0.2)
@@ -229,7 +228,7 @@ const cols = [
 ]
 
 const canRun = computed(() =>
-  !!range.value && range.value.length === 2 && pickedStrategies.value.length > 0,
+  !!range.value.start && !!range.value.end && pickedStrategies.value.length > 0,
 )
 
 async function refreshStrategies() {
@@ -243,15 +242,15 @@ async function refreshStrategies() {
 }
 
 async function runCompare() {
-  if (!canRun.value || !range.value) return
+  if (!canRun.value) return
   running.value = true
   try {
     const strategies: CompareStrategy[] = pickedStrategies.value.map((s, i) => ({
       name: `${s}#${i + 1}`, strategy_name: s,
     }))
     report.value = await compareBacktests({
-      start_date: range.value[0],
-      end_date: range.value[1],
+      start_date: range.value.start,  // P19.6d
+      end_date: range.value.end,
       initial_capital: initialCapital.value,
       strategies,
       max_positions: maxPositions.value,

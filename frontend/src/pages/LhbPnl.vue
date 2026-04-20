@@ -3,11 +3,8 @@
     <a-card :bordered="false" :body-style="{ paddingBottom: 8 }">
       <a-form layout="inline" :model="form" @submit.prevent="onSearch">
         <a-form-item label="日期">
-          <a-range-picker
-            v-model:value="form.range"
-            value-format="YYYY-MM-DD"
-            allow-clear
-          />
+          <!-- P19.6c (2026-04-20): 日期范围快捷选择 -->
+          <DateRangeQuickPick v-model="form.range" />
         </a-form-item>
         <a-form-item label="TopN">
           <a-input-number v-model:value="form.topN" :min="5" :max="30" style="width: 90px;" />
@@ -131,6 +128,8 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
 import { fmtAmountWan } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
+import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
+import { defaultRange, toYmd, type DateRange } from '@/utils/date_range'
 import {
   aggregateByReason, aggregateByStock,
   PNL_COLORS,
@@ -140,10 +139,10 @@ import {
 echarts.use([BarChart, GridComponent, LegendComponent, TooltipComponent, TitleComponent, CanvasRenderer])
 
 interface FormState {
-  range: [string, string] | null
+  range: DateRange   // P19.6c
   topN: number
 }
-const form = reactive<FormState>({ range: null, topN: 10 })
+const form = reactive<FormState>({ range: defaultRange(), topN: 10 })
 
 const loading = ref(false)
 const rows = ref<LhbRow[]>([])
@@ -212,8 +211,8 @@ async function load() {
   loading.value = true
   try {
     const data = await fetchLhb({
-      date_from: form.range?.[0]?.replace(/-/g, '') || undefined,
-      date_to: form.range?.[1]?.replace(/-/g, '') || undefined,
+      date_from: form.range.start ? toYmd(form.range.start) : undefined,  // P19.6c
+      date_to: form.range.end ? toYmd(form.range.end) : undefined,
       order_by: 'trade_date',
       order_desc: true,
       limit: 1000,
@@ -229,7 +228,7 @@ async function load() {
 
 function onSearch() { load() }
 function onReset() {
-  form.range = null
+  form.range = defaultRange()  // P19.6c
   form.topN = 10
   load()
 }
