@@ -85,6 +85,15 @@
               <template v-else-if="column.key === 'avg_score'">
                 {{ record.avg_score != null ? record.avg_score.toFixed(1) : '-' }}
               </template>
+              <template v-else-if="column.key === 'action'">
+                <!-- STO-35: 点「详情」弹 ScoreDetailModal,展示该股票期间内最高分的那条 score_detail -->
+                <a-button
+                  size="small"
+                  type="link"
+                  :disabled="!hasScoreDetail(record.ts_code)"
+                  @click="openDetail(record.ts_code)"
+                >详情</a-button>
+              </template>
             </template>
           </a-table>
         </a-card>
@@ -110,11 +119,22 @@
               <template v-else-if="column.key === 'avg_score'">
                 {{ record.avg_score != null ? record.avg_score.toFixed(1) : '-' }}
               </template>
+              <template v-else-if="column.key === 'action'">
+                <a-button
+                  size="small"
+                  type="link"
+                  :disabled="!hasScoreDetail(record.ts_code)"
+                  @click="openDetail(record.ts_code)"
+                >详情</a-button>
+              </template>
             </template>
           </a-table>
         </a-card>
       </a-col>
     </a-row>
+
+    <!-- STO-35: 全局唯一的评分明细 Modal 实例,两个 Top 表共用 -->
+    <ScoreDetailModal v-model:open="detailOpen" :row="detailRow" />
   </div>
 </template>
 
@@ -129,6 +149,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
 import { fmtAmountWan } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
+import ScoreDetailModal from '@/components/ScoreDetailModal.vue'
 import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
 import { defaultRange, toYmd, type DateRange } from '@/utils/date_range'
 import {
@@ -206,7 +227,35 @@ const stockColumns = [
     title: '平均评分', dataIndex: 'avg_score', key: 'avg_score', width: 90, align: 'right' as const,
     sorter: (a: StockAgg, b: StockAgg) => (a.avg_score ?? -1) - (b.avg_score ?? -1),
   },
+  // STO-35: 新增「详情」列,弹 ScoreDetailModal 展示期间内最高分 score_detail
+  {
+    title: '详情', key: 'action', width: 70, align: 'center' as const,
+  },
 ]
+
+// ============================================================
+// STO-35: 评分明细 Modal(LhbPnl 一只股票可能多条 LHB 记录,
+//         Modal 展示**期间内最高分的那条** score_detail)
+// ============================================================
+const detailOpen = ref(false)
+const detailRow = ref<LhbRow | null>(null)
+
+/** 该 ts_code 在当前 rows 里是否有至少一条带 score_detail 的记录 */
+function hasScoreDetail(ts_code: string): boolean {
+  return rows.value.some((r) => r.ts_code === ts_code && r.score_detail)
+}
+
+/** 打开 Modal:从 rows 找该 ts_code 最高分的那条;无则不开 */
+function openDetail(ts_code: string) {
+  // 从大到小按 score 排序,第一个有 score_detail 的就是「期间内最高分」
+  const candidates = rows.value
+    .filter((r) => r.ts_code === ts_code && r.score_detail)
+    .sort((a, b) => (b.score ?? -1) - (a.score ?? -1))
+  const best = candidates[0]
+  if (!best) return
+  detailRow.value = best
+  detailOpen.value = true
+}
 
 async function load() {
   loading.value = true
