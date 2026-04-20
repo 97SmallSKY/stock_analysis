@@ -2,6 +2,16 @@
 
 A 股龙虎榜量化交易全栈系统，覆盖**多数据源聚合 → 龙虎榜解析 → 选股打分 → 回测 → 机器人下单 → 盘中 10s 快照 → 实时监控**全链路。
 
+> ⚠️ **分支说明**:本仓库有两套独立代码并存,**不合并**。
+> - `new-branch` = **重写版**,当前在演进,部署到 jd。所有开发都在这里。
+> - `main` = **旧版本**(历史遗留),冻结不动,不部署。
+>
+> AI agent / 新接手者:默认工作在 `new-branch`,禁止跨分支 merge/rebase/cherry-pick。
+> 详细约定见 [CLAUDE.md](CLAUDE.md) §1.1 和 [docs/prompts/linear/README.md](docs/prompts/linear/README.md) §0。
+>
+> **Linear 协作规约(AI 必读,按角色路由)**:[docs/prompts/linear/README.md](docs/prompts/linear/README.md)
+> 子文档:[pm.md](docs/prompts/linear/pm.md) · [dev.md](docs/prompts/linear/dev.md) · [test.md](docs/prompts/linear/test.md) · [ops.md](docs/prompts/linear/ops.md)
+
 > 设计文档：[docs/重写方案_v2.md](docs/重写方案_v2.md)
 > 路线图：[docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md)
 > 代码审查：[docs/CODE_REVIEW.md](docs/CODE_REVIEW.md)
@@ -122,7 +132,8 @@ stock_analysis/
 
 ### 必读(P0)
 
-- 🤖 **[docs/prompts/7x24_agent.md](docs/prompts/7x24_agent.md) — Agent 工作手册**(新 session 第一时间读)
+- 🤖 **[docs/prompts/linear/README.md](docs/prompts/linear/README.md) — Linear 协作规约总纲**(AI 必读,按角色路由到 pm/dev/test/ops)
+- 🤖 **[docs/prompts/7x24_agent.md](docs/prompts/7x24_agent.md) — 7×24 运维巡检手册**(时间驱动的监控循环)
 - **[docs/PROGRESS.md](docs/PROGRESS.md) — 项目真实进度(单一事实源)**
 - [CLAUDE.md](CLAUDE.md) — 项目说明书(目录结构 / 硬约束 / 命名陷阱)
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — 面向**用户**的改动记录(前端「特性介绍」tab)

@@ -18,11 +18,28 @@ akshare/tushare → 数据网关(熔断/缓存/优先级) → 原始表 (Postgre
 
 部署目标:**内网服务器 `jd`**(国内源,SG 代理必须绕过,见 `backend/core/startup.py`)。
 
+### 1.1 分支策略(⚠️ 强约束)
+
+本仓库有**两套完全独立的代码**,分别在不同分支上演进,**不合并、不 rebase、不 cherry-pick**:
+
+| 分支 | 内容 | 状态 | 是否部署 |
+|---|---|---|---|
+| `new-branch` | **重写版代码**,当前唯一在演进的主开发分支 | 🟢 活跃 | ✅ jd 生产 |
+| `main` | **旧版代码**(历史遗留),与 new-branch 架构完全不同 | ⚪ 冻结 | ❌ 不部署 |
+
+**铁律**(任何 agent 必须遵守):
+- AI 默认始终工作在 `new-branch`
+- 禁止做任何 `main` ↔ `new-branch` 的跨分支操作(merge / rebase / cherry-pick)
+- 修 bug / 加功能都改 `new-branch`,不要改 `main`
+- 若需要引用旧版代码做参考,用 `git show main:path/to/file` 只读查看
+
 ## 2. 文档优先级(事实源)
 
 | 优先级 | 文件 | 作用 |
 |---|---|---|
-| **P0**(强制) | `docs/prompts/7x24_agent.md` | **Agent 工作手册**,7×24 循环规则、部署、文档规范、红线 —— 新 session 必读 |
+| **P0**(强制) | `docs/prompts/linear/README.md` | **Linear 协作规约总纲**,按角色路由到 `linear/{pm,dev,test,ops}.md`,含三方共识仲裁 —— AI 必读 |
+| **P0**(按角色选读) | `docs/prompts/linear/pm.md` / `dev.md` / `test.md` / `ops.md` | 各角色自包含闭环(上游/工作/下游/互查/反模式) |
+| **P0**(强制) | `docs/prompts/7x24_agent.md` | **7×24 运维巡检手册**,时间驱动的监控循环、修复链路、部署红线 |
 | **P0**(强制) | `docs/PROGRESS.md` | 当前真实进度 / 变更日志,唯一事实源 |
 | **P0**(强制) | `docs/ADR/*.md` | 架构决策记录,冲突时以此为准 |
 | **P0**(强制) | 本文 `CLAUDE.md` | 项目说明书(你在读) |
