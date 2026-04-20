@@ -36,6 +36,11 @@ router = APIRouter()
 def _latest_sentiment() -> Optional[dict]:
     try:
         with pg_conn() as conn, conn.cursor() as cur:
+            # P18.14 (2026-04-20): 加 WHERE up_down_ratio IS NOT NULL。
+            # 否则盘中(今日 kline 未灌时)会取到只有 limit_up_count
+            # 没有 up_down_ratio/avg_pct_change 的半成品记录,前端
+            # Dashboard 大量字段显示 NULL/-。
+            # 改为取「最新完整记录」— 通常是昨日收盘数据。
             cur.execute(
                 """SELECT trade_date,
                           limit_up_count, limit_down_count,
@@ -45,6 +50,7 @@ def _latest_sentiment() -> Optional[dict]:
                           lhb_stock_count, lhb_total_net, lhb_avg_score,
                           sentiment_score, sentiment_level, sentiment_change
                    FROM market_sentiment
+                   WHERE up_down_ratio IS NOT NULL
                    ORDER BY trade_date DESC LIMIT 1"""
             )
             row = cur.fetchone()

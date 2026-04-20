@@ -6,6 +6,15 @@
 
 ---
 
+### 2026-04-20 · fix · Dashboard 取最新「完整」sentiment 而非最新日期
+
+- 发现:2026-04-20(今日盘中未收盘),akshare 给了 `limit_up_count=59` 但 kline 当日还没数据,所以 sentiment 写入时 `_calc_from_kline` 返回 None,导致 `up_down_ratio/avg_pct_change/median_pct_change` 等 8 字段全 NULL
+- 影响:Dashboard `ORDER BY trade_date DESC LIMIT 1` 取到 2026-04-20 → 前端卡片大量字段显示 NULL/-
+- 修复:SQL 加 `WHERE up_down_ratio IS NOT NULL`,始终取最新「完整」记录(通常 = 昨日收盘)
+- 验证:pytest 7 passed,回填后 538 天中 536 条有值,取到 2026-04-17 完整数据
+
+---
+
 ### 2026-04-20 · fix · P18.13b 紧急修正:`total_stocks/up_count/down_count` 不入库 + Dashboard 实时聚合
 
 **发现错误**:上一条 P18.13 把 `total_stocks/up_count/down_count` 加进了 `writer.upsert_market_sentiment.cols`,但 **DB 表实际没这 3 列**(只是 `api/dashboard.py` 硬塞 None 占位)!运行 insert 会 UndefinedColumn 报错。回填进程第一条就会爆。
