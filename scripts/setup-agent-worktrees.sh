@@ -39,6 +39,9 @@ log()  { echo -e "${GREEN}[setup-worktrees]${NC} $*"; }
 warn() { echo -e "${YELLOW}[warn]${NC} $*"; }
 err()  { echo -e "${RED}[err]${NC} $*" >&2; }
 
+# bash 3.2 兼容(macOS 默认),不用 ${var^^}
+upper() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
+
 # ---------- 参数解析 ----------
 ACTION="create"
 for arg in "$@"; do
@@ -86,7 +89,8 @@ for role in "${ROLES[@]}"; do
     WT_PATH="$PARENT/${REPO_NAME}-${role}"
     WT_BRANCH="agent/${role}"   # 每个 agent 有一个本地跟踪分支,起点 = new-branch
 
-    log "─────── 角色: ${role^^} ───────"
+    role_upper="$(upper "$role")"
+    log "─────── 角色: $role_upper ───────"
     log "  worktree 路径: $WT_PATH"
     log "  跟踪分支:     $WT_BRANCH (起点 $BASE_BRANCH)"
 
@@ -104,7 +108,7 @@ for role in "${ROLES[@]}"; do
         git worktree add -b "$WT_BRANCH" "$WT_PATH" "$BASE_BRANCH"
     fi
 
-    log "  ✅ ${role^^} worktree 就绪"
+    log "  ✅ $role_upper worktree 就绪"
 done
 
 # ---------- 结果 ----------

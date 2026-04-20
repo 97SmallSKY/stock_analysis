@@ -26,6 +26,9 @@ get_role_dir() {
     echo "$PARENT/${REPO_NAME}-$1"
 }
 
+# bash 3.2 兼容(macOS 默认),不用 ${var^^}
+upper() { echo "$1" | tr '[:lower:]' '[:upper:]'; }
+
 # 解析参数:指定角色或全部
 if [ $# -gt 0 ]; then
     ROLES=("$@")
@@ -62,6 +65,8 @@ fi
 # 为每个角色生成开场白 prompt(v3.2:项目锁定 + 榨干队列 + 零打扰)
 generate_prompt() {
     local role=$1
+    local role_upper
+    role_upper="$(upper "$role")"
     # Ops 保留 20 分钟硬周期,其他角色榨干队列
     local cadence_note
     if [ "$role" = "ops" ]; then
@@ -73,7 +78,7 @@ generate_prompt() {
     cat <<EOF
 请先读 @docs/prompts/linear/README.md 和 @docs/prompts/linear/${role}.md 和 @CLAUDE.md
 
-进入 ${role^^} 角色,严格遵守以下铁律:
+进入 ${role_upper} 角色,严格遵守以下铁律:
 
 🎯 项目锁定(README §3.9)
   project = 5c09b8da-a3fc-45be-b866-5dc94cf01523  (龙虎榜量化交易分析系统)
@@ -93,7 +98,7 @@ generate_prompt() {
   你已经在自己的独立 worktree 里(\$(pwd)),不会与其他 agent 冲突。
   不要 cd 到别的目录。
 
-📝 每轮结束打印日志:[\$(date +%H:%M)] ${role^^} cycle: <动作摘要>
+📝 每轮结束打印日志:[\$(date +%H:%M)] ${role_upper} cycle: <动作摘要>
 
 现在开始第一轮。按 ${role}.md §0 的循环模型工作。完成后 /loop 自动循环。
 EOF
@@ -102,6 +107,8 @@ EOF
 # 启动单个角色会话
 start_agent() {
     local role=$1
+    local role_upper
+    role_upper="$(upper "$role")"
     local wt_dir
     wt_dir="$(get_role_dir "$role")"
     local prompt
@@ -110,13 +117,13 @@ start_agent() {
     local prompt_file="/tmp/ai-agent-${role}-prompt.txt"
     printf '%s\n' "$prompt" > "$prompt_file"
 
-    echo "🚀 启动 ${role^^} 角色会话 → $wt_dir"
+    echo "🚀 启动 ${role_upper} 角色会话 → $wt_dir"
 
     osascript <<EOF
 tell application "Terminal"
     activate
-    set newTab to do script "cd $wt_dir && echo '===== AI Agent: ${role^^} =====' && echo '工作区: $wt_dir (独立 worktree,不与其他 agent 冲突)' && echo '提示词已写入 $prompt_file' && echo '手动粘贴:cat $prompt_file | pbcopy  然后在 claude 里 Cmd+V' && claude"
-    set custom title of newTab to "AI-${role^^}"
+    set newTab to do script "cd $wt_dir && echo '===== AI Agent: ${role_upper} =====' && echo '工作区: $wt_dir (独立 worktree,不与其他 agent 冲突)' && echo '提示词已写入 $prompt_file' && echo '手动粘贴:cat $prompt_file | pbcopy  然后在 claude 里 Cmd+V' && claude"
+    set custom title of newTab to "AI-${role_upper}"
 end tell
 EOF
 
