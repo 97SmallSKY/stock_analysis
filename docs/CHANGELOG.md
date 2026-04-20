@@ -6,7 +6,20 @@
 
 ---
 
-### 2026-04-20 · fix · market_sentiment 11 个衍生字段永久 NULL 修复 🎯
+### 2026-04-20 · fix · P18.13b 紧急修正:`total_stocks/up_count/down_count` 不入库 + Dashboard 实时聚合
+
+**发现错误**:上一条 P18.13 把 `total_stocks/up_count/down_count` 加进了 `writer.upsert_market_sentiment.cols`,但 **DB 表实际没这 3 列**(只是 `api/dashboard.py` 硬塞 None 占位)!运行 insert 会 UndefinedColumn 报错。回填进程第一条就会爆。
+
+**紧急止损**:
+1. 立即停止回填进程(pkill)
+2. `writer.cols` 去掉这 3 个字段(保留 `median_pct_change` 真实列)
+3. `api/dashboard.py::_latest_sentiment` 从 `kline_daily` 实时聚合 `total_stocks/up_count/down_count`,按 `trade_date` 一次 COUNT 查询,+2ms 可忽略
+
+**教训**:改动跨 writer + schema 时必须先验证真实 DB schema,不能假定 API 字段 = DB 列。
+
+---
+
+### 2026-04-20 · fix · market_sentiment 衍生字段 NULL 修复(\_is\_empty\_sentiment + \_merge\_db\_fill)🎯
 
 **背景**:体检发现 `/api/dashboard` 的 sentiment 段里 11 个字段(`up_down_ratio`、`avg_pct_change`、`median_pct_change`、`strong/weak_stock_count`、`total_stocks`、`up_count`、`down_count`、`lhb_*`、`sentiment_change`)一直为 NULL,Dashboard 大面积空态。
 

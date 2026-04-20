@@ -52,12 +52,41 @@ def _latest_sentiment() -> Optional[dict]:
                 return None
             cols = [c.name for c in cur.description]
             out = dict(zip(cols, row))
-            if out.get("trade_date") is not None:
-                out["trade_date"] = out["trade_date"].isoformat()
-            # 兼容旧前端:up/down/total 字段保留映射(None 占位)
-            out.setdefault("total_stocks", None)
-            out.setdefault("up_count", None)
-            out.setdefault("down_count", None)
+            td = out.get("trade_date")
+            if td is not None:
+                out["trade_date"] = td.isoformat()
+            # P18.13 (2026-04-20): market_sentiment 表里**没有**
+            # total_stocks/up_count/down_count 列(v2 设计稿里假设过,实际
+            # 未建)。这里从 kline_daily 实时聚合这 3 个字段,填进响应。
+            # 单次 COUNT 查询带 trade_date 索引,+2ms 级别开销可忽略。
+            if td is not None:
+                try:
+                    cur.execute(
+                        """SELECT COUNT(*) AS total,
+                                  SUM(CASE WHEN pct_change > 0 THEN 1 ELSE 0 END) AS up_cnt,
+                                  SUM(CASE WHEN pct_change < 0 THEN 1 ELSE 0 END) AS down_cnt
+                           FROM kline_daily
+                           WHERE trade_date = %s AND pct_change IS NOT NULL""",
+                        (td,),
+                    )
+                    agg = cur.fetchone()
+                    if agg and agg[0]:
+                        out["total_stocks"] = int(agg[0])
+                        out["up_count"] = int(agg[1] or 0)
+                        out["down_count"] = int(agg[2] or 0)
+                    else:
+                        out["total_stocks"] = None
+                        out["up_count"] = None
+                        out["down_count"] = None
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[dashboard] kline agg fallback failed: {e}")
+                    out.setdefault("total_stocks", None)
+                    out.setdefault("up_count", None)
+                    out.setdefault("down_count", None)
+            else:
+                out.setdefault("total_stocks", None)
+                out.setdefault("up_count", None)
+                out.setdefault("down_count", None)
             return out
     except Exception as e:  # noqa: BLE001
         logger.warning(f"[dashboard] latest_sentiment failed: {e}")
