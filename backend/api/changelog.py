@@ -1,14 +1,20 @@
-"""Changelog API — 解析 docs/CHANGELOG.md 返回结构化条目。
+"""Changelog / Devlog API — 解析 docs/CHANGELOG.md + docs/DEVLOG.md 返回结构化条目。
 
-前端「特性介绍」页面 `/changelog` 的数据源。
+前端「特性介绍」页面 `/changelog` 的数据源。P20.1 起拆分为两个 tab:
+
+- `GET /api/changelog`  → 面向用户的特性日志(docs/CHANGELOG.md)
+- `GET /api/devlog`     → 面向开发的开发日志(docs/DEVLOG.md)
+
+共用同一套解析逻辑 parse_changelog(),只是指向不同文件。
 
 返回格式:
 {
+  "source": "changelog" | "devlog",
   "entries": [
-    {"date": "2026-04-20", "type": "feature", "title": "新增特性介绍页面", "body": "...md..."},
+    {"date": "2026-04-20", "type": "feature", "title": "...", "body": "...md..."},
     ...
   ],
-  "types": ["feature", "fix", "refactor", "perf", "docs", "ops"],
+  "types": ["feature", "fix", ...],
   "total": N
 }
 
@@ -24,7 +30,9 @@ from fastapi import APIRouter
 
 router = APIRouter()
 
-_CHANGELOG_PATH = Path(__file__).resolve().parents[2] / "docs" / "CHANGELOG.md"
+_DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
+_CHANGELOG_PATH = _DOCS_ROOT / "CHANGELOG.md"
+_DEVLOG_PATH = _DOCS_ROOT / "DEVLOG.md"
 
 # ### 2026-04-20 · feature · 标题
 _HEADING_RE = re.compile(
@@ -52,19 +60,42 @@ def parse_changelog(md_text: str) -> List[Dict[str, Any]]:
     return entries
 
 
-@router.get("")
-@router.get("/")
-def get_changelog() -> Dict[str, Any]:
-    if not _CHANGELOG_PATH.is_file():
-        return {"entries": [], "types": [], "total": 0, "error": "CHANGELOG.md not found"}
-    md = _CHANGELOG_PATH.read_text(encoding="utf-8")
+def _build_response(source: str, path: Path) -> Dict[str, Any]:
+    if not path.is_file():
+        return {
+            "source": source,
+            "entries": [],
+            "types": [],
+            "total": 0,
+            "error": f"{path.name} not found",
+        }
+    md = path.read_text(encoding="utf-8")
     entries = parse_changelog(md)
-    # 显式按日期倒序(稳定排序:日期相同时保留文件内原顺序),
-    # 避免以后追加的条目没按日期顺序排列导致页面时间线乱跳。
     entries.sort(key=lambda e: e["date"], reverse=True)
     types = sorted({e["type"] for e in entries})
     return {
+        "source": source,
         "entries": entries,
         "types": types,
         "total": len(entries),
     }
+
+
+@router.get("")
+@router.get("/")
+def get_changelog() -> Dict[str, Any]:
+    """面向用户的特性日志。"""
+    return _build_response("changelog", _CHANGELOG_PATH)
+
+
+# P20.1 (2026-04-20): 用同一 router 暴露 /devlog,便于 api/main.py 统一挂载
+# 注意 main.py 注册此 router 时会用 prefix="/api/changelog",所以这里用
+# 绝对路径 "/api/devlog" 会冲突。改为新建一个独立的 devlog_router。
+devlog_router = APIRouter()
+
+
+@devlog_router.get("")
+@devlog_router.get("/")
+def get_devlog() -> Dict[str, Any]:
+    """面向开发的开发日志。"""
+    return _build_response("devlog", _DEVLOG_PATH)

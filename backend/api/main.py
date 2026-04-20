@@ -142,9 +142,11 @@ def create_app() -> FastAPI:
     # P7.3 K 线只读(StockDrillModal 数据源)
     from backend.api.kline import router as kline_router
     app.include_router(kline_router, prefix="/api/kline", tags=["kline"])
-    # P18.3 特性介绍(开发日志):docs/CHANGELOG.md → /api/changelog
-    from backend.api.changelog import router as changelog_router
+    # P18.3 特性介绍:docs/CHANGELOG.md → /api/changelog
+    # P20.1 (2026-04-20) 拆分:新增 /api/devlog → docs/DEVLOG.md (开发日志)
+    from backend.api.changelog import router as changelog_router, devlog_router
     app.include_router(changelog_router, prefix="/api/changelog", tags=["changelog"])
+    app.include_router(devlog_router, prefix="/api/devlog", tags=["devlog"])
 
     # W12-7 运行时集成: scheduler + redis + robot_registry
     from backend.core.runtime import wire_runtime, shutdown_runtime

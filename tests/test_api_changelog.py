@@ -125,3 +125,46 @@ def test_api_changelog_missing_file(tmp_path):
         assert body["entries"] == []
         assert body["total"] == 0
         assert "error" in body
+
+
+# ---------------------------------------------------------------------
+# P20.1: /api/devlog 独立端点,面向开发者
+# ---------------------------------------------------------------------
+def _make_devlog_app() -> FastAPI:
+    from backend.api.changelog import devlog_router
+    app = FastAPI()
+    app.include_router(devlog_router, prefix="/api/devlog")
+    return app
+
+
+def test_api_devlog_ok():
+    client = TestClient(_make_devlog_app())
+    r = client.get("/api/devlog")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["source"] == "devlog"
+    assert isinstance(body["entries"], list)
+    # 真实 DEVLOG.md 已包含若干条
+    assert body["total"] == len(body["entries"])
+    if body["entries"]:
+        e = body["entries"][0]
+        assert set(e.keys()) >= {"date", "type", "title", "body"}
+
+
+def test_api_devlog_missing_file(tmp_path):
+    fake = tmp_path / "no.md"
+    with patch("backend.api.changelog._DEVLOG_PATH", fake):
+        client = TestClient(_make_devlog_app())
+        r = client.get("/api/devlog")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["source"] == "devlog"
+        assert body["entries"] == []
+        assert "error" in body
+
+
+def test_api_changelog_has_source_key():
+    """P20.1: 响应增加 source 字段,前端可区分 changelog vs devlog。"""
+    client = TestClient(_make_app())
+    r = client.get("/api/changelog")
+    assert r.json()["source"] == "changelog"

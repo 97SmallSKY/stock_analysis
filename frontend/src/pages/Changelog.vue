@@ -3,7 +3,7 @@
     <template #title>
       <div class="cl-title">
         <HistoryOutlined />
-        <span>特性介绍 · 开发日志</span>
+        <span>{{ activeTab === 'changelog' ? '特性介绍' : '开发日志' }}</span>
         <a-tag color="blue" style="margin-left: 8px">共 {{ filtered.length }} / {{ entries.length }} 条</a-tag>
       </div>
     </template>
@@ -23,6 +23,20 @@
         </a-button>
       </a-space>
     </template>
+
+    <!-- P20.1 (2026-04-20): 拆分两个 tab,面向用户 vs 面向开发者 -->
+    <a-tabs v-model:active-key="activeTab" @change="onTabChange" class="cl-tabs">
+      <a-tab-pane key="changelog">
+        <template #tab>
+          <span><GiftOutlined /> 特性介绍</span>
+        </template>
+      </a-tab-pane>
+      <a-tab-pane key="devlog">
+        <template #tab>
+          <span><CodeOutlined /> 开发日志</span>
+        </template>
+      </a-tab-pane>
+    </a-tabs>
 
     <a-spin :spinning="loading">
       <a-alert
@@ -55,7 +69,12 @@
 
     <div class="cl-footer">
       <a-typography-text type="secondary">
-        数据源:<code>docs/CHANGELOG.md</code> · 每次优化完成后追加条目(时间倒序)
+        <template v-if="activeTab === 'changelog'">
+          面向用户 · 新特性 / 页面改动 / 影响使用体验的修复(<code>docs/CHANGELOG.md</code>)
+        </template>
+        <template v-else>
+          面向开发者 · 代码重构 / 性能优化 / bug 根因 / 监控部署基建(<code>docs/DEVLOG.md</code>)
+        </template>
       </a-typography-text>
     </div>
 
@@ -66,14 +85,24 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { HistoryOutlined, ReloadOutlined } from '@ant-design/icons-vue'
-import { fetchChangelog, CHANGELOG_TYPE_META, type ChangelogEntry } from '@/api/changelog'
+import {
+  HistoryOutlined, ReloadOutlined, GiftOutlined, CodeOutlined,
+} from '@ant-design/icons-vue'
+import {
+  fetchChangelog, fetchDevlog,
+  CHANGELOG_TYPE_META,
+  type ChangelogEntry,
+} from '@/api/changelog'
 
 const loading = ref(false)
 const error = ref('')
 const entries = ref<ChangelogEntry[]>([])
 const activeTypes = ref<string[]>([])
 const keyword = ref('')
+
+// P20.1: tab 状态
+type TabKey = 'changelog' | 'devlog'
+const activeTab = ref<TabKey>('changelog')
 
 const typeOptions = computed(() =>
   Array.from(new Set(entries.value.map((e) => e.type))).map((t) => ({
@@ -103,18 +132,14 @@ function typeColorOf(t: string) {
   return CHANGELOG_TYPE_META[t]?.color ?? 'default'
 }
 function dotColorOf(t: string) {
-  // antdv timeline 的 color 只能吃颜色词或 hex
   const m: Record<string, string> = {
-    feature: 'blue', fix: 'red', refactor: 'purple',
-    perf: 'green', docs: 'gray', ops: 'orange',
+    feature: 'blue', fix: 'red', ui: 'purple',
+    refactor: 'purple', perf: 'green',
+    devops: 'orange', docs: 'gray', ops: 'orange',
   }
   return m[t] ?? 'gray'
 }
 
-/**
- * 极简 markdown 渲染(只处理列表/加粗/代码/段落)
- * 不引入 markdown-it,避免前端额外依赖;CHANGELOG 条目结构本就简单。
- */
 function renderBody(md: string): string {
   if (!md) return ''
   const esc = (s: string) =>
@@ -154,14 +179,23 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const data = await fetchChangelog()
+    const data = activeTab.value === 'devlog'
+      ? await fetchDevlog()
+      : await fetchChangelog()
     entries.value = data.entries || []
     if (data.error) error.value = data.error
-  } catch (e: any) {
-    error.value = e?.message || '加载失败'
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : String(e)
   } finally {
     loading.value = false
   }
+}
+
+function onTabChange() {
+  // 切 tab 时重置筛选与关键字,避免跨数据源残留
+  activeTypes.value = []
+  keyword.value = ''
+  load()
 }
 
 onMounted(load)
@@ -169,34 +203,57 @@ onMounted(load)
 
 <style scoped>
 .changelog-card {
-  max-width: 1080px;
+  max-width: 1000px;
   margin: 0 auto;
 }
 .cl-title {
-  display: inline-flex; align-items: center; gap: 8px;
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.cl-tabs {
+  margin: -4px 0 8px;
+}
+.cl-item {
+  padding-bottom: 4px;
 }
 .cl-item-head {
-  display: flex; align-items: center; gap: 10px;
-  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .cl-date {
-  color: #8c8c8c; font-family: 'SFMono-Regular', Consolas, monospace;
+  font-family: 'SF Mono', Menlo, monospace;
   font-size: 12px;
+  color: #8c8c8c;
 }
-.cl-title-text { font-weight: 600; color: #262626; }
+.cl-title-text {
+  font-weight: 600;
+  color: #262626;
+}
 .cl-body {
-  color: #595959; font-size: 13px; line-height: 1.8;
-  background: #fafbfc; border-radius: 6px; padding: 8px 12px;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #595959;
 }
 .cl-body :deep(code) {
-  background: #f0f0f0; padding: 1px 6px; border-radius: 4px;
-  font-size: 12px; color: #d4380d;
+  background: #f5f5f5;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 12px;
 }
-.cl-body :deep(ul) { margin: 4px 0 4px 18px; padding: 0; }
-.cl-body :deep(li) { margin: 2px 0; }
-.cl-body :deep(p) { margin: 4px 0; }
+.cl-body :deep(ul) {
+  margin: 4px 0;
+  padding-left: 20px;
+}
 .cl-footer {
-  margin-top: 18px; text-align: center; font-size: 12px;
+  margin-top: 16px;
+  padding: 8px 0;
+  border-top: 1px dashed #f0f0f0;
+  text-align: center;
+  font-size: 12px;
 }
 </style>

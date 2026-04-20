@@ -125,7 +125,8 @@ stock_analysis/
 - 🤖 **[docs/prompts/7x24_agent.md](docs/prompts/7x24_agent.md) — Agent 工作手册**(新 session 第一时间读)
 - **[docs/PROGRESS.md](docs/PROGRESS.md) — 项目真实进度(单一事实源)**
 - [CLAUDE.md](CLAUDE.md) — 项目说明书(目录结构 / 硬约束 / 命名陷阱)
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) — 面向用户的改动记录(前端 `/changelog` 页的数据源)
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — 面向**用户**的改动记录(前端「特性介绍」tab)
+- [docs/DEVLOG.md](docs/DEVLOG.md) — 面向**开发者**的技术笔记(前端「开发日志」tab)
 - [docs/ADR/](docs/ADR/) — 架构决策记录(冲突时以此为准)
 
 ### 设计 / 优化 / 运维(按任务类型)

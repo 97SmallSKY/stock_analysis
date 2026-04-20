@@ -26,7 +26,8 @@ akshare/tushare → 数据网关(熔断/缓存/优先级) → 原始表 (Postgre
 | **P0**(强制) | `docs/PROGRESS.md` | 当前真实进度 / 变更日志,唯一事实源 |
 | **P0**(强制) | `docs/ADR/*.md` | 架构决策记录,冲突时以此为准 |
 | **P0**(强制) | 本文 `CLAUDE.md` | 项目说明书(你在读) |
-| **P0**(强制) | `docs/CHANGELOG.md` | 面向用户的改动记录(说人话,不用代号/文件名);前端 `/changelog` 页的数据源 |
+| **P0**(强制) | `docs/CHANGELOG.md` | **面向用户**的改动记录(新特性/页面改动/影响体验的修复);前端「特性介绍」tab |
+| **P0**(强制) | `docs/DEVLOG.md` | **面向开发者**的技术细节(重构/性能/bug 根因/部署基建);前端「开发日志」tab |
 | P1 | `docs/designs/` | 复杂任务总体设计(周期长 / 跨模块) |
 | P1 | `docs/optimizations/` | 单点优化技术笔记 |
 | P1 | `docs/ops/` | 运维手册 / 事故复盘 |
@@ -38,7 +39,12 @@ akshare/tushare → 数据网关(熔断/缓存/优先级) → 原始表 (Postgre
 **重要约定**:
 - 任何 agent 修改代码后,必须同步更新 PROGRESS.md 的"近期变更日志"章节
 - **7×24 自动运维/开发 Agent 启动前**:先读 `docs/prompts/7x24_agent.md`(定义循环规则、红线、文档规范),再动工
-- **改动分流**:bugfix → `CHANGELOG.md`(说人话);单点性能 → `docs/optimizations/`;复杂任务 → 先写 `docs/designs/` 再拆子任务
+- **改动分流**(P20.1 细化):
+  - 新特性 / 页面改动 / 用户能感知的 bugfix → `CHANGELOG.md`(说人话,用户视角)
+  - 代码重构 / 性能优化 / bug 根因 / 监控部署基建 → `DEVLOG.md`(技术细节,开发视角)
+  - 单点性能笔记 → `docs/optimizations/`
+  - 复杂任务 → 先写 `docs/designs/` 再拆子任务
+  - 事故复盘 → `docs/ops/YYYY-MM-DD-<slug>.md`
 
 ## 3. 已生效的架构决策(摘要)
 
