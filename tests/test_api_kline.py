@@ -244,3 +244,66 @@ def test_kline_daily_only_to(monkeypatch):
     c = _mount()
     r = c.get("/api/kline/daily?ts_code=000001.SZ&to=20260131")
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------
+# P19.1: /api/kline/daterange
+# ---------------------------------------------------------------------
+def test_kline_daterange_daily_ok(monkeypatch):
+    # 模拟 kline_daily MIN/MAX/COUNT 返回
+    mn, mx, cnt = dt.date(2020, 1, 2), dt.date(2026, 4, 17), 1520
+    monkeypatch.setattr(
+        "backend.api.kline.pg_conn",
+        _make_pg_conn([[([(mn, mx, cnt)], ["min", "max", "count"])]])
+    )
+    c = _mount()
+    r = c.get("/api/kline/daterange?ts_code=000001.SZ&freq=daily")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ts_code"] == "000001.SZ"
+    assert body["freq"] == "daily"
+    assert body["min"] == "2020-01-02"
+    assert body["max"] == "2026-04-17"
+    assert body["count"] == 1520
+    assert body["empty_reason"] is None
+
+
+def test_kline_daterange_daily_empty(monkeypatch):
+    # 无 K 线数据(新股/无效代码):MIN/MAX 为 None, COUNT=0
+    monkeypatch.setattr(
+        "backend.api.kline.pg_conn",
+        _make_pg_conn([[([(None, None, 0)], ["min", "max", "count"])]])
+    )
+    c = _mount()
+    r = c.get("/api/kline/daterange?ts_code=999999.SZ&freq=daily")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["min"] is None
+    assert body["max"] is None
+    assert body["count"] == 0
+    assert body["empty_reason"] == "no_data"
+
+
+def test_kline_daterange_minute_no_source():
+    """minute freq 暂无数据源,直接返回 no_source_table,不查 DB。"""
+    c = _mount()
+    r = c.get("/api/kline/daterange?ts_code=000001.SZ&freq=minute")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["freq"] == "minute"
+    assert body["empty_reason"] == "no_source_table"
+    assert body["min"] is None
+    assert body["count"] == 0
+
+
+def test_kline_daterange_bad_code():
+    c = _mount()
+    r = c.get("/api/kline/daterange?ts_code=BAD")
+    assert r.status_code == 400
+
+
+def test_kline_daterange_bad_freq():
+    c = _mount()
+    # FastAPI Query pattern 校验失败 → 422
+    r = c.get("/api/kline/daterange?ts_code=000001.SZ&freq=hour")
+    assert r.status_code == 422

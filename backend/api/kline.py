@@ -195,3 +195,45 @@ def kline_minute(
         "rows": [],
         "empty_reason": "no_source_table",
     }
+
+
+@router.get("/daterange")
+def kline_daterange(
+    ts_code: str = Query(..., description="如 000001.SZ"),
+    freq: str = Query("daily", pattern="^(daily|weekly|minute)$"),
+):
+    """P19.1 (2026-04-20): 返回某股票在某频率下的可用日期范围。
+
+    前端 K 线组件依赖此接口动态设置日期选择器的 min/max,
+    避免硬编码 2026-01-20 等静态日期。
+
+    返回:
+      {"ts_code": "...", "freq": "daily", "min": "2020-01-02", "max": "2026-04-17", "count": 1520}
+      或 min/max/count 全 null (股票无 K 线数据 / freq 无源)
+    """
+    code = _norm_code(ts_code)
+    # 当前仅 daily 有真实数据源。weekly 从 daily 聚合,范围 = daily 范围。
+    # minute 暂无数据源,直接返回空。
+    if freq == "minute":
+        return {
+            "ts_code": code, "freq": freq,
+            "min": None, "max": None, "count": 0,
+            "empty_reason": "no_source_table",
+        }
+
+    with pg_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """SELECT MIN(trade_date), MAX(trade_date), COUNT(*)
+               FROM kline_daily WHERE ts_code = %s""",
+            (code,),
+        )
+        mn, mx, cnt = cur.fetchone()
+
+    return {
+        "ts_code": code,
+        "freq": freq,
+        "min": mn.isoformat() if mn else None,
+        "max": mx.isoformat() if mx else None,
+        "count": int(cnt or 0),
+        "empty_reason": None if cnt else "no_data",
+    }

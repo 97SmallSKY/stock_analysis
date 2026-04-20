@@ -73,7 +73,9 @@ fi
 echo "==> Health check"
 
 # 1. systemd 服务(只检 api,worker/scheduler 已被 P5.2 移除)
-if systemctl list-unit-files 2>/dev/null | grep -q "^stock_analysis_api.service"; then
+# 2026-04-20 P19.1 修 #16:和 deploy.sh 的 P18.7 同根问题 —— `list-unit-files | grep -q`
+# 在 set -euo pipefail 下偶发误判。改为 `systemctl cat`,单 unit 探测,不依赖管道。
+if systemctl cat stock_analysis_api.service >/dev/null 2>&1; then
     check "stock_analysis_api active" systemctl is-active --quiet stock_analysis_api
 else
     echo "  ⚠ stock_analysis_api 未安装(请跑 ./scripts/install_units.sh)"
