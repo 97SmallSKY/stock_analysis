@@ -33,20 +33,26 @@ COLMAP = {
 def _calc_from_kline(conn, trade_date_str: str) -> dict | None:
     """从 kline_daily 反算情绪字段(trade_date_str: YYYYMMDD)。
     若当日 kline 无数据返回 None; 否则返回一个 dict 供 upsert。
+
+    2026-04-20 P18.13 扩字段:补齐 total_stocks / up_count / down_count /
+    median_pct_change —— 这些都是 market_sentiment 表里一直为 NULL 的
+    关键衍生字段,Dashboard 前端需要它们才能展示「涨跌家数」「样本数」等。
     """
     d_iso = f"{trade_date_str[:4]}-{trade_date_str[4:6]}-{trade_date_str[6:]}"
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT
-                COUNT(*)                                          AS total_cnt,
+                COUNT(*)                                              AS total_cnt,
                 SUM(CASE WHEN pct_change >=  0.095 THEN 1 ELSE 0 END) AS limit_up_cnt,
                 SUM(CASE WHEN pct_change <= -0.095 THEN 1 ELSE 0 END) AS limit_down_cnt,
-                SUM(CASE WHEN pct_change >  0 THEN 1 ELSE 0 END)  AS up_cnt,
-                SUM(CASE WHEN pct_change <  0 THEN 1 ELSE 0 END)  AS down_cnt,
+                SUM(CASE WHEN pct_change >  0 THEN 1 ELSE 0 END)      AS up_cnt,
+                SUM(CASE WHEN pct_change <  0 THEN 1 ELSE 0 END)      AS down_cnt,
                 SUM(CASE WHEN pct_change >  0.05 THEN 1 ELSE 0 END)   AS strong_cnt,
                 SUM(CASE WHEN pct_change < -0.05 THEN 1 ELSE 0 END)   AS weak_cnt,
-                AVG(pct_change)                                   AS avg_pct
+                AVG(pct_change)                                       AS avg_pct,
+                -- PostgreSQL percentile_cont(0.5) 实现中位数
+                percentile_cont(0.5) WITHIN GROUP (ORDER BY pct_change) AS median_pct
             FROM kline_daily
             WHERE trade_date = %s AND pct_change IS NOT NULL
             """,
@@ -55,9 +61,10 @@ def _calc_from_kline(conn, trade_date_str: str) -> dict | None:
         row = cur.fetchone()
     if not row or not row[0]:
         return None
-    total_cnt, lu, ld, up_cnt, down_cnt, strong, weak, avg_pct = row
+    total_cnt, lu, ld, up_cnt, down_cnt, strong, weak, avg_pct, median_pct = row
     ratio = round(float(up_cnt) / max(int(down_cnt or 0), 1), 4) if up_cnt is not None else None
     avg_f = float(avg_pct) if avg_pct is not None else None
+    median_f = float(median_pct) if median_pct is not None else None
     # 简易评分: 涨跌比 * 40 + 均幅 * 600 + 涨停数 * 0.5, clamp 到 [0, 100]
     score = 50.0
     if ratio is not None:
@@ -79,17 +86,51 @@ def _calc_from_kline(conn, trade_date_str: str) -> dict | None:
         "limit_down_count": int(ld or 0),
         "up_down_ratio": ratio,
         "avg_pct_change": round(avg_f, 6) if avg_f is not None else None,
+        "median_pct_change": round(median_f, 6) if median_f is not None else None,
         "strong_stock_count": int(strong or 0),
         "weak_stock_count": int(weak or 0),
+        # P18.13 新增
+        "total_stocks": int(total_cnt or 0),
+        "up_count": int(up_cnt or 0),
+        "down_count": int(down_cnt or 0),
         "sentiment_score": round(score, 2),
         "sentiment_level": level,
     }
 
 
+# P18.13 从 DB 反算补齐时需要合并的字段(外部源返回 None,DB 反算能给)
+_DB_FILL_KEYS = (
+    "up_down_ratio", "avg_pct_change", "median_pct_change",
+    "strong_stock_count", "weak_stock_count",
+    "total_stocks", "up_count", "down_count",
+    "sentiment_score", "sentiment_level",
+)
+
+
 def _is_empty_sentiment(r: dict) -> bool:
-    """判断从外部 adapter 拿到的 row 是否 '空壳'(关键字段全 0/None)。"""
+    """判断外部 adapter 返回的 row 是否算「完全空壳」(所有关键字段全 0/None)。
+
+    语义:True 表示这条数据完全不可用,需要整体走 DB 反算。
+    否则(至少有一个关键字段有值)不算空壳,保留外部源数据,
+    同时**对缺失字段走 `_merge_db_fill` 兜底**(P18.13)。
+    """
     keys = ("limit_up_count", "limit_down_count", "up_down_ratio", "avg_pct_change")
     return all((r.get(k) in (None, 0, 0.0)) for k in keys)
+
+
+def _merge_db_fill(external_row: dict, db_row: dict | None) -> dict:
+    """P18.13: 外部源有部分数据时,从 DB 反算补齐 None 字段,不覆盖已有值。
+
+    典型场景:akshare 东财只返回了 limit_up_count/limit_down_count,
+    其余 up_down_ratio/avg_pct_change 等为 None — 本函数会从 db_row 取值填上。
+    """
+    if db_row is None:
+        return external_row
+    merged = dict(external_row)
+    for k in _DB_FILL_KEYS:
+        if merged.get(k) in (None, 0, 0.0) and db_row.get(k) is not None:
+            merged[k] = db_row[k]
+    return merged
 
 
 def _load_covered_days(start: str, end: str) -> set[str]:
@@ -137,6 +178,10 @@ def run(start: str, end: str, skip_existing: bool = True) -> int:
                     logger.warning(f"[ingest.sentiment] {d} 外部源失败: {e}")
 
                 # Step 2: rows 空 或 '空壳' → 从 kline_daily 反算
+                #         rows 有数据但部分字段 None → DB 反算补齐缺失字段
+                # P18.13 修复:旧逻辑只在「完全空壳」时走 DB 反算,
+                # 导致 akshare 只返回 limit_up/down_count 时,up_down_ratio
+                # avg_pct_change 等 4 个衍生字段永久 None。
                 if not rows or _is_empty_sentiment(rows[0]):
                     db_row = _calc_from_kline(conn, d)
                     if db_row:
@@ -147,6 +192,9 @@ def run(start: str, end: str, skip_existing: bool = True) -> int:
                         logger.info(f"[ingest.sentiment] {d} kline 亦无数据, 跳过")
                         continue
                 else:
+                    # P18.13: 外部源有数据,但从 DB 反算补齐 None 字段
+                    db_row = _calc_from_kline(conn, d)
+                    rows[0] = _merge_db_fill(rows[0], db_row)
                     from_api += 1
 
                 total += upsert_market_sentiment(conn, rows)

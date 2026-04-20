@@ -47,36 +47,93 @@ class _Conn:
 
 class TestCalcFromKline:
     def test_no_rows_returns_none(self):
-        conn = _Conn([_Cur(one=(0, 0, 0, 0, 0, 0, 0, None))])
+        # P18.13: SQL 多了 median_pct_change 列,row 从 8 → 9 元素
+        conn = _Conn([_Cur(one=(0, 0, 0, 0, 0, 0, 0, None, None))])
         assert S._calc_from_kline(conn, "20241015") is None
 
     def test_normal_day(self):
-        # total=4000, limit_up=50, limit_down=5, up=2300, down=1500, strong=400, weak=100, avg=0.01
-        row = (4000, 50, 5, 2300, 1500, 400, 100, 0.01)
+        # total=4000, limit_up=50, limit_down=5, up=2300, down=1500, strong=400, weak=100, avg=0.01, median=0.008
+        row = (4000, 50, 5, 2300, 1500, 400, 100, 0.01, 0.008)
         conn = _Conn([_Cur(one=row)])
         out = S._calc_from_kline(conn, "20241015")
         assert out["trade_date"] == "2024-10-15"
         assert out["limit_up_count"] == 50
         assert out["limit_down_count"] == 5
         assert out["up_down_ratio"] == round(2300 / max(1500, 1), 4)
+        # P18.13 新增字段断言
+        assert out["total_stocks"] == 4000
+        assert out["up_count"] == 2300
+        assert out["down_count"] == 1500
+        assert out["median_pct_change"] == 0.008
         # score = 50 + (ratio-1)*20 + 0.01*600 + (50-5)*0.5; 位于合法范围
         assert 0.0 <= out["sentiment_score"] <= 100.0
         assert out["sentiment_level"] in ("HOT", "WARM", "NEUTRAL", "COOL", "COLD")
 
     def test_clamp_cold(self):
-        # 大幅下跌, 均幅 -0.05, 涨跌停都给 low
-        row = (4000, 0, 200, 200, 3000, 50, 500, -0.05)
+        # 大幅下跌, 均幅 -0.05, median=-0.04
+        row = (4000, 0, 200, 200, 3000, 50, 500, -0.05, -0.04)
         conn = _Conn([_Cur(one=row)])
         out = S._calc_from_kline(conn, "20241015")
         assert out["sentiment_score"] <= 30      # COLD level
         assert out["sentiment_level"] == "COLD"
 
     def test_clamp_hot(self):
-        row = (4000, 200, 0, 3500, 200, 800, 50, 0.04)
+        row = (4000, 200, 0, 3500, 200, 800, 50, 0.04, 0.03)
         conn = _Conn([_Cur(one=row)])
         out = S._calc_from_kline(conn, "20241015")
         assert out["sentiment_score"] >= 70
         assert out["sentiment_level"] == "HOT"
+
+
+# --------------------------------------------------------------------
+# P18.13 _merge_db_fill: 外部源部分字段缺失时用 DB 反算补齐
+# --------------------------------------------------------------------
+
+
+class TestMergeDbFill:
+    def test_external_none_filled_by_db(self):
+        external = {"trade_date": "2026-04-17", "limit_up_count": 71,
+                    "limit_down_count": 3, "up_down_ratio": None,
+                    "avg_pct_change": None}
+        db = {"up_down_ratio": 1.8, "avg_pct_change": 0.012,
+              "total_stocks": 5300, "up_count": 3400, "down_count": 1900,
+              "median_pct_change": 0.005, "strong_stock_count": 500,
+              "weak_stock_count": 200, "sentiment_score": 62.5,
+              "sentiment_level": "WARM"}
+        merged = S._merge_db_fill(external, db)
+        # 外部源已有的字段不被覆盖
+        assert merged["limit_up_count"] == 71
+        assert merged["limit_down_count"] == 3
+        # 外部源缺失,从 DB 补
+        assert merged["up_down_ratio"] == 1.8
+        assert merged["avg_pct_change"] == 0.012
+        assert merged["total_stocks"] == 5300
+        assert merged["up_count"] == 3400
+        assert merged["down_count"] == 1900
+        assert merged["median_pct_change"] == 0.005
+
+    def test_external_zero_treated_as_missing(self):
+        # 0 和 0.0 也视为缺失,会被 DB 反算覆盖
+        external = {"up_down_ratio": 0.0, "avg_pct_change": 0,
+                    "limit_up_count": 10}
+        db = {"up_down_ratio": 1.5, "avg_pct_change": 0.01}
+        merged = S._merge_db_fill(external, db)
+        assert merged["up_down_ratio"] == 1.5
+        assert merged["avg_pct_change"] == 0.01
+        assert merged["limit_up_count"] == 10  # 非 0/None 保留
+
+    def test_db_none_returns_external_unchanged(self):
+        external = {"limit_up_count": 71, "up_down_ratio": None}
+        merged = S._merge_db_fill(external, None)
+        assert merged == external
+
+    def test_external_values_not_overridden(self):
+        """外部源已有有效值时,不应被 DB 反算覆盖。"""
+        external = {"up_down_ratio": 2.5, "avg_pct_change": 0.02}
+        db = {"up_down_ratio": 999.0, "avg_pct_change": 999.0}
+        merged = S._merge_db_fill(external, db)
+        assert merged["up_down_ratio"] == 2.5
+        assert merged["avg_pct_change"] == 0.02
 
 
 # --------------------------------------------------------------------

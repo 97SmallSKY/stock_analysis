@@ -6,6 +6,27 @@
 
 ---
 
+### 2026-04-20 · fix · market_sentiment 11 个衍生字段永久 NULL 修复 🎯
+
+**背景**:体检发现 `/api/dashboard` 的 sentiment 段里 11 个字段(`up_down_ratio`、`avg_pct_change`、`median_pct_change`、`strong/weak_stock_count`、`total_stocks`、`up_count`、`down_count`、`lhb_*`、`sentiment_change`)一直为 NULL,Dashboard 大面积空态。
+
+**根因 3 层**:
+1. **`_is_empty_sentiment` 判断错误**:用 `all(字段全 0/None)`,只要 akshare 返回了 `limit_up_count=71` 就不算空壳,于是不走 DB 反算。**结果**:limit_up/down 有值但 up_down_ratio/avg_pct_change 永远 None。
+2. **`_calc_from_kline` 返回字段不全**:没有 `total_stocks/up_count/down_count/median_pct_change`,表里这些列始终 NULL。
+3. **`writer.upsert_market_sentiment.cols` 缺列**:4 个新字段即使有值也不会落库。
+
+**修复(方案 C)**:
+- `_calc_from_kline`:SQL 加 `percentile_cont(0.5)` 计算 median,返回 dict 扩展到 `total_stocks/up_count/down_count/median_pct_change`
+- 新增 `_merge_db_fill()`:外部源有数据但字段 None 时,从 DB 反算补齐(不覆盖已有值)
+- `run()`:外部源有 rows 时也调用 `_merge_db_fill`(而不是只在完全空壳时兜底)
+- `writer.cols`:补齐 4 个新字段
+
+**测试**:+4 case(`_merge_db_fill` 四种分支)+ 调整 `_calc_from_kline` 的 3 个 case 适配新 row shape。pytest **760 passed**,coverage 75.79%。
+
+**需要回填**:`python -m backend.cli ingest sentiment --from 20240101 --to 20260420 --force` 覆盖 347 天历史。
+
+---
+
 ### 2026-04-20 · fix · `ingest_status.sh` 异常段 ANSI 转义清理
 
 - 现象:最近 5 条异常输出里有 tqdm 进度条残留的 `\x1b[A` 光标上移码,显示为 `[A[A[A2026-04-20 ERROR...`

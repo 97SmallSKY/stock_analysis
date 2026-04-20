@@ -108,14 +108,22 @@ def upsert_lhb_stock_daily(conn, rows):
 
 def upsert_market_sentiment(conn, rows):
     """market_sentiment 没有 UNIQUE(trade_date) 约束，
-    先删再插保证幂等。"""
+    先删再插保证幂等。
+
+    2026-04-20 P18.13 扩列:补齐历史一直为 NULL 的衍生字段
+      total_stocks / up_count / down_count / median_pct_change
+    这 4 个字段在表结构里存在但 writer 一直没写,任一来源(外部/DB 反算)
+    只要提供了就会落库。缺失时用 r.get(c) 返回 None,不影响老路径。
+    """
     rows = list(rows)
     if not rows:
         return 0
     cols = ["trade_date",
             "limit_up_count", "limit_down_count",
             "up_down_ratio", "avg_pct_change",
+            "median_pct_change",
             "strong_stock_count", "weak_stock_count",
+            "total_stocks", "up_count", "down_count",
             "sentiment_score", "sentiment_level"]
     dates = sorted({r["trade_date"] for r in rows})
     with conn.cursor() as cur:
