@@ -15,9 +15,20 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.db.session import pg_conn
+from backend.utils.response_cache import ResponseCache
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# STO-43: /api/lhb 响应缓存。lhb_stock_daily / lhb_tn_price 是 T+1 日级数据,
+# 同一交易日内相同参数每次都打 DB 是纯浪费。key 由所有过滤参数稳定哈希生成,
+# TTL 默认到当日 19:00(daily 管道 18:40 跑完后 20min buffer,再兜底 1h)。
+_lhb_cache = ResponseCache(name="lhb_list", max_size=256)
+
+
+def get_lhb_cache() -> ResponseCache:
+    """暴露单例便于测试 / 其他模块(如 daily 管道)主动 flush。"""
+    return _lhb_cache
 
 
 def _to_iso(date_str: Optional[str]) -> Optional[str]:
@@ -52,7 +63,31 @@ def list_lhb(
 
     列对齐:生产 PG 实际列为 l_buy/l_sell/l_net/amount,
     这里用 AS 别名保持对外 API 稳定(net_amount / buy_amount / turnover)。
+
+    STO-43: 加了响应级缓存。key 由所有过滤参数稳定哈希,TTL 到当日 19:00。
     """
+    # --------------------------------------------------------------
+    # STO-43: 先查缓存。key 必须包含所有过滤/排序/分页参数,
+    # 否则会串数据(红线:缓存 key 必须包含全部过滤参数)。
+    # --------------------------------------------------------------
+    cache_key = _lhb_cache.make_key(
+        date_from=date_from,
+        date_to=date_to,
+        ts_code=ts_code,
+        reason=reason,
+        net_amount_min=net_amount_min,
+        score_min=score_min,
+        order_by=order_by,
+        order_desc=order_desc,
+        limit=limit,
+        offset=offset,
+        with_tn=with_tn,
+        skip_total=skip_total,
+    )
+    hit = _lhb_cache.get(cache_key)
+    if hit is not None:
+        return hit
+
     # order_by 白名单 → 实际列名映射(防 SQL 注入 & 列名偏移)
     ORDER_COL = {
         "trade_date": "trade_date",
@@ -132,7 +167,10 @@ def list_lhb(
         for r in rows:
             if r.get("trade_date") is not None:
                 r["trade_date"] = r["trade_date"].isoformat()
-        return {"total": total, "limit": limit, "offset": offset, "rows": rows}
+        payload = {"total": total, "limit": limit, "offset": offset, "rows": rows}
+        # STO-43: 写缓存(失败也不影响响应)
+        _lhb_cache.set(cache_key, payload)
+        return payload
     except Exception as e:
         logger.exception("[api/lhb] list failed")
         raise HTTPException(500, f"查询失败: {e}")

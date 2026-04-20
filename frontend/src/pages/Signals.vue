@@ -500,6 +500,7 @@ async function load() {
       order_desc: true,
       limit: 500,
       with_tn: true,
+      skip_total: true, // STO-43: 首屏跳过 COUNT(*) 加速,"已加载 N 条" 足够
     })
     rows.value = data.rows ?? []
   } catch {

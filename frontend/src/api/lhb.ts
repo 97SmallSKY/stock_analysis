@@ -42,6 +42,8 @@ export interface LhbListParams {
   offset?: number
   // P16.5: 透出 t1/t5 次日收益字段
   with_tn?: boolean
+  // STO-43: 跳过 COUNT(*),total 返回 -1,首屏显示 "已加载 N 条" 即可
+  skip_total?: boolean
 }
 
 export async function fetchLhb(params: LhbListParams = {}): Promise<LhbListResp> {
