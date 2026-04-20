@@ -139,11 +139,14 @@ for svc in "${services[@]}"; do
     #   旧实现 `systemctl list-unit-files | grep -q` 在 pipefail 下偶发误判,
     #   且全量列出所有 unit 相对昂贵。改为针对单个 unit 的轻量探测:
     #   `systemctl cat` 命中会打印 unit 内容(stdout 重定向掉),不存在则 exit≠0。
-    if sudo systemctl cat "$svc" >/dev/null 2>&1; then
+    # STO-33:sudo 改 `sudo -n`(non-interactive)。
+    #   背景:当前 jd 部署用 root,sudo 是 no-op;但若未来换成非 root,
+    #   裸 sudo 会弹密码提示或 hang。`-n` 让它不交互式失败,给用户明确错误。
+    if sudo -n systemctl cat "$svc" >/dev/null 2>&1; then
         echo "==> Restarting $svc"
-        sudo systemctl restart "$svc"
+        sudo -n systemctl restart "$svc"
     else
-        echo "==> Skip $svc (未安装, 请先跑 ./scripts/install_units.sh)"
+        echo "==> Skip $svc (未安装, 或当前用户无 systemd 权限;请 root / sudoers NOPASSWD)"
     fi
 done
 

@@ -146,3 +146,29 @@ def test_healthcheck_covers_frontend_and_api():
     # PG 地址从 .env 读,不再硬编码 localhost
     assert '${PG_HOST' in text or 'PG_HOST:-localhost' in text
     assert "$PG_HOST" in text
+
+
+# ---------- STO-33 sudo non-interactive ----------
+
+def test_sudo_is_non_interactive():
+    """STO-33: deploy.sh 所有 `sudo systemctl ...` 必须是 `sudo -n`。
+
+    背景:当前 jd 部署用 root,sudo 是 no-op;但非 root 用户跑 deploy.sh
+    时裸 sudo 会弹密码提示或 hang。`-n` 让它不交互式失败,给明确错误。
+
+    防止未来被人改回裸 sudo 的回归锚点测试。
+    """
+    import re
+    body = _body()
+    lines = [
+        ln.strip()
+        for ln in body.splitlines()
+        if re.search(r"\bsudo\b.*\bsystemctl\b", ln)
+        and not ln.lstrip().startswith("#")
+    ]
+    assert lines, "deploy.sh 应该至少有一处 sudo systemctl(restart service)"
+    for ln in lines:
+        assert re.search(r"\bsudo\s+-n\s+systemctl\b", ln), (
+            f"STO-33 红线:`sudo systemctl` 必须是 `sudo -n systemctl` "
+            f"(non-interactive),但这行不是: {ln!r}"
+        )
