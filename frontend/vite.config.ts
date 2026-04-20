@@ -35,10 +35,16 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // 手动分包: 把重库抽出, 降低主 chunk 体积
+        //
+        // STO-34 (2026-04-21) 调整:
+        // - **ag-grid** 只有 LhbList.vue 一个页面在用(`grep -rln ag-grid src/`),
+        //   从 manualChunks 移出后,rollup 自动把它放进 LhbList 的懒加载 chunk,
+        //   首屏不再加载 ~1.1MB 的 vendor-grid。访问 LhbList 时才按需加载。
+        // - **ant-design-vue / echarts**:保留集中分包,多页面共享,避免重复打包。
+        //   后续若要进一步瘦身,可引入 `unplugin-vue-components` 做 antd 按需引入。
         manualChunks: {
           'vendor-vue': ['vue', 'vue-router', 'pinia'],
           'vendor-antd': ['ant-design-vue'],
-          'vendor-grid': ['ag-grid-community', 'ag-grid-vue3'],
           'vendor-echarts': ['echarts', 'vue-echarts'],
         },
       },

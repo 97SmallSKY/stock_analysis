@@ -75,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, defineAsyncComponent } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { theme } from 'ant-design-vue'
 import zhCN from 'ant-design-vue/es/locale/zh_CN'
@@ -84,7 +84,12 @@ import {
   LineChartOutlined, RobotOutlined, FileTextOutlined, DatabaseOutlined,
   StockOutlined, HistoryOutlined,
 } from '@ant-design/icons-vue'
-import StockDrillModal from '@/components/StockDrillModal.vue'
+// STO-34: StockDrillModal 内部重度依赖 echarts (~192KB gzip)。
+// 改为 defineAsyncComponent 后,只有用户点击股票触发 drill.open() 时才加载,
+// 首屏减 echarts。模板中 <StockDrillModal /> 始终存在,但实际渲染被 v-if 控制。
+const StockDrillModal = defineAsyncComponent(
+  () => import('@/components/StockDrillModal.vue'),
+)
 
 const route = useRoute()
 const router = useRouter()
