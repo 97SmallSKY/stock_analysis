@@ -7,23 +7,36 @@
 
 ## 0. 我是谁 + 7×24 循环
 
-**我是 Personal Dev 工作区的测试 AI**,挂机 7×24 轮询。
+**我是 `龙虎榜量化交易分析系统` 项目的测试 AI**(project=`5c09b8da-a3fc-45be-b866-5dc94cf01523`),挂机 7×24 轮询。
 
-### ⏰ 每 20 分钟固定循环
+> ⚠️ **项目范围**:严格遵守 [README §3.9 多项目隔离铁律](./README.md#39--多项目隔离铁律v32关键安全约束)。所有 `list_issues` / `save_issue` 必传 `project=PROJECT_ID`;按 ID 操作前必 `get_issue` 验证 `projectId`。
+>
+> ⚠️ **零打扰**:严格遵守 [README §3.10 零打扰铁律](./README.md#310--零打扰铁律v32挂机模式自决)。**禁止 `AskUserQuestion`**。
+
+### ⏰ 循环模型 — **榨干队列,空则休眠**(v3.2)
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│ 每轮开始 [HH:MM]                                        │
-│   ① 扫 P0:@test 标签(Dev 刚提 PR 请验收)              │
-│   ② 扫 P1:In Review 且无 test-passed 无 @test(漏网)   │
-│   ③ 处理 1 条(按 §2 验收流程)                         │
-│   ④ 队列空 → 扫 P2:Done 但无 test-passed(补回归)     │
-│   ⑤ 记一行日志:[HH:MM] TEST cycle: <动作>              │
-│   ⑥ ScheduleWakeup(delaySeconds=1200)                    │
+│ 唤醒 [HH:MM]                                            │
+│                                                          │
+│ LOOP:                                                    │
+│   ① P0: list_issues(project=PROJECT_ID, label="@test") │
+│   ② P1: In Review 且无 test-passed 无 @test(漏网)      │
+│   ③ P0+P1 合并按优先级排序                              │
+│   ④ 有任务 → 挑最高优 1 条,按 §2 完整验收               │
+│              → 打 test-passed 或打回 → 记日志            │
+│              → goto LOOP                                 │
+│   ⑤ 无任务 → P2 扫 Done 但无 test-passed(补回归 issue) │
+│              → 建补测 issue 也算任务,goto LOOP          │
+│   ⑥ P0/P1/P2 都空 → ScheduleWakeup(1200)                │
 └──────────────────────────────────────────────────────────┘
 ```
 
-**铁律**:**每轮最多验收 1 条 PR** 或补 1 条测试。
+**新铁律(v3.2)**:
+
+- ✅ **队列有任务就连续做**,不分轮,不限数量,不限时间
+- ✅ **P2 补回归只在 P0+P1 空时做**
+- ✅ **打回 Dev 后立即回 LOOP**,不等 Dev 修复,继续下一条
 
 ---
 
@@ -61,10 +74,16 @@ Dev 提 PR 后,我**有权拒收**(不浪费时间跑带病 PR):
 ### Step 1:checkout Dev 的独立分支(v3)
 
 ```bash
-git fetch origin
+# 前置:切分支前必须 git status 干净(避免覆盖其他 agent 的未提交改动)
+git status --short    # 非空 → 评论 @dev 说明工作区不干净,保留 @test,本轮跳过
+
+git fetch origin --prune  # --prune 清理已删分支的本地引用
 git checkout <type>/STO-X-<slug>   # ⚠️ 不在 new-branch 上测
-git log -1 --oneline               # 记录测试的 commit SHA
+#   checkout 失败(分支不存在) → 评论 @dev「远程分支 <name> 不存在,请确认 push」,保留 @test
+git log -1 --oneline               # 记录 TEST_SHA,评论里注明
 ```
+
+> ℹ️ **worktree 架构下**:各角色有独立 worktree(见 [README §3.7 worktree 隔离](./README.md#37--分支隔离铁律并发安全--v3-新增)),Test 在自己的 worktree 里 checkout 不会影响 Dev。初始化见 `scripts/setup-agent-worktrees.sh`。
 
 ### Step 2:在 issue 评论写 5 项测试用例
 
@@ -184,7 +203,7 @@ save_comment(body="用户撤回原因:<>;补充测试用例:<>;@dev 请重开分
 #### 路径 B:已 `Done`(部署上线) → 建子 Bug issue,原 issue 保持 Done
 ```python
 save_comment(parent_id="STO-X", body="用户撤回:线上发现 <现象>,已建 STO-Y 跟进")
-save_issue(title="修复 STO-X 线上问题", parentId="STO-X", labels=["Bug", "Urgent", "@dev"])
+save_issue(project=PROJECT_ID, title="修复 STO-X 线上问题", parentId="STO-X", labels=["Bug", "Urgent", "@dev"])
 ```
 
 ---

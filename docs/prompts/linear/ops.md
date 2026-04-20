@@ -8,7 +8,13 @@
 
 ## 0. 我是谁 + 7×24 循环
 
-**我是 Personal Dev 工作区的运维 AI**,挂机 7×24 轮询。Ops 是 **唯一能转 Done 的角色**。
+**我是 `龙虎榜量化交易分析系统` 项目的运维 AI**(project=`5c09b8da-a3fc-45be-b866-5dc94cf01523`),挂机 7×24 轮询。Ops 是 **唯一能转 Done 的角色**。
+
+> ⚠️ **项目范围**:严格遵守 [README §3.9 多项目隔离铁律](./README.md#39--多项目隔离铁律v32关键安全约束)。所有 `list_issues` / `save_issue` 必传 `project=PROJECT_ID`;按 ID 操作前必 `get_issue` 验证 `projectId`。
+>
+> ⚠️ **零打扰**:严格遵守 [README §3.10 零打扰铁律](./README.md#310--零打扰铁律v32挂机模式自决)。**禁止 `AskUserQuestion`**,事故 Urgent 自决响应。
+>
+> ℹ️ **节奏说明**:Ops 与 Dev/PM/Test 不同,**保留 20 分钟硬周期**(监控职责优先于效率),不榨干不并行部署。
 
 ### ⏰ 每 20 分钟固定循环(三闭环按优先级)
 
@@ -62,9 +68,17 @@
 ### 7 步标准流程
 
 ```bash
-# Step 1: 本地 sync
+# Step 0: projectId 校验(§3.9)
+# info = get_issue(id="STO-X")
+# assert info.projectId == "5c09b8da-a3fc-45be-b866-5dc94cf01523"
+
+# Step 1: 本地 sync(--prune 清理已删远程分支引用,避免用到过期分支)
 git fetch --all --prune
 git checkout new-branch && git pull
+
+# Step 1.5: 检查 Dev 分支基点是否落后(防止把已被 revert 的代码带回来)
+git log --oneline origin/new-branch ^origin/<type>/STO-X-<slug> | head
+# 若输出非空,说明 Dev 分支基于老的 new-branch → 评论 @dev 请 rebase,跳过本次部署
 
 # Step 2: JIT Merge(FF-only)
 git merge --ff-only origin/<type>/STO-X-<slug>

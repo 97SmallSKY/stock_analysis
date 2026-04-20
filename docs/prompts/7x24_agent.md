@@ -19,6 +19,14 @@
 
 **绝对规则**:**监控永远优先于优化**。到了 20 分钟检查点,哪怕优化改到一半也要立即 `git stash` 保存中间状态,先去看日志。
 
+> ⚠️ **v3.2 节奏同步说明**:
+>
+> 本手册是 **Ops 角色**的时间驱动巡检(7×24 挂机时使用),**保留 20 分钟硬周期**。
+>
+> Dev / PM / Test 的循环模型已在 [linear/*.md](./linear/) v3.2 改为「榨干队列再休眠」(队列空才睡,不分轮不限数量)。Ops **不适用榨干模型**,因为监控任务要求准时 —— 部署/优化做到一半碰到 20 分钟检查点必须立即中断。
+>
+> 详见 [linear/README.md §3.9 / §3.10](./linear/README.md) 多项目 + 零打扰铁律。
+
 ---
 
 ## 2. 核心循环(每 20 分钟)
@@ -75,8 +83,11 @@
 
 - 改代码前先**读最新版**(不要基于记忆改,可能已经被别的 commit 改过)
 - **跨 writer + schema 改动**(涉及 DB 列)前**必须用 `information_schema.columns` 验证真实 schema**,不能假定 API 字段等于 DB 列(这是 2026-04-20 事故教训,已收进 ADR)
+- 🔴 **前后端接口契约红线 (P19.13 事故 / STO-40)**:改前端 `fetchXxx` 的 query 参数**前**,必须 `grep backend/api/*.py | grep Query` 验证后端 `le=` / `ge=` 边界;改后端 `Query(...)` 边界**前**,必须 `grep -rn fetchXxx frontend/src/` 确认无调用方越界。详见 [CLAUDE.md §11](../../CLAUDE.md)
 - 改完**必须 `python3 -m pytest -q` 通过**(覆盖率门槛 ≥ 75%)
+- 新/改 API 端点的**单测必须含边界越界 case**(`le+1` / `ge-1` 返回 422),不只测 happy path
 - 前端改动**必须 `npx vue-tsc --noEmit`** + `npx vitest run` 全绿
+- **至少一次真实 `curl` 验证**(不只看 pytest mock 过),尤其是 API 参数边界和涉及 uvicorn/nginx 层行为的改动
 - 单次 commit 聚焦单个改动,不要夹带
 
 ### 3.3 部署链路(固化命令)

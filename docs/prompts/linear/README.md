@@ -22,6 +22,8 @@
 
 ⚠️ **分支铁律**:`main` 与 `new-branch` 是**两套独立代码**,禁止跨分支 merge / rebase / cherry-pick。AI 默认工作在 `new-branch`。
 
+⚠️ **多项目提醒**:`Personal Dev` team 下**同时存在多个 project**(当前 2 个:龙虎榜量化交易分析系统 / wqbridge),它们**共用同一个 STO 编号池**,仅靠 issue ID 无法识别归属。本仓库的工作**严格限定在 `龙虎榜量化交易分析系统` 项目**(ID `5c09b8da-a3fc-45be-b866-5dc94cf01523`),详见 §3.9。
+
 ---
 
 ## 1. 四角色与文档路由
@@ -127,6 +129,41 @@ new-branch (发布分支,Ops 部署来源)
 3. **Ops JIT merge 部署** —— 部署前最后一刻 `git merge --ff-only origin/<type>/STO-X-<slug>` 到 new-branch,失败即拒
 4. **PM 只读 new-branch** —— 扫代码 / 建 issue 前 `git checkout new-branch`,**禁止** checkout 其他分支
 
+#### 🌳 Worktree 物理隔离(v3.2,并发安全前提)
+
+> **背景**:4 个 AI Agent 同时挂机,若共用一个工作区,`git checkout` 会互相践踏(Dev 在写半成品时,Test 把工作区切到另一分支 → Dev 下轮回来写错分支)。
+
+**架构**:每个角色 Agent 在**独立的 git worktree** 里工作,共享同一个 `.git` 但工作区文件物理隔离。
+
+```
+~/Develop/personal/stock_analysis           ← 主仓库(交互式开发留给你自己)
+~/Develop/personal/stock_analysis-pm        ← PM agent worktree,始终 agent/pm(跟踪 new-branch)
+~/Develop/personal/stock_analysis-dev       ← Dev agent worktree,在此开 feat/STO-X-xxx
+~/Develop/personal/stock_analysis-test      ← Test agent worktree,checkout Dev 推的分支
+~/Develop/personal/stock_analysis-ops       ← Ops agent worktree,JIT merge 用
+```
+
+**初始化**(一次性):
+```bash
+./scripts/setup-agent-worktrees.sh
+```
+
+**启动**(每次挂机):
+```bash
+./scripts/start-ai-agents.sh    # 自动 cd 到各自 worktree
+```
+
+**保障效果**:
+- Dev 写一半未提交 → Test 在自己 worktree 里 checkout → **Dev 工作区毫发无损**
+- 每个 worktree 有独立的 `.pytest_cache` / `node_modules`(可软链共享)
+- 共享 `.git` 对象 → Dev `git push` 后,Test `git fetch` 立刻可见
+
+**Agent 铁律**(每个 Agent 启动时在自己 worktree 里):
+- ✅ 只在自己 worktree 内操作,不 `cd` 到其他目录
+- ✅ PM agent 始终在 `agent/pm` 跟踪分支(周期 `git pull` 同步 new-branch)
+- ✅ Dev agent 在自己 worktree `git checkout -b feat/STO-X-...`
+- ❌ 禁止跨 worktree 操作(写别的 agent 目录里的文件)
+
 #### 📐 分支命名规范
 
 ```
@@ -189,7 +226,81 @@ docs/STO-40-claude-md
 - 新开工的 issue 必须按上述流程
 - 存量 @dev issue 需迁到规范分支名(见迁移手册)
 
-### 3.8 🎯 决策边界 & 升级标识(v2)
+### 3.9 🔒 多项目隔离铁律(v3.2,关键安全约束)
+
+> **背景**:`Personal Dev` team 下已有多个 project(龙虎榜量化 / wqbridge / 未来可能更多),它们**共用 STO 编号池**(STO-14 可能是 wqbridge 的,STO-43 是龙虎榜的,混编不连续)。如果 AI 不带 `project` 参数扫 issue,或按 ID 盲操作,就会**跨项目串台**(读错需求 / 改错代码库 / 建错子任务)。
+
+#### 🎯 本仓库(stock_analysis)的项目锁定
+
+```
+仓库路径:   ~/Develop/personal/stock_analysis
+Project:     龙虎榜量化交易分析系统
+Project ID:  5c09b8da-a3fc-45be-b866-5dc94cf01523
+```
+
+**本仓库下运行的所有 AI,工作范围严格限定此 project**。
+
+#### 🔒 4 条强制规则
+
+1. **`list_issues` 必传 `project` 参数**
+ ```python
+ list_issues(project=PROJECT_ID, state="Backlog", ...)  # ✅
+ list_issues(state="Backlog", ...)                     # ❌ 会拉到 wqbridge 的
+ ```
+
+2. **`save_issue` 新建时必传 `project` 参数**
+ ```python
+ save_issue(title="...", project=PROJECT_ID, ...)      # ✅
+ save_issue(title="...", team=TEAM_ID, ...)            # ❌ 不够,team 下有多 project
+ ```
+
+3. **按 ID 操作前必先 `get_issue` 验证 `projectId`**
+ ```python
+ info = get_issue(id="STO-X")
+ if info.projectId != "5c09b8da-a3fc-45be-b866-5dc94cf01523":
+     save_comment(id="STO-X", body="⚠️ 此 issue 属于其他 project,本仓库 AI 拒绝操作")
+     return  # 跳过,处理下一条
+ # 通过验证后才能 save_issue / save_comment
+ ```
+
+4. **发现跨项目 issue 立即停手**,不改状态、不提 PR、不 checkout,仅留一条说明评论后跳过。
+
+#### 🧪 快速自检(接手新会话时跑一次)
+
+```python
+# 扫本项目 In Progress,应该只看到 STO 编号中属于龙虎榜的
+issues = list_issues(project=PROJECT_ID, state="In Progress")
+for i in issues:
+    assert i.projectId == "5c09b8da-a3fc-45be-b866-5dc94cf01523"
+```
+
+---
+
+### 3.10 🤫 零打扰铁律(v3.2,挂机模式自决)
+
+> **背景**:7×24 挂机下用户不在线,任何 `AskUserQuestion` 都会**阻塞整个轮询循环**(Claude Code 等用户响应,后续 ScheduleWakeup 全部失效)。
+
+#### 🚫 强制规则
+
+1. **禁止调用 `AskUserQuestion`**(所有角色、所有场景)
+2. **L4 决策**(花钱 / 不可逆 / 外部依赖)→ 改为:
+   - 标题加 🔴 前缀
+   - 打 `Urgent` + `@pm` 标签
+   - 评论列清:决策点 + 至少 2 个选项 + 各自代价 + 默认推荐
+   - **跳过此 issue,继续处理队列下一条**
+3. **跨角色授权场景**(§4.6)→ 按 §4.2 权限表执行,权限表外的**默认拒绝**,不问用户
+4. **仲裁僵持**(§5)→ 按 §5「常见冲突默认判决」表自动执行,不问用户
+5. **唯一例外**:用户**主动在对话里追问时**,AI 可以反问澄清;但轮询循环里**绝不主动问**
+
+#### 🔍 用户怎么看到等决策的 issue?
+
+- 筛选器:`label = @pm AND label = Urgent`
+- 或标题搜索 `🔴`
+- 所有 L4 issue 都通过此视图汇聚,用户批量处理
+
+---
+
+### 3.11 🎯 决策边界 & 升级标识(v2)
 
 > 详细规则见 [pm.md §3.9-3.11](./pm.md#39--pm-决策边界v2--谁拍板)。本节是全局 AI 都应知道的规则。
 
@@ -216,7 +327,7 @@ docs/STO-40-claude-md
 1. **标题加 🔴 前缀**(视觉最强)
 2. **加 `Urgent` 标签**(优先级置顶)
 3. **保留 `@pm` 标签**(表示球在用户手里)
-4. **同时 `AskUserQuestion`**(当前对话可达时)
+4. **评论里列清选项 + 默认推荐**,然后跳过此 issue 继续下一条(**禁止 `AskUserQuestion`**,见 §3.10)
 
 **查看所有等用户决策的 issue**:Linear filter `label = @pm AND label = Urgent` 或搜标题含 `🔴`。
 
@@ -319,8 +430,8 @@ AI 发现自己要做的状态转换**不在自己权限内**时:
  ```
  @Ops 请转 Done,我(Dev 角色)的 DoD 已签字,PR 已合并部署。
  ```
-3. 若无人响应 → `AskUserQuestion` 让用户决定是否**临时授权跨角色操作**
-4. 用户授权后,操作评论必须写「**代理 X 角色操作,授权来源:用户对话 <timestamp>**」留痕
+3. **无人响应** → 按 §3.10 零打扰铁律处理:保持 `Blocked` 标签 + 等待对应角色下轮处理,**不主动问用户**。
+4. 用户在对话里**主动授权**跨角色操作时,评论必须写「**代理 X 角色操作,授权来源:用户对话 <timestamp>**」留痕。
 
 ### 4.7 状态转换时必做的附加动作
 
@@ -423,7 +534,7 @@ AI 发现自己要做的状态转换**不在自己权限内**时:
 ### 否决规则
 - **任何一方否决** → 打回 `In Progress`,评论说明原因
 - **否决权无大小**:Dev 也能否决 Test 的验收意见(反过来一样),关键是对齐 DoD 而不是看谁职位高
-- **僵持 2 轮以上**(A 说过 B 说不过 3 次以上) → AI 触发 `AskUserQuestion` 请用户仲裁
+- **僵持 2 轮以上**(A 说过 B 说不过 3 次以上) → 按下表「常见冲突的默认判决」自动执行,**不问用户**(见 §3.10)
 
 ### 常见冲突的默认判决(降低沟通成本)
 

@@ -13,13 +13,38 @@
 
 1. **macOS 系统睡眠会暂停 AI** —— 启动脚本已自动运行 `caffeinate -i` 防睡眠,但**关盖就停**
 2. **4 个 Terminal 窗口必须保持开启** —— 关窗等于杀进程,AI 立刻停止
-3. **API 费用按调用计算** —— 4 角色 × 每 10 分钟 × 每天 144 次 = **576 次/天**,根据 prompt 长度每次约 $0.05-0.20,预算**每天 $30-60** 上下
+3. **API 费用按调用计算** —— 4 角色 × 每 20 分钟 × 每天 72 次 = **288 次/天**(Ops 硬周期),Dev/PM/Test 新的「榨干队列」模型会更多,实际用量取决于队列长度
 4. **不要在同一 Claude Code 里跑多个角色** —— 会污染上下文 + 违反「三方共识」设计
-5. **/loop 模式里的 AI 仍受 token 上下文窗口限制** —— 长时间跑会膨胀,建议**每 12h 手动重启一次会话**(stop + start)
+5. **4 个 agent 必须在各自 worktree 里**(v3.2)—— 共享工作区会导致 git checkout 互相践踏,start-ai-agents.sh 已强制检查
+6. **/loop 模式里的 AI 仍受 token 上下文窗口限制** —— 长时间跑会膨胀,建议**每 12h 手动重启一次会话**(stop + start)
 
 ---
 
 ## 🚀 启动
+
+### 首次使用:初始化 Worktree(一次性,v3.2 必做)
+
+> ⚠️ **v3.2 架构变更**:4 个 agent 现在在各自独立的 git worktree 里工作(物理隔离,防 checkout 互相践踏)。
+
+```bash
+cd ~/Develop/personal/stock_analysis
+./scripts/setup-agent-worktrees.sh         # 一次性
+# 或强制清理旧孤儿 worktree 再重建:
+./scripts/setup-agent-worktrees.sh --prune
+# 查看已有 worktree:
+./scripts/setup-agent-worktrees.sh --list
+```
+
+执行后会在父目录创建 4 个 worktree:
+```
+~/Develop/personal/stock_analysis            (主仓库,留给你交互式开发)
+~/Develop/personal/stock_analysis-pm         (PM agent,branch=agent/pm)
+~/Develop/personal/stock_analysis-dev        (Dev agent,branch=agent/dev)
+~/Develop/personal/stock_analysis-test       (Test agent,branch=agent/test)
+~/Develop/personal/stock_analysis-ops        (Ops agent,branch=agent/ops)
+```
+
+详细机制见 [linear/README.md §3.7 Worktree 物理隔离](../prompts/linear/README.md#-worktree-物理隔离v32并发安全前提)。
 
 ### 一键启动 4 个
 
@@ -29,10 +54,11 @@ cd ~/Develop/personal/stock_analysis
 ```
 
 执行后会:
-1. 启动 `caffeinate -i` 防 macOS 睡眠(PID 写 `/tmp/ai-agents-caffeinate.pid`)
-2. 依次打开 4 个 Terminal.app 窗口(标题:AI-PM / AI-DEV / AI-TEST / AI-OPS)
-3. 每个窗口 `cd` 到 repo 后启动 `claude`
-4. 生成 `/tmp/ai-agent-<role>-prompt.txt` 开场白文件
+1. **前置检查**:4 个 worktree 必须存在,否则提示先跑 setup-agent-worktrees.sh
+2. 启动 `caffeinate -i` 防 macOS 睡眠(PID 写 `/tmp/ai-agents-caffeinate.pid`)
+3. 依次打开 4 个 Terminal.app 窗口(标题:AI-PM / AI-DEV / AI-TEST / AI-OPS)
+4. 每个窗口 `cd` 到**自己的 worktree**(不是主仓库)后启动 `claude`
+5. 生成 `/tmp/ai-agent-<role>-prompt.txt` 开场白文件(已更新为 v3.2 模板:项目锁定 + 榨干队列 + 零打扰)
 
 ### 在每个新窗口手动完成 3 步
 
