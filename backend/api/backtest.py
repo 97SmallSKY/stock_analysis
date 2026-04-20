@@ -307,9 +307,28 @@ def submit_backtest(req: SubmitReq, bg: BackgroundTasks) -> SubmitResp:
 
 @router.get('/strategies')
 def list_strategies_ep():
-    from backend.domain.strategy import list_strategies
+    """返回已注册策略的富信息 (STO-47)。
+
+    从 {'strategies': ['lhb_hot_money', ...]} 升级为
+    {'strategies': [{name, category, description, default_params}, ...]}
+
+    前端策略对比页用这些字段做中文展示 + hover tooltip。
+    与 /api/robots/strategies 返回结构对齐。
+    """
+    # 本地 import 触发装饰器注册(registry 是模块级 dict)
     import backend.domain.strategy.builtins  # noqa: F401
-    return {'strategies': list_strategies()}
+    from backend.domain.strategy.registry import _REGISTRY, list_strategies
+
+    out = []
+    for name in list_strategies():
+        cls = _REGISTRY[name]
+        out.append({
+            'name': name,
+            'category': getattr(cls, 'category', ''),
+            'description': getattr(cls, 'description', ''),
+            'default_params': dict(getattr(cls, 'DEFAULT_PARAMS', {}) or {}),
+        })
+    return {'strategies': out}
 
 
 @router.get('', response_model=list[TaskResp])
