@@ -11,6 +11,23 @@
 
 ---
 
+### 2026-04-21 · fix · 北交所 920* 数据源止损(STO-31 Phase 1)
+
+**问题**:每次 daily ingest 运行,~307 只北交所 920xxx 股票全数据源失败(akshare/sina/crawler 三家都不支持),日志被 187 条 ERROR 淹没,真正的 bug 被掩盖。
+
+**PM 决策**:C + B 串行方案。**Phase 1**(本改动):止损 + 过滤;Phase 2:另开 issue 调研东财 `push2his.eastmoney.com` 北交所路径;Phase 3 兜底:升级提方案 A(Tushare 付费)。
+
+**Phase 1 改动(3 个文件)**:
+1. `db/init/05_STO-31_data_source_status.sql`:`stock_info` 表加 `data_source_status VARCHAR(20) DEFAULT 'ok'` 枚举 `ok/bse_unavailable/delisted`;用 `symbol LIKE '920%'` 过滤把北交所股票标为 `bse_unavailable`。**幂等**(ADD COLUMN IF NOT EXISTS + 只更新 status='ok' 的记录)。
+2. `backend/ingest/kline.py::_load_all_ts_codes`:SQL WHERE 加 `COALESCE(data_source_status,'ok') != 'bse_unavailable'`,被跳过的数量用 `INFO` 级别落日志一行(`[ingest.kline] skip bse_unavailable stocks: count=307 (STO-31 止损)`)。
+3. `tests/test_ingest_kline_bse_filter.py`:4 个用例(SQL WHERE 含过滤 / 返回列表正确 / 日志记录 / 零跳过不打日志)。
+
+**血泪教训(未踩,但差点)**:issue 原文写「`ts_code LIKE '%.BJ'`」,实际 DB 里 307 只北交所股票**后缀是 `.SH` 不是 `.BJ`**(可能 akshare 统一后缀)。没先 `SELECT` 验证就写 migration 会直接回填 0 行,彻底无效。**改代码前真实查 DB 验证 schema/数据**,是 P18.13b 传下来的血泪守则 —— 本次照常执行救了命。
+
+**E2E 预期**:部署后次日 daily 运行,`logs/daily_update.log` ERROR 数 < 10(原 ~187)。后续 Phase 2 启用方案 B 时,只需 `UPDATE stock_info SET data_source_status='ok' WHERE symbol LIKE '920%'` 即可恢复北交所入库。
+
+---
+
 ### 2026-04-20 · perf · Dashboard sentiment 3 组实时聚合(对抗 schema-vs-API 错配)
 
 **P20.4 / P20.5**:`/api/dashboard.sentiment` 里 `lhb_stock_count / lhb_total_net / lhb_avg_score / sentiment_change` 4 个字段长期为 NULL/0。market_sentiment 表**有这 4 列**(不像 P18.13b 里的 total_stocks/up_count/down_count 那样完全不存在),但从未跑回填脚本。

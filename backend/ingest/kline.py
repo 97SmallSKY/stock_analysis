@@ -41,17 +41,19 @@ COLMAP = {
 
 
 def _load_all_ts_codes() -> List[str]:
-    """只取 A 股主体,排除可转债/基金/B股/港股/已退市。
+    """只取 A 股主体,排除可转债/基金/B股/港股/已退市/数据源不可用。
 
     过滤规则:
-      - is_active = TRUE (主过滤: 可转债/退市股在骨架补齐时已标 is_active=FALSE)
+      - ``is_active = TRUE``(可转债/退市股在骨架补齐时已标 FALSE)
+      - ``data_source_status != 'bse_unavailable'``(STO-31:北交所数据源止损)
       - symbol 前缀白名单:
          000/001/002/003  深市主板/中小板
          300/301           创业板
          600/601/603/605   沪市主板
          688               科创板
-         920               北交所
-        其他前缀(1xx/2xx/5xx/9xx 等)多为债券/基金/B股, akshare 日K 不支持
+         920               北交所(保留前缀,将来方案 B/A 启用时直接解除
+                                   ``data_source_status`` 即可恢复)
+        其他前缀(1xx/2xx/5xx/9xx 等)多为债券/基金/B股,akshare 日K 不支持
     """
     allow_prefix = (
         "000", "001", "002", "003",
@@ -61,8 +63,25 @@ def _load_all_ts_codes() -> List[str]:
         "920",
     )
     with pg_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT ts_code, symbol FROM stock_info WHERE is_active = TRUE")
+        # STO-31: 过滤 bse_unavailable 标记的股票(北交所数据源不支持)
+        # COALESCE 是为了兼容迁移前的旧记录(data_source_status 为 NULL)
+        cur.execute(
+            "SELECT ts_code, symbol FROM stock_info "
+            "WHERE is_active = TRUE "
+            "AND COALESCE(data_source_status, 'ok') != 'bse_unavailable'"
+        )
         rows = cur.fetchall()
+        cur.execute(
+            "SELECT COUNT(*) FROM stock_info "
+            "WHERE is_active = TRUE AND data_source_status = 'bse_unavailable'"
+        )
+        skipped_count = cur.fetchone()[0]
+    if skipped_count:
+        logger.info(
+            "[ingest.kline] skip bse_unavailable stocks: count=%d (STO-31 止损;"
+            "跟踪 Phase 2 方案 B 东财北交所路径)",
+            skipped_count,
+        )
     return [
         ts_code for ts_code, symbol in rows
         if symbol and symbol.startswith(allow_prefix)
