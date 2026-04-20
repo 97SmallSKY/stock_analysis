@@ -5,12 +5,20 @@ set -u
 cd "$(dirname "$0")/.."
 
 echo '============ 1. 进程 ============'
-ps -ef | grep -E "full_ingest|backend.cli ingest" | grep -v grep || echo '  (none)'
+# 2026-04-20 P19.11: 把进程计数缓存到 INGEST_PROCS,供心跳段判断「是否有活任务」
+INGEST_PROCS=$(ps -ef | grep -E "full_ingest|backend.cli ingest|backend.ingest" | grep -v grep || true)
+if [ -n "$INGEST_PROCS" ]; then
+  echo "$INGEST_PROCS"
+else
+  echo '  (none)'
+fi
 
 echo
 echo '============ 1.5 日志心跳检查(自动定位最近活跃日志)============'
 # 事故教训 (2026-04-18): 进程活着但日志长时间无增长 = 某个 HTTP 调用卡死.
 # 事故教训 (2026-04-20): 仅看 full_ingest.log 会漏掉 p16_*.log 等分流日志, 误报卡死.
+# 事故教训 (2026-04-20 P19.11): 无进程时报"卡死"是假警报 —— 没进程只是任务已完成.
+#                                 只在**有灌库进程**时才做心跳检查.
 # 策略: 扫描 logs/*.log, 取 mtime 最新的那个作为"活跃日志", 同时列出前 3 个最近修改的.
 mapfile -t RECENT_LOGS < <(
   find logs/ -maxdepth 1 -name '*.log' -type f -printf '%T@ %p\n' 2>/dev/null \
@@ -22,8 +30,11 @@ if [ ${#RECENT_LOGS[@]} -gt 0 ]; then
   NOW=$(date +%s)
   SILENT=$(( NOW - MTIME ))
   echo "  活跃日志: $ACTIVE_LOG"
-  if [ $SILENT -gt 600 ]; then
-    echo "  ⚠️  已静默 $((SILENT / 60)) 分钟 (>10 分钟), 疑似卡死"
+  if [ -z "$INGEST_PROCS" ]; then
+    # P19.11: 无灌库进程 -> 日志静默是因为任务完成,不是卡死
+    echo "  ✓ 无进程在跑(任务已完成,最后活动 ${SILENT}s 前)"
+  elif [ $SILENT -gt 600 ]; then
+    echo "  ⚠️  已静默 $((SILENT / 60)) 分钟 (>10 分钟), 进程还在但日志不更新,疑似卡死"
     echo "     排查: ss -tnp | grep <pid>  /  lsof -nP -p <pid> | grep TCP"
     echo "     处置: kill -9 <pid> 让任务进入下一阶段"
   else
