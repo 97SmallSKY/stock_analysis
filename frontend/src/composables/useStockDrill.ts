@@ -1,3 +1,10 @@
+/**
+ * K 线 Modal 全局单例 store。
+ *
+ * ⚠️ 整个调用链约定见 `docs/frontend/kline-modal-contract.md` (STO-41)
+ *    —— rangeKey 枚举 / anchorDate 传递链 / 参数边界 / 空态状态机等,
+ *    改之前**务必**读一遍,防止踩 P19.12 / P19.13 事故类型的坑。
+ */
 import { reactive } from 'vue'
 
 // 单例 store: 全局只挂一个 StockDrillModal, 任何组件通过 open(ts_code, anchor_date?) 打开

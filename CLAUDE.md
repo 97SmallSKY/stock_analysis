@@ -48,6 +48,7 @@ akshare/tushare → 数据网关(熔断/缓存/优先级) → 原始表 (Postgre
 | P1 | `docs/designs/` | 复杂任务总体设计(周期长 / 跨模块) |
 | P1 | `docs/optimizations/` | 单点优化技术笔记 |
 | P1 | `docs/ops/` | 运维手册 / 事故复盘 |
+| P1 | `docs/frontend/` | 前端组件契约 & 调用链约定(见 [`kline-modal-contract.md`](./docs/frontend/kline-modal-contract.md) —— 改 K 线 Modal 前必读) |
 | P1 | `docs/IMPLEMENTATION_ROADMAP.md` | W1~W12 周次计划,历史参考;已被多个"偏离说明"标注 |
 | P1 | `docs/CODE_REVIEW.md` | 正在处理的遗留问题清单 |
 | P2 | `README.md` | 对外介绍,面向新接手者 |
