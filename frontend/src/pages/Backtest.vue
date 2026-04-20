@@ -53,6 +53,8 @@
         </a-col>
         <a-col :span="8">
           <a-form-item label="候选策略">
+            <!-- STO-47: 策略下拉显示中文名 + hover tooltip 显示 description。
+                 用 slot 自定义 option 渲染,外包 a-tooltip 供 hover。 -->
             <a-select
               v-model:value="pickedStrategies"
               mode="multiple"
@@ -60,7 +62,22 @@
               placeholder="选 >= 1 个策略"
               :disabled="running"
               style="width: 100%;"
-            />
+              :filter-option="filterStrategyOption"
+            >
+              <template #option="{ value, label, description, category }">
+                <a-tooltip
+                  :title="description || label"
+                  placement="right"
+                  :mouse-enter-delay="0.3"
+                >
+                  <div class="strategy-opt">
+                    <span class="strategy-opt__label">{{ label }}</span>
+                    <span v-if="category" class="strategy-opt__tag">{{ category }}</span>
+                    <span class="strategy-opt__code">{{ value }}</span>
+                  </div>
+                </a-tooltip>
+              </template>
+            </a-select>
           </a-form-item>
         </a-col>
       </a-row>
@@ -241,7 +258,14 @@ const initialCapital = ref(1_000_000)
 const maxPositions = ref(5)
 const perPositionPct = ref(0.2)
 const pickedStrategies = ref<string[]>([])
-const strategyOptions = ref<{ value: string; label: string }[]>([])
+// STO-47: option 携带富信息,供下拉展示中文名 + hover tooltip
+interface StrategyOption {
+  value: string        // 策略代号,如 'lhb_hot_money',实际选中值
+  label: string        // 展示名 = description || name
+  description: string  // 中文说明,供 tooltip
+  category: string     // 分类 tag,如 'LHB' / 'MOMENTUM'
+}
+const strategyOptions = ref<StrategyOption[]>([])
 const running = ref(false)
 const loadingStrategies = ref(false)
 const report = ref<ComparisonReport | null>(null)
@@ -287,10 +311,28 @@ async function refreshStrategies() {
   loadingStrategies.value = true
   try {
     const r = await listStrategies()
-    strategyOptions.value = (r.strategies || []).map((s) => ({ value: s, label: s }))
+    // STO-47: 后端已返回 [{name, category, description, default_params}]
+    strategyOptions.value = (r.strategies || []).map((s) => ({
+      value: s.name,
+      label: s.description || s.name,   // 优先中文描述,空串 fallback 到代号
+      description: s.description || '',
+      category: s.category || '',
+    }))
   } finally {
     loadingStrategies.value = false
   }
+}
+
+/** STO-47: a-select 搜索时需对中文 label + 英文 value 都做匹配。 */
+function filterStrategyOption(
+  input: string,
+  opt: { value: string; label: string; description?: string } | undefined,
+): boolean {
+  if (!opt || !input) return true
+  const kw = input.toLowerCase()
+  return [opt.value, opt.label, opt.description]
+    .filter(Boolean)
+    .some((s) => String(s).toLowerCase().includes(kw))
 }
 
 async function runCompare() {
@@ -397,5 +439,34 @@ onMounted(refreshStrategies)
   0%   { box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.55); }
   70%  { box-shadow: 0 0 0 8px rgba(24, 144, 255, 0); }
   100% { box-shadow: 0 0 0 0 rgba(24, 144, 255, 0); }
+}
+
+/* STO-47: 策略下拉 option 样式,label + 分类 tag + 代号三栏对齐 */
+.strategy-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.6;
+  width: 100%;
+}
+.strategy-opt__label {
+  font-weight: 500;
+  color: #262626;
+  flex: 0 0 auto;
+}
+.strategy-opt__tag {
+  font-size: 11px;
+  color: #1677ff;
+  background: #e6f4ff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  flex: 0 0 auto;
+}
+.strategy-opt__code {
+  margin-left: auto;
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11px;
+  color: #8c8c8c;
+  flex: 0 0 auto;
 }
 </style>

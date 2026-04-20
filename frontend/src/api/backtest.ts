@@ -45,8 +45,18 @@ export async function compareBacktests(req: CompareReq): Promise<ComparisonRepor
   return data
 }
 
-export async function listStrategies(): Promise<{ strategies: string[] }> {
-  const { data } = await http.get<{ strategies: string[] }>('/api/backtest/strategies')
+/** STO-47: 策略富信息 (后端 /api/backtest/strategies 升级后返回)。 */
+export interface StrategyInfo {
+  name: string                        // 策略英文代号, 如 lhb_hot_money
+  category: string                    // LHB / MOMENTUM / CUSTOM ...
+  description: string                 // 中文描述, 空串时 UI fallback 到 name
+  default_params: Record<string, unknown>
+}
+
+export async function listStrategies(): Promise<{ strategies: StrategyInfo[] }> {
+  const { data } = await http.get<{ strategies: StrategyInfo[] }>(
+    '/api/backtest/strategies',
+  )
   return data
 }
 

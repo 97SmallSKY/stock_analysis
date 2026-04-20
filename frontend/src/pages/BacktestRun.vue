@@ -175,7 +175,12 @@ async function loadHistory() {
 async function refreshStrategies() {
   try {
     const r = await listStrategies()
-    strategyOptions.value = (r.strategies || []).map((s) => ({ value: s, label: s }))
+    // STO-47: 后端改返回富对象 {name, description, category, default_params},
+    // 这里只需要下拉 value=name / label=中文描述(空串时 fallback 到代号)
+    strategyOptions.value = (r.strategies || []).map((s) => ({
+      value: s.name,
+      label: s.description || s.name,
+    }))
   } catch { /* ignore */ }
 }
 
