@@ -65,13 +65,42 @@
         </a-col>
       </a-row>
 
-      <a-space style="margin-top: 8px;">
+      <!-- STO-46: 勾选后给出视觉提示,引导用户点「运行对比」。
+           若 canRun=false,tooltip 会告诉用户缺什么(日期/策略)。 -->
+      <a-alert
+        v-if="showRunHint"
+        type="info"
+        show-icon
+        :message="runHintMsg"
+        style="margin-top: 8px; margin-bottom: 4px;"
+        banner
+      />
+
+      <a-space style="margin-top: 8px;" align="center">
+        <!-- STO-46: disabled 时 tooltip 提示缺什么;可用时不弹 tooltip -->
+        <a-tooltip v-if="disabledReason" :title="disabledReason">
+          <!-- disabled 按钮自身不触发 hover,必须包一层 span 让 tooltip 挂上 -->
+          <span style="display: inline-block; cursor: not-allowed;">
+            <a-button
+              type="primary"
+              size="large"
+              disabled
+              style="pointer-events: none;"
+            >
+              <template #icon><PlayCircleOutlined /></template>
+              运行对比
+            </a-button>
+          </span>
+        </a-tooltip>
         <a-button
+          v-else
           type="primary"
+          size="large"
           :loading="running"
-          :disabled="!canRun"
+          :class="{ 'run-btn-pulse': !running && !report }"
           @click="runCompare"
         >
+          <template #icon><PlayCircleOutlined /></template>
           运行对比
         </a-button>
         <a-button :disabled="!report" @click="exportCsv">导出 CSV</a-button>
@@ -194,6 +223,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
+import { PlayCircleOutlined } from '@ant-design/icons-vue'
 import {
   compareBacktests, listStrategies, fetchBacktestHistory,
   type CompareStrategy, type ComparisonReport, type BacktestHistoryRow,
@@ -232,6 +262,26 @@ const cols = [
 const canRun = computed(() =>
   !!range.value.start && !!range.value.end && pickedStrategies.value.length > 0,
 )
+
+// STO-46: disabled 原因,供按钮 tooltip 显示
+const disabledReason = computed(() => {
+  if (canRun.value) return ''
+  if (!range.value.start || !range.value.end) return '请先选择日期范围'
+  if (pickedStrategies.value.length === 0) return '请至少勾选 1 个策略'
+  return ''
+})
+
+// STO-46: 勾选了策略但还没跑(也没 loading)时,提示用户点按钮
+const showRunHint = computed(
+  () => pickedStrategies.value.length > 0 && !report.value && !running.value,
+)
+const runHintMsg = computed(() => {
+  const n = pickedStrategies.value.length
+  if (!range.value.start || !range.value.end) {
+    return `已选 ${n} 个策略,请补充日期范围后点「运行对比」`
+  }
+  return `已选 ${n} 个策略,点击「运行对比」开始回测`
+})
 
 async function refreshStrategies() {
   loadingStrategies.value = true
@@ -338,4 +388,14 @@ onMounted(refreshStrategies)
 
 <style scoped>
 .winner-tag { color: #d4380d; }
+
+/* STO-46: 可以运行但尚未跑时,按钮做轻微 pulse 引导视线 */
+.run-btn-pulse {
+  animation: run-btn-pulse 1.6s ease-in-out infinite;
+}
+@keyframes run-btn-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.55); }
+  70%  { box-shadow: 0 0 0 8px rgba(24, 144, 255, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(24, 144, 255, 0); }
+}
 </style>
