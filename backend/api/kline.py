@@ -56,7 +56,9 @@ def kline_daily(
     ts_code: str = Query(..., description="如 000001.SZ"),
     date_from: Optional[str] = Query(None, alias="from", description="YYYYMMDD"),
     date_to: Optional[str] = Query(None, alias="to", description="YYYYMMDD"),
-    limit: int = Query(250, ge=1, le=1000),
+    # P19.13 (2026-04-20): 上限从 1000 → 5000,支持前端传 [from, to] 跨年区间。
+    # 1Y ~= 250 交易日, 5000 够 ~20 年,响应最大 ~200KB,不会压垮。
+    limit: int = Query(250, ge=1, le=5000),
 ):
     code = _norm_code(ts_code)
     d_from = _parse_ymd(date_from, "from")
@@ -109,7 +111,8 @@ def kline_weekly(
     ts_code: str = Query(..., description="如 000001.SZ"),
     date_from: Optional[str] = Query(None, alias="from"),
     date_to: Optional[str] = Query(None, alias="to"),
-    limit: int = Query(104, ge=1, le=520),
+    # P19.13: 上限从 520 → 2000,1Y ~= 52 周, 2000 够 ~40 年。
+    limit: int = Query(104, ge=1, le=2000),
 ):
     """周K: 从 kline_daily 按 ISO 周(date_trunc('week'))聚合.
     - open = 周内第一天 open

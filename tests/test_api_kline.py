@@ -307,3 +307,45 @@ def test_kline_daterange_bad_freq():
     # FastAPI Query pattern 校验失败 → 422
     r = c.get("/api/kline/daterange?ts_code=000001.SZ&freq=hour")
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------
+# P19.13: limit 边界回归。前端会传 2000,若后端上限太低会 422 → 前端看不到 K 线
+# ---------------------------------------------------------------------
+def test_kline_daily_limit_2000_ok(monkeypatch):
+    cols = ["trade_date", "open", "high", "low", "close", "vol"]
+    monkeypatch.setattr(
+        "backend.api.kline.pg_conn", _make_pg_conn([[([], cols)]])
+    )
+    c = _mount()
+    r = c.get("/api/kline/daily?ts_code=000001.SZ&limit=2000")
+    assert r.status_code == 200, r.text  # P19.12 回归:曾因上限 1000 导致 422
+
+
+def test_kline_daily_limit_5000_ok(monkeypatch):
+    cols = ["trade_date", "open", "high", "low", "close", "vol"]
+    monkeypatch.setattr(
+        "backend.api.kline.pg_conn", _make_pg_conn([[([], cols)]])
+    )
+    c = _mount()
+    r = c.get("/api/kline/daily?ts_code=000001.SZ&limit=5000")
+    assert r.status_code == 200
+
+
+def test_kline_daily_limit_over_upper():
+    """limit=5001 仍应被 FastAPI 拒绝(保护 DB)。"""
+    c = _mount()
+    r = c.get("/api/kline/daily?ts_code=000001.SZ&limit=5001")
+    assert r.status_code == 422
+
+
+def test_kline_weekly_limit_2000_ok(monkeypatch):
+    cols = ["trade_date", "open", "high", "low", "close", "vol"]
+    # Weekly 会做聚合,cursor 调用两次(所以 canned 传 2 次)
+    monkeypatch.setattr(
+        "backend.api.kline.pg_conn",
+        _make_pg_conn([[([], cols), ([], cols)]])
+    )
+    c = _mount()
+    r = c.get("/api/kline/weekly?ts_code=000001.SZ&limit=2000")
+    assert r.status_code == 200
