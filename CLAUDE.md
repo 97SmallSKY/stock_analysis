@@ -22,15 +22,23 @@ akshare/tushare → 数据网关(熔断/缓存/优先级) → 原始表 (Postgre
 
 | 优先级 | 文件 | 作用 |
 |---|---|---|
+| **P0**(强制) | `docs/prompts/7x24_agent.md` | **Agent 工作手册**,7×24 循环规则、部署、文档规范、红线 —— 新 session 必读 |
 | **P0**(强制) | `docs/PROGRESS.md` | 当前真实进度 / 变更日志,唯一事实源 |
 | **P0**(强制) | `docs/ADR/*.md` | 架构决策记录,冲突时以此为准 |
-| **P0**(强制) | 本文 `CLAUDE.md` | agent 工作约定 |
+| **P0**(强制) | 本文 `CLAUDE.md` | 项目说明书(你在读) |
+| **P0**(强制) | `docs/CHANGELOG.md` | 面向用户的改动记录(说人话,不用代号/文件名);前端 `/changelog` 页的数据源 |
+| P1 | `docs/designs/` | 复杂任务总体设计(周期长 / 跨模块) |
+| P1 | `docs/optimizations/` | 单点优化技术笔记 |
+| P1 | `docs/ops/` | 运维手册 / 事故复盘 |
 | P1 | `docs/IMPLEMENTATION_ROADMAP.md` | W1~W12 周次计划,历史参考;已被多个"偏离说明"标注 |
 | P1 | `docs/CODE_REVIEW.md` | 正在处理的遗留问题清单 |
-| P2 | `README.md` | 目录结构对外介绍,部分已过时 |
+| P2 | `README.md` | 对外介绍,面向新接手者 |
 | P3 | `docs/重写方案_v2.md` / `docs/龙虎榜量化交易分析系统 — 完整重写方案.md` | 初始设计稿,**历史文档**,与 ADR 冲突时以 ADR 为准 |
 
-**重要约定**:任何 agent 修改代码后,必须同步更新 PROGRESS.md 的"近期变更日志"章节。
+**重要约定**:
+- 任何 agent 修改代码后,必须同步更新 PROGRESS.md 的"近期变更日志"章节
+- **7×24 自动运维/开发 Agent 启动前**:先读 `docs/prompts/7x24_agent.md`(定义循环规则、红线、文档规范),再动工
+- **改动分流**:bugfix → `CHANGELOG.md`(说人话);单点性能 → `docs/optimizations/`;复杂任务 → 先写 `docs/designs/` 再拆子任务
 
 ## 3. 已生效的架构决策(摘要)
 

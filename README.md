@@ -120,14 +120,27 @@ stock_analysis/
 
 ## 6. 文档导航
 
+### 必读(P0)
+
+- 🤖 **[docs/prompts/7x24_agent.md](docs/prompts/7x24_agent.md) — Agent 工作手册**(新 session 第一时间读)
 - **[docs/PROGRESS.md](docs/PROGRESS.md) — 项目真实进度(单一事实源)**
-- [docs/重写方案_v2.md](docs/重写方案_v2.md) — 完整设计方案 (主文档)
-- [docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) — 12 周实施步骤(计划参考,状态以 PROGRESS.md 为准)
-- [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md) — 当前代码审查与修复记录
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — 部署 / 运维手册
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — 本地开发指南
-- [docs/龙虎榜量化交易分析系统 — 完整重写方案.md](docs/龙虎榜量化交易分析系统%20—%20完整重写方案.md) — 早期完整方案 (参考)
-- [docs/多数据源重构方案设计.md](docs/多数据源重构方案设计.md) — 数据网关专题 (参考)
+- [CLAUDE.md](CLAUDE.md) — 项目说明书(目录结构 / 硬约束 / 命名陷阱)
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — 面向用户的改动记录(前端 `/changelog` 页的数据源)
+- [docs/ADR/](docs/ADR/) — 架构决策记录(冲突时以此为准)
+
+### 设计 / 优化 / 运维(按任务类型)
+
+- [docs/designs/](docs/designs/) — 复杂任务总体设计(周期长 / 跨模块)
+- [docs/optimizations/](docs/optimizations/) — 单点优化技术笔记
+- [docs/ops/](docs/ops/) — 运维手册 / 事故复盘
+
+### 历史参考
+
+- [docs/重写方案_v2.md](docs/重写方案_v2.md) — 早期完整设计方案
+- [docs/IMPLEMENTATION_ROADMAP.md](docs/IMPLEMENTATION_ROADMAP.md) — 12 周计划(勾选不可信,以 PROGRESS 为准)
+- [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md) — 历史代码审查
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) / [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — 部署 / 开发指南
+- [docs/龙虎榜量化交易分析系统 — 完整重写方案.md](docs/龙虎榜量化交易分析系统%20—%20完整重写方案.md) / [docs/多数据源重构方案设计.md](docs/多数据源重构方案设计.md) — 历史专题
 
 ---
 
