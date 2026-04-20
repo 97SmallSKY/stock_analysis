@@ -89,6 +89,26 @@ def _latest_sentiment() -> Optional[dict]:
                     out.setdefault("total_stocks", None)
                     out.setdefault("up_count", None)
                     out.setdefault("down_count", None)
+
+                # P20.4 (2026-04-20): 从 lhb_stock_daily 实时聚合 3 个 LHB 字段。
+                # market_sentiment 表有这 3 列但长期为 NULL,一直未跑回填脚本;
+                # 改为 API 层实时算,避免再踩 schema-vs-API 错配事故(P18.13b)。
+                try:
+                    cur.execute(
+                        """SELECT COUNT(*) AS cnt,
+                                  SUM(l_net) AS total_net,
+                                  AVG(score) FILTER (WHERE score IS NOT NULL) AS avg_score
+                           FROM lhb_stock_daily
+                           WHERE trade_date = %s""",
+                        (td,),
+                    )
+                    lhb_agg = cur.fetchone()
+                    if lhb_agg and lhb_agg[0]:
+                        out["lhb_stock_count"] = int(lhb_agg[0])
+                        out["lhb_total_net"] = float(lhb_agg[1]) if lhb_agg[1] is not None else None
+                        out["lhb_avg_score"] = round(float(lhb_agg[2]), 2) if lhb_agg[2] is not None else None
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[dashboard] lhb agg fallback failed: {e}")
             else:
                 out.setdefault("total_stocks", None)
                 out.setdefault("up_count", None)
