@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 try:
     from dotenv import load_dotenv
@@ -23,6 +23,19 @@ def _int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _list(name: str, default: str = "") -> List[str]:
+    """逗号分隔的字符串列表,去空白、去空项。"""
+    raw = os.getenv(name, default)
+    return [item.strip() for item in raw.split(",") if item.strip()]
 
 
 @dataclass
@@ -48,9 +61,36 @@ class DataSourceSettings:
 
 
 @dataclass
+class AuthSettings:
+    """API 鉴权 + 限流配置 (STO-6)。
+
+    - ``enabled=False`` 时 ``require_api_key`` 放行,限流仍生效(可独立控制)。
+    - ``api_keys`` 为空则等同于 ``enabled=False``(避免误部署锁死)。
+    - 限流字符串格式遵循 ``limits`` 库语法: "60/minute", "1000/hour" 等。
+    """
+    enabled: bool = field(default_factory=lambda: _bool("AUTH_ENABLED", False))
+    api_keys: List[str] = field(default_factory=lambda: _list("API_KEYS"))
+    rate_limit_enabled: bool = field(
+        default_factory=lambda: _bool("RATE_LIMIT_ENABLED", True)
+    )
+    rate_limit_default: str = field(
+        default_factory=lambda: _get("RATE_LIMIT_DEFAULT", "60/minute")
+    )
+    rate_limit_write: str = field(
+        default_factory=lambda: _get("RATE_LIMIT_WRITE", "30/minute")
+    )
+
+    @property
+    def effective_enabled(self) -> bool:
+        """只有 enabled=True 且配置了至少一个 key 才真正生效。"""
+        return self.enabled and len(self.api_keys) > 0
+
+
+@dataclass
 class Settings:
     db: DBSettings = field(default_factory=DBSettings)
     ds: DataSourceSettings = field(default_factory=DataSourceSettings)
+    auth: AuthSettings = field(default_factory=AuthSettings)
     log_level: str = field(default_factory=lambda: _get("LOG_LEVEL", "INFO"))
 
 

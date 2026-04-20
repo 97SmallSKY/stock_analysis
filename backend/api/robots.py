@@ -16,8 +16,11 @@ import logging
 from dataclasses import asdict
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from backend.core.auth import require_api_key
+from backend.core.rate_limit import default_limit, write_limit
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -66,7 +69,8 @@ def _snapshot_to_dict(snap, engine=None) -> dict:
     return d
 
 
-@router.post("/{robot_id}/pause")
+@router.post("/{robot_id}/pause", dependencies=[Depends(require_api_key)])
+@write_limit
 def pause_robot(robot_id: int, request: Request):
     eng = _get_engine(request, robot_id)
     snap = eng.pause()
@@ -74,7 +78,8 @@ def pause_robot(robot_id: int, request: Request):
     return {"ok": True, "snapshot": _snapshot_to_dict(snap, eng)}
 
 
-@router.post("/{robot_id}/resume")
+@router.post("/{robot_id}/resume", dependencies=[Depends(require_api_key)])
+@write_limit
 def resume_robot(robot_id: int, request: Request):
     eng = _get_engine(request, robot_id)
     snap = eng.resume()
@@ -83,7 +88,8 @@ def resume_robot(robot_id: int, request: Request):
 
 
 # W12-1 灰度开关
-@router.post("/{robot_id}/enable")
+@router.post("/{robot_id}/enable", dependencies=[Depends(require_api_key)])
+@write_limit
 def enable_robot(robot_id: int, request: Request):
     eng = _get_engine(request, robot_id)
     eng.enable()
@@ -91,7 +97,8 @@ def enable_robot(robot_id: int, request: Request):
     return {"ok": True, "snapshot": _snapshot_to_dict(eng.snapshot, eng)}
 
 
-@router.post("/{robot_id}/disable")
+@router.post("/{robot_id}/disable", dependencies=[Depends(require_api_key)])
+@write_limit
 def disable_robot(robot_id: int, request: Request):
     eng = _get_engine(request, robot_id)
     eng.disable()
@@ -100,12 +107,14 @@ def disable_robot(robot_id: int, request: Request):
 
 
 @router.get("/{robot_id}/status")
+@default_limit
 def robot_status(robot_id: int, request: Request):
     eng = _get_engine(request, robot_id)
     return {"ok": True, "snapshot": _snapshot_to_dict(eng.snapshot, eng)}
 
 
 @router.get("")
+@default_limit
 def list_robots(request: Request):
     reg = _get_registry(request)
     return {
@@ -134,7 +143,8 @@ def _alloc_robot_id(reg: dict) -> int:
     return (max(reg.keys()) + 1) if reg else 1
 
 
-@router.post("/create")
+@router.post("/create", dependencies=[Depends(require_api_key)])
+@write_limit
 def create_robot(body: CreateRobotReq, request: Request):
     reg = _get_registry(request)
     # 本地 import 规避循环 & 保证 test 可 monkeypatch
@@ -180,7 +190,8 @@ def create_robot(body: CreateRobotReq, request: Request):
 
 
 @router.get("/strategies")
-def list_strategies_api():
+@default_limit
+def list_strategies_api(request: Request):
     # 本地 import 触发装饰器注册 (registry 是模块级 dict, 需 import 子类所在模块)
     import backend.domain.strategy.builtins  # noqa: F401
     from backend.domain.strategy.registry import _REGISTRY, list_strategies

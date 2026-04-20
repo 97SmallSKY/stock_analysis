@@ -117,6 +117,11 @@ def create_app() -> FastAPI:
     from backend.core.metrics import setup_metrics
     setup_metrics(app)
 
+    # STO-6 基础限流 (slowapi)。必须在路由注册前装 SlowAPIMiddleware,
+    # 且在 Prometheus 之后,确保 429 响应也被指标记录。
+    from backend.core.rate_limit import install_rate_limit
+    install_rate_limit(app)
+
     # 路由
     from backend.api.data_sources import router as ds_router
     app.include_router(ds_router, prefix="/api/data-sources",
