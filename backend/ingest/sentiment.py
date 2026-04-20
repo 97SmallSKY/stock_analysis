@@ -65,13 +65,24 @@ def _calc_from_kline(conn, trade_date_str: str) -> dict | None:
     ratio = round(float(up_cnt) / max(int(down_cnt or 0), 1), 4) if up_cnt is not None else None
     avg_f = float(avg_pct) if avg_pct is not None else None
     median_f = float(median_pct) if median_pct is not None else None
-    # 简易评分: 涨跌比 * 40 + 均幅 * 600 + 涨停数 * 0.5, clamp 到 [0, 100]
+    # STO-32 (2026-04-20 P20.6) 方案 A - 温和线性评分公式:
+    #   score = 50 + (ratio - 1) * 10 + avg_pct * 300 + (lu - ld) * 0.1
+    #   clip 到 [0, 100]
+    # 阈值不变: >=70 HOT, >=55 WARM, >=45 NEUTRAL, >=30 COOL, else COLD
+    #
+    # 旧公式 `(ratio-1)*20 + avg*600 + (lu-ld)*0.5` 的问题:
+    #   A 股涨停潮常见 LU=80~140 只, 旧系数 0.5 使 LU 项单独 +40~70 分,
+    #   叠加 base 50 + avg*600 后瞬间撞 clip 到 100, 造成严重双峰分布
+    #   (历史 538 天中 score=100 占 36%, 中间档稀疏)。
+    #
+    # 新系数: LU 0.5->0.1, avg 600->300, ratio 20->10, 区分度显著提升,
+    # 最近 20 天 simulate 下 score 在 13~100 连续散落, stddev 更高且单峰。
     score = 50.0
     if ratio is not None:
-        score += (ratio - 1.0) * 20
+        score += (ratio - 1.0) * 10
     if avg_f is not None:
-        score += avg_f * 600
-    score += (lu or 0) * 0.5 - (ld or 0) * 0.5
+        score += avg_f * 300
+    score += (lu or 0) * 0.1 - (ld or 0) * 0.1
     score = max(0.0, min(100.0, score))
     level = (
         "HOT" if score >= 70 else
