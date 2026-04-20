@@ -104,13 +104,25 @@ def test_list_tasks(app_with_bt):
 
 
 def test_list_strategies(app_with_bt):
+    """STO-47: 端点升级为 [{name, category, description, default_params}]。"""
     client, _ = app_with_bt
     r = client.get('/api/backtest/strategies')
     assert r.status_code == 200
     arr = r.json()['strategies']
-    # 内置两个至少在
-    assert 'lhb_hot_money' in arr
-    assert 'lhb_institution' in arr
+    # 结构校验:富对象数组
+    assert all(isinstance(s, dict) for s in arr)
+    assert all(
+        {'name', 'category', 'description', 'default_params'} <= set(s.keys())
+        for s in arr
+    )
+    # 内置两个至少在(按 name)
+    names = [s['name'] for s in arr]
+    assert 'lhb_hot_money' in names
+    assert 'lhb_institution' in names
+    # lhb_hot_money 应有非空 description + category
+    hot = next(s for s in arr if s['name'] == 'lhb_hot_money')
+    assert hot['description'], 'lhb_hot_money 的 description 不应为空'
+    assert hot['category']
 
 
 def test_task_params_merged(app_with_bt):
