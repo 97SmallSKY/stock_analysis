@@ -349,3 +349,48 @@ def test_kline_weekly_limit_2000_ok(monkeypatch):
     c = _mount()
     r = c.get("/api/kline/weekly?ts_code=000001.SZ&limit=2000")
     assert r.status_code == 200
+
+
+# ======================================================================
+# STO-40 前后端接口契约边界测试「范式」
+#
+# 每个新 API 端点都应有至少 2 个越界 case(上界 +1 / 下界 -1),返回 422。
+# 这里对 /api/kline/daily 和 /api/kline/weekly 做示范,后续端点照抄即可。
+# 详见 CLAUDE.md §11「前后端接口契约同步」。
+# ======================================================================
+
+
+def test_kline_daily_limit_below_min_returns_422():
+    """契约:limit=0 < ge=1,FastAPI 应拒绝为 422(不是把 0 当成「不限」)。"""
+    c = _mount()
+    r = c.get("/api/kline/daily?ts_code=000001.SZ&limit=0")
+    assert r.status_code == 422
+    # 报文应能让前端定位到是哪个字段 / 哪个约束
+    assert "limit" in r.text
+
+
+def test_kline_weekly_limit_over_upper_returns_422():
+    """契约:weekly limit=2001 > le=2000,FastAPI 应拒绝为 422。
+
+    对应 P19.13 事故类型:前端未看后端 le= 就放大 limit → 422 全挂。
+    """
+    c = _mount()
+    r = c.get("/api/kline/weekly?ts_code=000001.SZ&limit=2001")
+    assert r.status_code == 422
+    assert "limit" in r.text
+
+
+def test_kline_weekly_limit_below_min_returns_422():
+    """契约:weekly limit=0 < ge=1,422。"""
+    c = _mount()
+    r = c.get("/api/kline/weekly?ts_code=000001.SZ&limit=0")
+    assert r.status_code == 422
+    assert "limit" in r.text
+
+
+def test_kline_daily_ts_code_missing_returns_422():
+    """契约:ts_code 是 required,缺失应 422(不是默认空字符串当空查询)。"""
+    c = _mount()
+    r = c.get("/api/kline/daily?limit=100")
+    assert r.status_code == 422
+    assert "ts_code" in r.text
