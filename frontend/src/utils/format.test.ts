@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   fmtAmount, fmtPct, fmtNumber, fmtDate, healthColor, cbColor, rankClass,
-  fmtAmountWan,
+  fmtAmountWan, formatPrice,
 } from './format'
 
 describe('fmtAmount', () => {
@@ -97,5 +97,47 @@ describe('rankClass', () => {
     expect(rankClass(99)).toBe('')
     expect(rankClass(null)).toBe('')
     expect(rankClass(undefined)).toBe('')
+  })
+})
+
+// STO-30: 股票价格自适应精度
+describe('formatPrice', () => {
+  it('null/undefined/NaN -> -', () => {
+    expect(formatPrice(null, 10)).toBe('-')
+    expect(formatPrice(undefined, 10)).toBe('-')
+    expect(formatPrice(NaN, 10)).toBe('-')
+  })
+
+  it('maxVal < 10 → 3 位小数(低价股)', () => {
+    // 920xxx 北交所 ST 股场景
+    expect(formatPrice(1.36, 1.36)).toBe('1.360')
+    expect(formatPrice(1.2456, 1.36)).toBe('1.246')
+    expect(formatPrice(0.5, 1.36)).toBe('0.500')
+  })
+
+  it('10 <= maxVal < 100 → 2 位小数(主流)', () => {
+    expect(formatPrice(12.35, 50)).toBe('12.35')
+    expect(formatPrice(12.345, 50)).toBe('12.35')
+    expect(formatPrice(50, 50)).toBe('50.00')
+  })
+
+  it('maxVal >= 100 → 1 位小数(高价股)', () => {
+    expect(formatPrice(158.7, 200)).toBe('158.7')
+    expect(formatPrice(158.76, 200)).toBe('158.8')
+    expect(formatPrice(100, 100)).toBe('100.0')
+  })
+
+  it('maxVal 决定档位,val 本身可跨档(整档一致性)', () => {
+    expect(formatPrice(0.5, 150)).toBe('0.5')
+    expect(formatPrice(150, 150)).toBe('150.0')
+  })
+
+  it('负数(跌幅/负收益)也按档位 format,保留符号', () => {
+    expect(formatPrice(-1.234, 1.5)).toBe('-1.234')
+    expect(formatPrice(-12.35, 50)).toBe('-12.35')
+  })
+
+  it('maxVal 负数(异常输入)按绝对值决定档位', () => {
+    expect(formatPrice(1.5, -5)).toBe('1.500')
   })
 })
