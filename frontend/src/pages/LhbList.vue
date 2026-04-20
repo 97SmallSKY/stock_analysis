@@ -3,11 +3,9 @@
     <a-card :bordered="false" :body-style="{ paddingBottom: 0 }">
       <a-form layout="inline" :model="form" @submit.prevent="onSearch">
         <a-form-item label="日期">
-          <a-range-picker
-            v-model:value="form.range"
-            value-format="YYYY-MM-DD"
-            allow-clear
-          />
+          <!-- P19.6a (2026-04-20): 用 DateRangeQuickPick 替换 a-range-picker。
+               默认 1 年范围 + 快捷钮 1Y/季度/3M/1M/1W/5D/今天 -->
+          <DateRangeQuickPick v-model="form.range" />
         </a-form-item>
         <a-form-item label="股票">
           <a-input v-model:value="form.ts_code" placeholder="000001.SZ" allow-clear style="width: 140px;" />
@@ -111,6 +109,8 @@ import { useLhbStore } from '@/stores/lhb'
 import type { LhbRow, LhbListParams, LhbSeatRow } from '@/api/lhb'
 import { fmtAmountWan, fmtPct, fmtDate, rankClass } from '@/utils/format'
 import { useStockDrill } from '@/composables/useStockDrill'
+import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
+import { defaultRange, toYmd, type DateRange } from '@/utils/date_range'
 
 ModuleRegistry.registerModules([AllCommunityModule])
 
@@ -118,7 +118,7 @@ const store = useLhbStore()
 const drill = useStockDrill()
 
 interface FormState {
-  range: [string, string] | null
+  range: DateRange        // P19.6a: 改用 DateRange 类型,默认一年
   ts_code?: string
   reason?: string
   net_amount_min?: number
@@ -126,7 +126,7 @@ interface FormState {
 }
 
 const form = reactive<FormState>({
-  range: null,
+  range: defaultRange(),  // P19.6a: 默认一年前 → 今天
   ts_code: undefined,
   reason: undefined,
   net_amount_min: undefined,
@@ -222,13 +222,10 @@ const page = computed(() => Math.floor((store.list.offset ?? 0) / (store.list.li
 const pageSize = computed(() => store.list.limit ?? 50)
 
 function buildParams(): Partial<LhbListParams> {
-  // BUG: form.range 可能是 ['YYYY-MM-DD', 'YYYY-MM-DD'] 或 [null, null];
-  // 后端 _to_iso 支持两种,但为了与 Signals/LhbPnl 一致统一转 YYYYMMDD.
-  const from = form.range?.[0]
-  const to = form.range?.[1]
+  // P19.6a: form.range 已是 DateRange { start, end } ,这里只转 YYYYMMDD
   return {
-    date_from: from ? String(from).replace(/-/g, '') : undefined,
-    date_to: to ? String(to).replace(/-/g, '') : undefined,
+    date_from: form.range.start ? toYmd(form.range.start) : undefined,
+    date_to: form.range.end ? toYmd(form.range.end) : undefined,
     ts_code: form.ts_code || undefined,
     reason: form.reason || undefined,
     net_amount_min: form.net_amount_min ?? undefined,
@@ -241,13 +238,16 @@ function onSearch() {
 }
 
 function onReset() {
-  form.range = null
+  // P19.6a: 重置为默认一年范围,而不是清空(避免用户一键全表扫)
+  form.range = defaultRange()
   form.ts_code = undefined
   form.reason = undefined
   form.net_amount_min = undefined
   form.score_min = undefined
   store.search({
-    date_from: undefined, date_to: undefined, ts_code: undefined,
+    date_from: toYmd(form.range.start),
+    date_to: toYmd(form.range.end),
+    ts_code: undefined,
     reason: undefined, net_amount_min: undefined, score_min: undefined,
     order_by: 'trade_date', order_desc: true,
   }).catch(() => {})
