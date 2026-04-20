@@ -67,7 +67,9 @@
       <a-button type="link" size="small" @click="resetPicked">清除选择</a-button>
     </div>
 
-    <a-spin :spinning="loading" tip="拉取行情中...">
+    <!-- P20.7 (2026-04-20): loading 提示细化,带上区间/tab 信息,
+         让用户知道在等什么,而不是「是不是卡死了」 -->
+    <a-spin :spinning="loading" :tip="loadingTip">
       <div v-if="emptyReason && tab === 'minute'" class="empty-box minute-empty" data-test="minute-empty">
         <div class="big-none">无</div>
         <div class="big-none-sub">{{ emptyTitle }}</div>
@@ -168,6 +170,20 @@ const emptyTitle = computed(() => {
   if (emptyReason.value === 'no_pick') return '请先选择日期'
   if (emptyReason.value === 'fetch_failed') return '网络或服务异常'
   return ''
+})
+
+// P20.7 (2026-04-20): loading 提示文案,根据当前 tab + range 动态生成
+const RANGE_LABEL_OF: Record<string, string> = {
+  latest: '最新', '5d': '最近 5 日', '1w': '最近 1 周', '2w': '最近 2 周',
+  '1m': '最近 1 个月', '3m': '最近 3 个月', '6m': '最近 6 个月',
+  '1y': '最近 1 年',
+}
+const loadingTip = computed(() => {
+  const freq = tab.value === 'weekly' ? '周 K'
+    : tab.value === 'minute' ? '分钟 K' : '日 K'
+  if (tab.value === 'minute') return `拉取 ${freq} · ${pickedDate.value ?? ''}`
+  const label = RANGE_LABEL_OF[rangeKey.value] ?? rangeKey.value
+  return `拉取 ${freq} · ${label}(${dateFrom.value ?? ''} ~ ${dateTo.value ?? ''})`
 })
 
 const emptyText = computed(() => {
