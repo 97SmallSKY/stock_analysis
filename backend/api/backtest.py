@@ -20,8 +20,11 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from backend.core.auth import require_api_key
+from backend.core.rate_limit import default_limit, write_limit
 
 logger = logging.getLogger(__name__)
 
@@ -286,8 +289,12 @@ def set_runner(fn) -> None:
 # ====================================================================
 
 
-@router.post('', response_model=SubmitResp)
-def submit_backtest(req: SubmitReq, bg: BackgroundTasks) -> SubmitResp:
+@router.post('', response_model=SubmitResp,
+             dependencies=[Depends(require_api_key)])
+@write_limit
+def submit_backtest(
+    req: SubmitReq, bg: BackgroundTasks, request: Request,
+) -> SubmitResp:
     if req.end_date < req.start_date:
         raise HTTPException(status_code=400, detail='end_date < start_date')
     task = get_store().create(
@@ -306,21 +313,25 @@ def submit_backtest(req: SubmitReq, bg: BackgroundTasks) -> SubmitResp:
 
 
 @router.get('/strategies')
-def list_strategies_ep():
+@default_limit
+def list_strategies_ep(request: Request):
     from backend.domain.strategy import list_strategies
     import backend.domain.strategy.builtins  # noqa: F401
     return {'strategies': list_strategies()}
 
 
 @router.get('', response_model=list[TaskResp])
-def list_tasks(limit: int = 50):
+@default_limit
+def list_tasks(request: Request, limit: int = 50):
     return [
         TaskResp(**t.to_dict()) for t in get_store().list(limit=limit)
     ]
 
 
 @router.get('/history')
+@default_limit
 def list_history(
+    request: Request,
     limit: int = 200,
     status: Optional[str] = None,
     strategy_name: Optional[str] = None,
@@ -352,7 +363,8 @@ def list_history(
 
 
 @router.get('/{task_id}')
-def get_task(task_id: str):
+@default_limit
+def get_task(task_id: str, request: Request):
     t = get_store().get(task_id)
     if t is None:
         raise HTTPException(status_code=404, detail='task not found')
@@ -391,8 +403,9 @@ def set_compare_provider_factory(fn) -> None:
     _compare_provider_factory = fn
 
 
-@router.post('/compare')
-def compare_endpoint(req: CompareReq):
+@router.post('/compare', dependencies=[Depends(require_api_key)])
+@write_limit
+def compare_endpoint(req: CompareReq, request: Request):
     if req.end_date < req.start_date:
         raise HTTPException(400, 'end_date < start_date')
     # 懒导入, 避免启动时 strategy 注册表未就绪
