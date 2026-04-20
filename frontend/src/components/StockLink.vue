@@ -12,13 +12,15 @@ import { useStockDrill } from '@/composables/useStockDrill'
 const props = defineProps<{
   code: string | null | undefined
   name?: string | null | undefined
+  /** P19.12: 锚定日期 YYYY-MM-DD,传递给 K 线 Modal 默认视图 */
+  anchorDate?: string | null
 }>()
 const drill = useStockDrill()
 
 const full = computed(() => (props.name ? `${props.code} ${props.name}` : props.code ?? ''))
 
 function onClick() {
-  if (props.code) drill.open(String(props.code))
+  if (props.code) drill.open(String(props.code), props.anchorDate)
 }
 </script>
 

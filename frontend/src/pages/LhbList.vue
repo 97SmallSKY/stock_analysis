@@ -99,6 +99,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { AgGridVue } from 'ag-grid-vue3'
 import {
   ModuleRegistry, AllCommunityModule,
@@ -148,8 +149,9 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
         : ''
       return `<a class="stock-link" data-ts="${code}" style="color:#1677ff;font-family:'SF Mono',Menlo,monospace;">${code}</a>${nameHtml}`
     },
-    onCellClicked: (ev: { value: string }) => {
-      if (ev.value) drill.open(String(ev.value))
+    onCellClicked: (ev: { value: string; data?: LhbRow }) => {
+      // P19.12: 传 anchor_date 让 K 线 Modal 默认以该行日期为中心
+      if (ev.value) drill.open(String(ev.value), ev.data?.trade_date ?? null)
     },
   },
   {
@@ -330,7 +332,26 @@ function onRowClick(ev: RowClickedEvent<LhbRow>) {
   }).catch(() => {})
 }
 
-onMounted(() => { onSearch() })
+// P19.12: 支持从 Signals 页点"龙虎榜"跳转时自动带过滤
+//   路由: /lhb?ts_code=600519.SH&date=2026-04-17
+// - ts_code 直接填表单
+// - date 聚焦到该日起始 10 个交易日(而不是全年),方便直接看当天完整席位
+const route = useRoute()
+onMounted(() => {
+  const ts = route.query.ts_code as string | undefined
+  const d = route.query.date as string | undefined
+  if (ts) form.ts_code = ts
+  if (d) {
+    // 以该日为锚点,范围为该日前后各 5 天(实际用户关心当天的完整席位)
+    const dISO = d.length === 8 ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : d
+    // 简单:range.end = 该日,range.start = 该日前 10 天
+    const start = new Date(dISO + 'T00:00:00')
+    start.setDate(start.getDate() - 10)
+    const sISO = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`
+    form.range = { start: sISO, end: dISO }
+  }
+  onSearch()
+})
 </script>
 
 <style scoped>

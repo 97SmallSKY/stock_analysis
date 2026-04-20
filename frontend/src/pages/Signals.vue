@@ -42,9 +42,24 @@
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'ts_code'">
-                <StockLink :code="record.ts_code" :name="record.name" />
+                <!-- P19.12: 传 anchorDate 让 K 线 Modal 默认以该行日期为中心 -->
+                <StockLink :code="record.ts_code" :name="record.name" :anchor-date="record.trade_date" />
               </template>
               <template v-else-if="column.key === 'trade_date'">{{ fmtDate(record.trade_date) }}</template>
+              <template v-else-if="column.key === 'reason'">
+                <!-- P19.12: 上榜原因旁加跳转,一键回到龙虎榜看完整席位 -->
+                <span>
+                  {{ record.reason }}
+                  <a-tooltip title="在龙虎榜页查看该股票当天的完整席位">
+                    <a
+                      class="reason-jump"
+                      @click.stop="gotoLhb(record)"
+                    >
+                      <SwapOutlined /> 龙虎榜
+                    </a>
+                  </a-tooltip>
+                </span>
+              </template>
               <template v-else-if="column.key === 'net_amount'">
                 <span :style="{ color: (record.net_amount ?? 0) >= 0 ? '#d4380d' : '#389e0d' }">
                   {{ fmtAmountWan(record.net_amount) }}
@@ -185,33 +200,50 @@
     <a-modal
       v-model:open="detailOpen"
       :title="detailTitle"
-      width="640px"
+      width="860px"
       :footer="null"
       destroy-on-close
       @close="onDetailClose"
     >
       <div v-if="detailRow" class="detail-modal">
         <!-- Header: 一行紧凑展示关键信息 -->
-        <a-descriptions :column="2" size="small" bordered class="detail-header">
+        <a-descriptions :column="3" size="small" bordered class="detail-header">
           <a-descriptions-item label="股票">
-            <StockLink :code="detailRow.ts_code" :name="detailRow.name" />
+            <StockLink :code="detailRow.ts_code" :name="detailRow.name" :anchor-date="detailRow.trade_date" />
           </a-descriptions-item>
           <a-descriptions-item label="日期">{{ fmtDate(detailRow.trade_date) }}</a-descriptions-item>
           <a-descriptions-item label="综合评分">
             <a-tag :color="scoreColor(detailRow.score)">{{ detailRow.score ?? '-' }}</a-tag>
           </a-descriptions-item>
-          <a-descriptions-item label="净买入">{{ fmtAmountWan(detailRow.net_amount) }}</a-descriptions-item>
+          <a-descriptions-item label="净买入" :span="1">{{ fmtAmountWan(detailRow.net_amount) }}</a-descriptions-item>
           <a-descriptions-item label="上榜原因" :span="2">{{ detailRow.reason }}</a-descriptions-item>
         </a-descriptions>
 
-        <!-- 雷达图 -->
-        <div class="detail-radar-wrap">
-          <div ref="radarEl" class="detail-radar"></div>
-        </div>
-
-        <!-- 明细分块:按维度分 3 列网格,避免单列过长 -->
-        <div class="detail-grid">
-          <pre class="score-detail-pre">{{ formatDetail(detailRow.score_detail) }}</pre>
+        <!-- P19.12 优化布局:雷达图左 + 3 列分类明细右,横排不下滑 -->
+        <div class="detail-body">
+          <div class="detail-radar-col">
+            <div ref="radarEl" class="detail-radar"></div>
+            <div class="detail-radar-hint">
+              <div>每维得分已归一到 0~100。</div>
+              <div v-if="weightsInfo">
+                综合评分 = 资金×{{ weightsInfo.fund }} + 历史×{{ weightsInfo.hist }}
+                + 技术×{{ weightsInfo.tech }}
+                <span v-if="weightsInfo.sentiment != null">× 情绪系数 {{ weightsInfo.sentiment }}</span>
+              </div>
+              <div>同一只强势股多维满分属正常。</div>
+            </div>
+          </div>
+          <div class="detail-dim-col">
+            <div v-for="g in dimGroups" :key="g.key" class="dim-group">
+              <div class="dim-title" :style="{ borderLeftColor: g.color }">{{ g.title }}</div>
+              <div v-for="item in g.items" :key="item.k" class="dim-row">
+                <span class="dim-name">{{ item.label }}</span>
+                <span class="dim-value" :style="{ color: dimColor(item.v) }">
+                  {{ formatDimValue(item.v) }}
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </a-modal>
@@ -221,16 +253,34 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, nextTick } from 'vue'
 import { Empty } from 'ant-design-vue'
+import { useRouter } from 'vue-router'
+import { SwapOutlined } from '@ant-design/icons-vue'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
 import { fmtAmountWan, fmtDate } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
 import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
 import { defaultRange, toYmd, type DateRange } from '@/utils/date_range'
+
+const router = useRouter()
+
+/**
+ * P19.12: 点「龙虎榜」链接,带股票代码 + 日期跳转到龙虎榜页,
+ * 龙虎榜页会读 URL query 自动过滤。
+ */
+function gotoLhb(row: LhbRow) {
+  router.push({
+    path: '/lhb',
+    query: {
+      ts_code: row.ts_code,
+      date: row.trade_date ?? undefined,
+    },
+  })
+}
 import {
   summarize, scoreBuckets, netBuckets, dailyBuckets,
 } from '@/utils/signals_agg'
 import { tnSummarize } from '@/utils/tn_summary'
-import { formatScoreDetail, extractRadarData } from '@/utils/score_detail'
+import { formatScoreDetail, extractRadarData, labelOf } from '@/utils/score_detail'
 
 // P19.8: 按需引入 ECharts(雷达图)
 import * as echarts from 'echarts/core'
@@ -301,6 +351,64 @@ function scoreColor(s: number | null) {
 
 // P18.2: 改用递归格式化避免嵌套对象显示 [object Object]
 const formatDetail = (d: Record<string, unknown> | null) => formatScoreDetail(d)
+
+// =================================================================
+// P19.12: 评分明细结构化分组(供 Modal 右侧 3 列布局)
+// =================================================================
+interface DimItem { k: string; label: string; v: unknown }
+interface DimGroup { key: string; title: string; color: string; items: DimItem[] }
+
+const dimGroups = computed<DimGroup[]>(() => {
+  const d = detailRow.value?.score_detail as Record<string, unknown> | null | undefined
+  if (!d) return []
+  const meta = [
+    { key: 'fund', title: '资金维度', color: '#1677ff' },
+    { key: 'hist', title: '历史表现', color: '#faad14' },
+    { key: 'tech', title: '技术面',   color: '#52c41a' },
+  ]
+  const out: DimGroup[] = []
+  for (const m of meta) {
+    const sub = d[m.key] as Record<string, unknown> | undefined
+    if (!sub || typeof sub !== 'object') continue
+    const items: DimItem[] = []
+    for (const [k, v] of Object.entries(sub)) {
+      items.push({ k, label: labelOf(k), v })
+    }
+    out.push({ key: m.key, title: m.title, color: m.color, items })
+  }
+  return out
+})
+
+const weightsInfo = computed<{ fund: string; hist: string; tech: string; sentiment: string | null } | null>(() => {
+  const d = detailRow.value?.score_detail as Record<string, unknown> | null | undefined
+  if (!d) return null
+  const w = d.weights as Record<string, number> | undefined
+  const coef = d.sentiment_coef
+  if (!w) return null
+  return {
+    fund: String(w.fund ?? '-'),
+    hist: String(w.hist ?? '-'),
+    tech: String(w.tech ?? '-'),
+    sentiment: typeof coef === 'number' ? coef.toFixed(2) : null,
+  }
+})
+
+function formatDimValue(v: unknown): string {
+  if (v == null) return '-'
+  if (typeof v === 'number') {
+    return Number.isInteger(v) ? String(v) : v.toFixed(2)
+  }
+  return String(v)
+}
+
+function dimColor(v: unknown): string {
+  if (typeof v !== 'number') return '#262626'
+  // 约定:后端得分一律 0-100 归一。用分段着色直观展示强弱
+  if (v >= 80) return '#d4380d'   // 高分红
+  if (v >= 50) return '#faad14'   // 中分橙
+  if (v > 0)   return '#52c41a'   // 低分绿
+  return '#8c8c8c'                 // 0/异常
+}
 
 // =================================================================
 // P19.8: 评分明细 Modal + 雷达图
@@ -427,6 +535,17 @@ onMounted(load)
 <style scoped>
 .signals-page { padding: 12px; }
 .dim-card :deep(.ant-card-body) { padding: 12px 16px; }
+
+/* P19.12: 「上榜原因」列里跳龙虎榜的小链接 */
+.reason-jump {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #1677ff;
+  cursor: pointer;
+  opacity: 0.7;
+  white-space: nowrap;
+}
+.reason-jump:hover { opacity: 1; text-decoration: underline; }
 .dim-bar {
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 6px; font-size: 12px;
@@ -465,33 +584,81 @@ onMounted(load)
   /* P19.10: Modal 里需要多列排版,不再硬限 340px */
 }
 
-/* P19.10 (2026-04-20): 评分明细 Modal 布局 */
+/* P19.10 · P19.12: 评分明细 Modal 布局 */
 .detail-modal .detail-header {
   margin-bottom: 12px;
 }
-.detail-modal .detail-radar-wrap {
+
+/* P19.12: 下半部分改为左右并排:雷达图 + 分组明细,横排不下滑 */
+.detail-modal .detail-body {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(340px, 1.2fr);
+  gap: 16px;
+  align-items: start;
+}
+.detail-modal .detail-radar-col {
   display: flex;
-  justify-content: center;
-  padding: 4px 0 8px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
+.detail-modal .detail-radar-hint {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8c8c8c;
+  text-align: center;
+  line-height: 1.6;
 }
 .detail-modal .detail-radar {
   width: 100%;
-  max-width: 560px;
-  height: 340px;
+  max-width: 360px;
+  height: 300px;
 }
-.detail-modal .detail-grid {
-  margin-top: 8px;
-  padding: 10px 12px;
+.detail-modal .detail-dim-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+.detail-modal .dim-group {
   background: #fafbfc;
   border-radius: 6px;
-  /* 用 CSS column 让 pre 内容自然分 2 列 */
-  column-count: 2;
-  column-gap: 24px;
-  column-rule: 1px dashed #e7e7e7;
+  padding: 8px 10px;
 }
-.detail-modal .detail-grid .score-detail-pre {
-  break-inside: avoid-column;
-  margin: 0;
+.detail-modal .dim-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #262626;
+  padding-left: 8px;
+  border-left: 3px solid #ccc;
+  margin-bottom: 6px;
+}
+.detail-modal .dim-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   font-size: 11.5px;
+  padding: 2px 0;
+  border-bottom: 1px dashed #f0f0f0;
+}
+.detail-modal .dim-row:last-child { border-bottom: none; }
+.detail-modal .dim-name {
+  color: #595959;
+  white-space: nowrap;
+  margin-right: 6px;
+}
+.detail-modal .dim-value {
+  font-family: 'SF Mono', Menlo, monospace;
+  font-weight: 500;
+  font-size: 12px;
+}
+
+/* 窄屏自动堆叠 */
+@media (max-width: 720px) {
+  .detail-modal .detail-body {
+    grid-template-columns: 1fr;
+  }
+  .detail-modal .detail-dim-col {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

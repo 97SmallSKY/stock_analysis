@@ -189,9 +189,25 @@ function resetPicked() {
  * P19.2 (2026-04-20): 根据 range key + daterange 计算 [from, to] ISO 日期。
  * 锚定 = 本股最新有数据的那一天(drRange.max),而不是"今天"。
  * 原因:停牌/次新股,drRange.max 可能比今天早很多,此时往回推最真实。
+ *
+ * P19.12 (2026-04-20): 可传 anchorOverride。从决策信号/龙虎榜点进来时,
+ * 希望默认视图是**该行日期为中心**(前后各半),而不是看最新的 6 个月。
  */
-function computeDateRange(key: RangeKey, dr: KlineDaterange | null): { from: string; to: string } | null {
+function computeDateRange(
+  key: RangeKey,
+  dr: KlineDaterange | null,
+  anchorOverride?: string | null,
+): { from: string; to: string } | null {
   if (!dr || !dr.max) return null
+  // P19.12: 若有 anchorOverride,用它作为「中点」,前后各半
+  if (anchorOverride) {
+    const halfDays = halfDaysOf(key)
+    let from = addDays(anchorOverride, -halfDays)
+    let to = addDays(anchorOverride, halfDays)
+    if (dr.min && from < dr.min) from = dr.min
+    if (dr.max && to > dr.max) to = dr.max
+    return { from, to }
+  }
   const anchor = dr.max  // YYYY-MM-DD
   let from: string
   switch (key) {
@@ -212,8 +228,24 @@ function computeDateRange(key: RangeKey, dr: KlineDaterange | null): { from: str
   return { from, to: anchor }
 }
 
+/** P19.12: 对每个 rangeKey 返回「半宽天数」,供 anchor 居中展示用。 */
+function halfDaysOf(key: RangeKey): number {
+  switch (key) {
+    case 'latest': return 30     // 共 60 天
+    case '5d':     return 4
+    case '1w':     return 5
+    case '2w':     return 10
+    case '1m':     return 15
+    case '3m':     return 45
+    case '6m':     return 90
+    case '1y':     return 180
+  }
+}
+
 function applyRange(key: RangeKey) {
   rangeKey.value = key
+  // P19.12: 手动点快捷钮时清除 anchor,回归"最新日期锚定"语义
+  // (anchor 只在初次打开时一次性生效,用户拖日期后就不再使用)
   const r = computeDateRange(key, drRange.value)
   if (r) {
     dateFrom.value = r.from
@@ -232,8 +264,10 @@ async function ensureDaterange() {
   } catch {
     drRange.value = null
   }
-  // 用当前 rangeKey 计算 [from, to]
-  const r = computeDateRange(rangeKey.value, drRange.value)
+  // P19.12: 如果有 anchorDate(从 Signals/LhbList 跳入),第一次渲染用它为中点;
+  // 用户随后点快捷钮/手动选日期后,anchor 被清空(见 applyRange)
+  const anchor = drill.state.anchorDate
+  const r = computeDateRange(rangeKey.value, drRange.value, anchor)
   if (r) {
     dateFrom.value = r.from
     dateTo.value = r.to
@@ -375,6 +409,11 @@ function render() {
   })
 
   // 点击 K 线 bar -> 记录日期
+  // P19.12 (2026-04-20): 修复「日 K 点不动」问题。
+  //   旧实现:点日 K 蜡烛 → 自动切周 K,用户感觉「点击没响应」(其实图表变了但看不出)
+  //   新实现:
+  //     - 日 K:仅锁定 pickedDate + 显示顶部 badge,不切 tab。用户看得到反馈。
+  //     - 周 K:仍切到分钟 K(必须先选日期)
   chart.off('click')
   chart.on('click', (ev: { seriesType?: string; dataIndex?: number }) => {
     if (ev.seriesType !== 'candlestick') return
@@ -383,12 +422,10 @@ function render() {
     const d = dates[idx]
     if (!d) return
     pickedDate.value = d
-    // 按题目:点日K → 切 5日 (周K); 点周K → 切分钟 K
-    if (tab.value === 'daily') {
-      tab.value = 'weekly'
-    } else if (tab.value === 'weekly') {
+    if (tab.value === 'weekly') {
       tab.value = 'minute'
     }
+    // daily 不切 tab,保持视图
   })
 }
 
