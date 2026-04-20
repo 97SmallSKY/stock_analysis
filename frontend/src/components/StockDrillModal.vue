@@ -113,6 +113,7 @@ import {
   type KlineBar, type KlineDaterange,
 } from '@/api/kline'
 import { addDays, addMonths, toYmd } from '@/utils/date_range'
+import { formatPrice } from '@/utils/format'
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
@@ -362,6 +363,10 @@ function render() {
     if (h != null && h > maxVal) { maxVal = h; maxIdx = i }
     if (l != null && l < minVal) { minVal = l; minIdx = i }
   }
+  // STO-30: 价格精度自适应。maxVal 作为整档决策基准,避免 Y 轴精度跳动。
+  //   maxVal < 10 → 3 位(低价股/北交所/ST)
+  //   10~100 → 2 位(主流)
+  //   >= 100 → 1 位(高价股)
   const markPoints: { name: string; coord: [number, number]; value: string; itemStyle: Record<string, unknown>; label: Record<string, unknown> }[] = []
   if (maxIdx >= 0) {
     markPoints.push({
@@ -369,7 +374,7 @@ function render() {
       coord: [maxIdx, maxVal],
       value: String(maxVal),
       itemStyle: { color: '#d4380d' },
-      label: { color: '#fff', fontSize: 11, formatter: `▲ ${maxVal.toFixed(2)}` },
+      label: { color: '#fff', fontSize: 11, formatter: `▲ ${formatPrice(maxVal, maxVal)}` },
     })
   }
   if (minIdx >= 0 && minIdx !== maxIdx) {
@@ -378,9 +383,17 @@ function render() {
       coord: [minIdx, minVal],
       value: String(minVal),
       itemStyle: { color: '#389e0d' },
-      label: { color: '#fff', fontSize: 11, formatter: `▼ ${minVal.toFixed(2)}` },
+      label: { color: '#fff', fontSize: 11, formatter: `▼ ${formatPrice(minVal, maxVal)}` },
     })
   }
+
+  // STO-30: Y 轴 5% padding,避免 markPoint pin 出框 / 蜡烛贴边
+  const yRange = maxVal - minVal
+  const yPad = yRange > 0 ? yRange * 0.05 : Math.max(maxVal * 0.05, 0.01)
+  // 按价格档位决定 round 精度(和 formatPrice 对齐)
+  const roundStep = maxVal < 10 ? 1000 : maxVal < 100 ? 100 : 10
+  const yMin = isFinite(minVal) ? Math.floor((minVal - yPad) * roundStep) / roundStep : null
+  const yMax = isFinite(maxVal) ? Math.ceil((maxVal + yPad) * roundStep) / roundStep : null
 
   const series: Record<string, unknown>[] = [
     {
@@ -411,11 +424,31 @@ function render() {
   }
 
   chart.setOption({
-    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-    legend: { data: series.map((s) => s.name as string), top: 0 },
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross' },
+      // STO-30: tooltip 价格按档位精度显示
+      valueFormatter: (v: number | string) =>
+        typeof v === 'number' ? formatPrice(v, maxVal) : String(v),
+    },
+    // STO-30: MA5/MA10 默认不展示(满屏是线的问题),用户点 legend 才画
+    legend: {
+      data: series.map((s) => s.name as string),
+      top: 0,
+      selected: { MA5: false, MA10: false },
+    },
     grid: { left: 50, right: 30, top: 40, bottom: 60 },
     xAxis: { type: 'category', data: dates, boundaryGap: true, axisLine: { onZero: false } },
-    yAxis: { scale: true, splitLine: { show: true } },
+    yAxis: {
+      scale: true,
+      splitLine: { show: true },
+      // STO-30: 两端 5% padding + 按档位精度 round(避免 Y 轴刻度奇怪的 1.237 这种)
+      ...(yMin !== null && yMax !== null ? { min: yMin, max: yMax } : {}),
+      // STO-30: axisLabel 也用 formatPrice,Y 轴刻度和价格精度对齐
+      axisLabel: {
+        formatter: (v: number) => formatPrice(v, maxVal),
+      },
+    },
     // P19.3: 数据已经按快捷钮精确限定范围,dataZoom 全显一目了然
     dataZoom: [
       { type: 'inside', start: 0, end: 100 },

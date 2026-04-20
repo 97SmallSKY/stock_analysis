@@ -25,6 +25,28 @@ export function fmtPct(v: number | null | undefined, digits = 2): string {
   return `${v.toFixed(digits)}%`
 }
 
+/**
+ * STO-30: 股票价格自适应精度格式化。
+ *
+ * 规则(以区间最大价 maxVal 决定整档小数位,不按每个点单独判断,
+ * 避免 Y 轴刻度精度跳动):
+ *   maxVal < 10    → 3 位小数(低价股/北交所/ST 股,如 1.360)
+ *   10 <= max < 100 → 2 位小数(主流价位,如 12.35)
+ *   maxVal >= 100  → 1 位小数(高价股,如 158.7)
+ *
+ * 用于 K 线 Y 轴 axisLabel / markPoint label / tooltip formatter。
+ * NaN / null / undefined 返回 '-'(与其他 fmtXxx 一致)。
+ */
+export function formatPrice(
+  val: number | null | undefined,
+  maxVal: number,
+): string {
+  if (val === null || val === undefined || Number.isNaN(val)) return '-'
+  const mv = Math.abs(maxVal)
+  const digits = mv < 10 ? 3 : mv < 100 ? 2 : 1
+  return val.toFixed(digits)
+}
+
 export function fmtNumber(v: number | null | undefined): string {
   if (v === null || v === undefined || Number.isNaN(v)) return '-'
   return String(v)
