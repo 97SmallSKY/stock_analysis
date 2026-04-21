@@ -58,6 +58,22 @@ PM 首轮 `list_issue_statuses` 后把 Linear 现有 states 映射进来：
       `save_issue(id='STO-<id>', state='In Review')` → `get_issue` 读回验证 status == 'In Review'
       缺此步会自锁：下一 tick 扫 In Progress 仍是本 issue，重复处理，永远拉不到 Todo 里新任务（STO-63）
 
+### T3.5 · Ops 部署前 · FF 托底（Ops 执行，2026-04-22 新增）
+
+Ops 部署前必须确保 issue 的 commit 是 `origin/new-branch` 的祖先，否则 `git pull` 带不上。Dev 交付的 feature 分支常因 new-branch 前进而落后，此时由 Ops 自动 rebase 托底：
+
+- [ ] `git fetch origin` + 从 issue 最新 `@Ops ready` comment 拿 `commit=<sha>` 和分支名
+- [ ] `git merge-base --is-ancestor <sha> origin/new-branch` 判断
+  - 是祖先 → 直接进 T4
+  - 非祖先 → 执行下面的 rebase 托底
+- [ ] **Rebase 托底流程（非祖先时）**：
+  - (a) `git checkout <feature-branch> && git reset --hard origin/<feature-branch>`（对齐远端）
+  - (b) `git rebase origin/new-branch`
+  - (c) 无冲突 → `git push origin HEAD:new-branch`（FF push 到 new-branch，绕过 feature 分支），记录新 sha 进 T4；在 issue comment `@Dev auto-rebased · old=<sha> new=<new-sha> · 无冲突`
+  - (d) 有冲突 → `git rebase --abort`，T6 打回 Dev：comment `@Dev need rebase · 冲突文件: <list>`，本 issue 本轮不进 T4
+- [ ] **禁止** `git push -f` 到 `<feature-branch>`（Dev 可能还在上面开新 commit），rebase 结果只 FF 到 new-branch
+- [ ] 同一 issue 连续 3 次 rebase 失败（冲突）→ 按 T5 升级 `blocked:need-human`
+
 ### T4 · Ready to Deploy → Done（Ops 执行）
 
 - [ ] `ssh jd "cd ~/stock_analysis && git pull && ./scripts/deploy.sh"` exit 0
