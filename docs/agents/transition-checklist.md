@@ -54,6 +54,9 @@ PM 首轮 `list_issue_statuses` 后把 Linear 现有 states 映射进来：
 - [ ] `git rebase origin/new-branch` 无冲突
 - [ ] `git push origin HEAD:new-branch` 成功（fast-forward）
 - [ ] issue 下 comment：`@Ops ready · commit=<sha> · 覆盖率=<N>% · 改动:<3 行摘要>`
+- [ ] **调 Linear API 改 state 到 In Review**（对应 Ready to Deploy 槽，必做，不能只发 comment）
+      `save_issue(id='STO-<id>', state='In Review')` → `get_issue` 读回验证 status == 'In Review'
+      缺此步会自锁：下一 tick 扫 In Progress 仍是本 issue，重复处理，永远拉不到 Todo 里新任务（STO-63）
 
 ### T4 · Ready to Deploy → Done（Ops 执行）
 
