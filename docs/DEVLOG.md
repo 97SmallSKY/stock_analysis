@@ -11,6 +11,34 @@
 
 ---
 
+### 2026-04-22 · refactor · 因子/调度核心模块单测补强(STO-8)
+
+**问题**:P4 抬覆盖率门槛到 75% 后,`backend/domain/lhb/` 下三个核心模块长期低于 75%:`daily_job.py` 50% / `ingestor.py` 51% / `scheduler.py` 67%。缺的是 `run_seats_only_single` / `run_seats_only_range` 这类 ingest 回填链路,以及 scheduler 的后台 `_loop` 生命周期 —— 线上若出问题,测试网兜不住。
+
+**改动**:新增 3 个测试文件,43 个 case,不依赖 PG。
+
+1. `tests/test_lhb_ingestor.py`(21 case):覆盖 `_norm_date` 四种输入形态、`ensure_stock_info_skel` 的 SSE/SZSE/BSE 分交易所骨架、`upsert_main` 的空输入/单行/**同 ts_code 跨日**边界、`upsert_seats` 的 id_map 缺 key 跳过,以及 `ingest_records` 的 orchestration。
+2. `tests/test_lhb_seats_only.py`(15 case):覆盖 seats-only 回填分支 —— 无效 trade_date / 空主表 / `get_lhb_seats` 异常 / `top_n` 裁剪转 `get_lhb_seats_for_codes` / 席位按 `(broker_name, direction)` 去重取绝对值和更大的一条 / 区间 `progress_cb` + `skip_existing` + 单日失败不阻断 + `covered` 查询失败软退化;以及 `_get_conn`/`_maybe_close` 的 ctx manager 分支 + 裸 conn 分支 + close 异常静默吞咽。
+3. `tests/test_lhb_scheduler_loop.py`(7 case):覆盖 `start()` 幂等、`stop()` 无 thread noop、`_loop` 走到 target 触发 `run_once`、`run_once` 内 job 异常被 catch 落 `_last_result.error`、`_open_conn` ctx manager 分支、`_close_conn` 静默吞异常、默认 `job_fn` 的 import 路径。
+
+**效果**(覆盖率 delta):
+
+| 模块 | 基线 | 本 PR 后 |
+|---|---|---|
+| `backend/domain/lhb/daily_job.py` | 50% | **89%** |
+| `backend/domain/lhb/ingestor.py` | 51% | ≥80% (full-suite 模式全覆盖,未单列) |
+| `backend/domain/lhb/scheduler.py` | 67% | **95%** |
+| `backend/scoring/lhb_score.py` | 82% | 82%(已达标,本 PR 不动) |
+| TOTAL | 75.79% | **78.53%** |
+
+**测试技巧收获**:
+
+- MagicMock 默认自带 `__enter__`/`__exit__`,测试 `hasattr(obj, '__enter__')` 的 ctx-manager 分支时要用 `MagicMock(spec=["close"])` 明确屏蔽,否则走错分支。
+- 测 scheduler `_loop` 时,mock `self._stop_evt.wait` 比真跑 Event.wait 稳定;配合 `clock` 计数器一起用,可以精确控制到第 N 次调用返回什么。
+- `conftest` 路径的 `--cov=<narrow>` 模式在本机 pandas/numpy 版本下会触发 `TypeError: int() ... _NoValueType`(scoped-cov 引起 numpy reload 的已知环境 bug,与代码无关)。**全套 pytest 跑必须用默认 `--cov=backend`**,本 PR 本地 767 passed / 78.53% 通过门槛。
+
+---
+
 ### 2026-04-21 · fix · 北交所 920* 数据源止损(STO-31 Phase 1)
 
 **问题**:每次 daily ingest 运行,~307 只北交所 920xxx 股票全数据源失败(akshare/sina/crawler 三家都不支持),日志被 187 条 ERROR 淹没,真正的 bug 被掩盖。

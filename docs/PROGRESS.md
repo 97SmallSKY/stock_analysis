@@ -32,6 +32,7 @@
 
 ## 近期变更日志
 
+- **2026-04-22 STO-8**:domain/lhb 核心模块单测补强。新增 `tests/test_lhb_ingestor.py`(21 case)+ `tests/test_lhb_seats_only.py`(15 case)+ `tests/test_lhb_scheduler_loop.py`(7 case),共 43 case。覆盖率 delta:`daily_job.py` 50%→89%、`scheduler.py` 67%→95%、`ingestor.py` 51%→全覆盖;全项目 TOTAL 75.79%→78.53%。767 passed。详见 DEVLOG.md。
 - **2025-04-18 P1**:同步本文档为唯一事实源,README/ROADMAP 降级为历史参考(见文首说明)。
 - **2025-04-18 P2**:追认 ADR-0001(放弃 SQLAlchemy + Alembic),清理 README/DEPLOYMENT/NEXT_STEPS/CODE_REVIEW/schema 注释中 "仍在用 ORM/Alembic" 的误导性陈述。
 - **2025-04-18 P3**:
