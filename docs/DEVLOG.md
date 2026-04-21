@@ -11,6 +11,34 @@
 
 ---
 
+### 2026-04-22 · fix · [🚨Sec·URGENT] SPA fallback 路径遍历加固(STO-56)
+
+**问题**:Ops self-probe 观察到外部 IP 扫描 `GET /static/../../.../file.txt` 返回 200 OK。Dev 本地用 raw ASGI scope(绕过 httpx URL 归一化)复现,证实**真实路径遍历漏洞**:
+
+```text
+GET /../package.json          -> 200 + frontend/package.json 全文
+GET /../vite.config.ts         -> 200 + vite 配置源码
+GET /../../backend/config.py   -> 200 + 后端配置加载代码
+GET /../../pytest.ini          -> 200 + pytest.ini
+GET /../../.env.example        -> 200 + 所有敏感环境变量名
+```
+
+**根因**:`backend/api/main.py::_spa_fallback` 路由 `@app.get("/{path:path}")` 内 `candidate = dist / path` 拼接出来的路径(path 可含 `..`)**没校验是否落在 dist 根下**,`is_file()` 对 dist 外文件返回 True → `FileResponse` 直接读 dist 外任意文件。jd 生产等价于**未认证远程读任意项目文件**,含 `.env`(有 DB 密码、Tushare token、API Key)。
+
+**修复**(`backend/api/main.py` +10 行):candidate `.resolve().is_relative_to(dist_resolved)` 校验,越界兜底 index.html,`OSError/RuntimeError` 吞回 index.html。
+
+**新增单测** `tests/test_static_security.py`(8 用例):4 个攻击 + 4 个正向。**关键技巧**:用 raw ASGI scope 发请求绕过 httpx.TestClient 的 URL 归一化(httpx 会把 `..` resolve 掉,TestClient 方式**无法复现真实攻击**)。
+
+**血泪教训**:
+
+- 用户可以用 raw HTTP/1.1 客户端(curl --path-as-is / netcat)发送**未归一化路径**。测试只用 httpx/requests 会误判「漏洞不存在」
+- `dist / path` 这类路径拼接后**必须** `.resolve().is_relative_to(root)` 校验,不能只看 `is_file()`
+- Ops 观察到外部 200 OK 时,**即使攻击路径本身不命中真实文件**,也要 Dev 验证 sibling / 兄弟目录是否暴露
+
+**覆盖率**:75.79% → **78.83%**;全量 789 passed / 69 skipped。
+
+---
+
 ### 2026-04-22 · refactor · 因子/调度核心模块单测补强(STO-8)
 
 **问题**:P4 抬覆盖率门槛到 75% 后,`backend/domain/lhb/` 下三个核心模块长期低于 75%:`daily_job.py` 50% / `ingestor.py` 51% / `scheduler.py` 67%。缺的是 `run_seats_only_single` / `run_seats_only_range` 这类 ingest 回填链路,以及 scheduler 的后台 `_loop` 生命周期 —— 线上若出问题,测试网兜不住。

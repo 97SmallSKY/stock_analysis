@@ -86,11 +86,13 @@ ssh jd "curl -fsS -m 5 http://127.0.0.1:8000/healthz"
 
 ## 观察到的异常(转交 Dev/PM,Ops 不 fix)
 
-1. **潜在路径遍历(高优先级)**: 2026-04-21 23:59:40 journalctl 记录外部 IP 180.136.85.212 的请求 `GET /static/../../../../../../../../../../../this_path_should_not_exist_claude_probe.txt`,**服务器返回 200 OK**。探测路径本身不存在,但正常 `StaticFiles` mount 应返回 400/403。200 暗示:
-   - SPA catch-all fallback 把该路径当成了前端路由返回 index.html(内容非敏感,但 200 掩盖了非法路径)
-   - 或静态路径归一化有缺陷
-   - 建议 Dev 核实 `backend/api/main.py` 静态挂载,对 `/static/` 前缀做 normalize 后再匹配
-   - **不是 Ops 职责**,登记观察后继续部署循环
+1. **路径遍历(STO-56 已验证并修复,2026-04-22)**: 2026-04-21 外部 IP 180.136.85.212 请求 `GET /static/../../..` 返回 200 OK。Dev 本地复现证实**存在真实 SPA fallback 路径逃逸漏洞**:
+   - `GET /../package.json` / `/../vite.config.ts` 可泄漏 `frontend/` sibling 文件
+   - `GET /../../backend/config.py` / `/../../pytest.ini` / `/../../.env.example` 可泄漏项目根敏感文件
+   - 根因:`backend/api/main.py::_spa_fallback` 用 `dist / path` 拼接 candidate 后只做 `is_file()` 检查,没校验 candidate 必须落在 dist 根下
+   - 修复:candidate `.resolve().is_relative_to(dist_resolved)` 校验,越界兜底返回 index.html
+   - 新增 `tests/test_static_security.py`(8 用例,4 攻击路径 + 4 正向路径)锁定加固行为
+   - **已验证 /static/.. 无真实文件泄漏**(修复后 raw HTTP 攻击全部兜底到 index.html)
 
 2. **Tushare 长期 DOWN**: HealthChecker 每 5 分钟一轮连续报 `tushare=DOWN`。其他源(akshare/sina/crawler)健康,数据网关有降级。非部署阻断,PM 可追。
 

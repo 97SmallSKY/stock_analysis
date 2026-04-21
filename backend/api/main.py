@@ -56,12 +56,22 @@ def _mount_frontend(app: FastAPI) -> None:
     # SPA fallback:任何未命中 /api /ws /healthz /metrics /assets 的 GET 返回 index.html
     # 注意:FastAPI 路由匹配顺序,API 路由在本函数调用前已全部注册,所以这里放最后
     # 不会吃掉 API 请求。
+    dist_resolved = dist.resolve()
+
     @app.get("/{path:path}", include_in_schema=False)
     def _spa_fallback(path: str):
-        # 如果直链是已构建出的文件(例如 /favicon.ico),先尝试静态返回
+        # STO-56 路径遍历加固:候选文件必须落在 dist 根下(resolve 后做 is_relative_to 校验)。
+        # 若 path 含 `..` / 绝对路径 / 符号链接逃出 dist,一律兜底返回 index.html,
+        # 既不读 dist 外文件,也维持 SPA history 模式对合法前端路由的兼容。
         candidate = dist / path
-        if candidate.is_file():
-            return FileResponse(str(candidate))
+        try:
+            resolved = candidate.resolve()
+        except (OSError, RuntimeError):
+            return FileResponse(str(index_html))
+        if not resolved.is_relative_to(dist_resolved):
+            return FileResponse(str(index_html))
+        if resolved.is_file():
+            return FileResponse(str(resolved))
         return FileResponse(str(index_html))
 
     logger.info(f"[frontend] SPA 已挂载: {dist}")
