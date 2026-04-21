@@ -40,3 +40,6 @@ frontend/.vite/
 .codeflicker/
 .direnv/
 .claude/
+
+# Agent worktrees (Linear + /loop unattended setup)
+.worktrees/
