@@ -200,6 +200,65 @@ sudo journalctl -u stock_analysis_api -f | grep -E 'intraday|scheduler'
 
 ---
 
+## 6.5 Restart / Reboot 恢复验证(STO-7)
+
+`stock_analysis_api.service` 是**唯一** runtime unit,内嵌 APScheduler(盘中快照 + 周报) + Redis pubsub。重启或整机 reboot 后,需验证调度自动回迁,否则会出现「服务在跑但 job 没跑」的隐性故障。
+
+### 6.5.1 Restart 验证(日常,无需用户授权)
+
+```bash
+ssh jd "sudo -n systemctl restart stock_analysis_api && sleep 60 && \
+        sudo -n systemctl is-active stock_analysis_api"
+# 期望输出:active
+```
+
+抓最近 3 分钟启动日志,核验 APScheduler job 正确注册:
+
+```bash
+ssh jd "sudo -n journalctl -u stock_analysis_api --since '3 min ago' --no-pager | \
+        grep -iE 'APScheduler|Scheduler started|Added job|IntradayScheduler|WeeklyReport'"
+```
+
+**期望看到**(至少一行匹配即可,全齐更好):
+
+```
+apscheduler.scheduler: Added job "IntradaySnapshotScheduler.snapshot_job"
+apscheduler.scheduler: Added job "IntradaySnapshotScheduler.zt_pool_job"
+apscheduler.scheduler: Added job "IntradaySnapshotScheduler.cleanup_job"
+apscheduler.scheduler: Added job "WeeklyReportScheduler.run_once"
+apscheduler.scheduler: Scheduler started
+backend.core.runtime: IntradayScheduler 已启动 (10s 盘中快照)
+backend.core.runtime: WeeklyReportScheduler 已启动 (mon 09:00)
+```
+
+确认无代理 / Redis 错误:
+
+```bash
+ssh jd "sudo -n journalctl -u stock_analysis_api --since '3 min ago' --no-pager | \
+        grep -iE 'proxy error|refused|unreachable' | wc -l"
+# 期望输出:0
+```
+
+### 6.5.2 Reboot 验证(谨慎,需用户授权)
+
+整机 reboot 会影响 PG / Redis / nginx(若有)以外的所有人工 ssh 会话。**执行前必须:** (1) 通知用户,(2) 选低峰时段(非 09:30–15:00 盘中),(3) 准备回滚联系方式。
+
+```bash
+ssh jd "sudo -n reboot"
+# 等 90 秒,服务器回来
+sleep 90
+ssh -o ConnectTimeout=10 jd "sudo -n systemctl is-active stock_analysis_api"
+# 期望:active(unit 已 enable,WantedBy=multi-user.target,开机自拉)
+```
+
+再跑 6.5.1 的 journalctl 校验(`--since '3 min ago'`)。
+
+### 6.5.3 为什么只有 1 个 unit
+
+> 注:**不新建** `stock_analysis_scheduler.service`。APScheduler + Redis 连接都是进程级的,多 worker / 多进程会重复订阅 + 重复调度。单机单进程足够,详见 `deploy/systemd/stock_analysis_api.service` 内注释与本项目 CLAUDE.md §1 架构描述。
+
+---
+
 ## 7. 回滚
 
 ```bash

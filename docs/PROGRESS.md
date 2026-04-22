@@ -31,20 +31,20 @@
 
 按 Linear 当前 Todo 列表(priority 降序 + createdAt 升序),与真实 Issue ID 绑定:
 
-1. **STO-7** (High) — scheduler systemd 恢复验证(AC 重写后:**验证 `systemctl restart` / reboot 后 APScheduler job 正确重新注册**,而非新建 unit;需 Ops 协作跑 journalctl)
-2. **STO-61** (High) — 本 issue · PROGRESS.md 全量校对(进行中)
-3. **STO-62** (Medium) — 前端 limit 参数边界化(LhbPnl=1000 恰撞后端 le=1000,任何边界微调会触发 422)
-4. **STO-58** (Medium · Sec) — CORS `allow_origins=*` 过宽,配合 STO-6 鉴权收紧
-5. **STO-57** (Medium) — Tushare 长期 DOWN,确认 token / 降优先级
+1. **STO-62** (Medium) — 前端 limit 参数边界化(LhbPnl=1000 恰撞后端 le=1000,任何边界微调会触发 422)
+2. **STO-58** (Medium · Sec) — CORS `allow_origins=*` 过宽,配合 STO-6 鉴权收紧
 
 已完成(从旧版优先级移除):
 - ~~#1 API 鉴权/限流~~ → STO-6 In Review(ready to deploy)
-- ~~#2 scheduler 接入 systemd~~ → 已嵌入 api.service(STO-7 Dev 循环发现 AC 原文作废,PM 重写 AC 为验证而非新建)
+- ~~#2 scheduler 接入 systemd~~ → 已嵌入 api.service;STO-7 已完成 restart 恢复验证(2026-04-22)
 - ~~#3 核心因子单测~~ → STO-8 Done(domain/lhb daily_job/scheduler 补强,TOTAL 覆盖率 78.84%)
 - ~~#4 数据采集重试~~ → 降级为 🟡(circuit_breaker 已兜底,显式 retry 未引入,暂未列入优先级)
+- ~~STO-61 PROGRESS 校对~~ → 2026-04-22 Done
+- ~~STO-57 Tushare DOWN 噪音~~ → 2026-04-22 In Review(HealthChecker 跳过 uninitialized adapter)
 
 ## 近期变更日志
 
+- **2026-04-22 STO-7**:scheduler systemd 恢复验证闭环。jd 上 `systemctl restart stock_analysis_api` 后 APScheduler 重新注册 4 个 job(IntradaySnapshotScheduler.{snapshot,zt_pool,cleanup}_job + WeeklyReportScheduler.run_once)且 `Scheduler started` 日志齐全,无 proxy / Redis 错误。`docs/DEPLOYMENT.md` 新增 §6.5「Restart / Reboot 恢复验证」章节(copy-paste 可复现 + 6.5.2 reboot 场景授权约束)。同步明确「不新建独立 scheduler unit」(架构级铁律写入章节内注)。未改代码,仅验证 + 文档。pytest 仍 790 passed / 78.79%。
 - **2026-04-22 STO-57**:HealthChecker 消 Tushare DOWN 噪音。根因:未初始化 adapter 被无差别 probe。修复:`_get_adapters` 过滤 `initialized=False` 的 adapter,与 router.fetch skip-uninitialized 语义对齐。不动 manager 注册逻辑,不动 adapter 本身;未来配 token 恢复初始化会自动回归探测。新增测试 `test_uninitialized_adapter_is_skipped`。pytest 790 passed / 78.79%。
 - **2026-04-22 STO-46**:策略对比页 `timeout of 10000ms exceeded` 修复。根因:`frontend/src/api/http.ts` 全局 axios timeout=10s,`compareBacktests` 并行跑 N 策略动辄 30s+,必超时。修复:`compareBacktests` 调用时传 `{ timeout: 180_000 }`(导出常量 `COMPARE_TIMEOUT_MS` 供测试引用),不动全局(其他 API 仍 10s 快失败)。新增 `frontend/src/api/backtest.test.ts`。vitest 140/140、pytest 789 passed / 78.84%。CHANGELOG 记一条 fix。
 - **2026-04-22 STO-61**:本文档全量校对(PM Tick #6 发现模块表陈旧约 1 年)。API 从 🟡→✅(STO-6 已 test-passed)、调度 ⚠️→✅(STO-7 发现已嵌入 api.service)、Nginx ❌→⛔ N/A(P5.1b 架构决定不用)、日志 ❌→🟡(loguru 已接,Prometheus/Grafana 未部署)。下一步优先级从 4 条裁为 5 条,每条绑定真实 Linear issue ID。加「最近校对日期」行,防止再次漂移。

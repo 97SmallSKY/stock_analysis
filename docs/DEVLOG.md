@@ -11,6 +11,24 @@
 
 ---
 
+### 2026-04-22 · devops · scheduler systemd 恢复验证闭环(STO-7)
+
+**背景**:旧 PROGRESS「优先级 #2:scheduler 接入 systemd」是 2025 年 Roadmap 残留。实际架构在 P5.2 后是**单 unit 单进程嵌入式调度**:`stock_analysis_api.service` 一个 unit 承载 uvicorn + APScheduler(盘中/周报) + Redis pubsub,`workers=1`(多 worker 会重复订阅 / 重复调度,见 unit 文件注释)。PM 重写 AC 为「验证 `systemctl restart` / reboot 后 APScheduler job 正确重新注册 + docs 留痕」,放弃原「新建独立 scheduler unit」方向(违反单进程架构)。
+
+**验证记录**(jd `lavm-q3pk436lvv`,2026-04-22 17:35–17:36):
+
+- `sudo systemctl restart stock_analysis_api` → 60s 后 `is-active=active`
+- `journalctl --since '3 min ago'` grep `APScheduler|Scheduler started|Added job` → **28 行命中**
+- 具体 job:`IntradaySnapshotScheduler.snapshot_job` / `.zt_pool_job` / `.cleanup_job` / `WeeklyReportScheduler.run_once`,全部出现 `Added job ... to job store "default"` + `Scheduler started`
+- `backend.core.runtime` 日志:`IntradayScheduler 已启动 (10s 盘中快照)` / `WeeklyReportScheduler 已启动 (mon 09:00)`
+- `NO_PROXY=*` bootstrap 生效,`Redis 就绪: redis://localhost:6379/0`,proxy/Redis error grep=0
+
+**文档交付**:`docs/DEPLOYMENT.md` 新增 §6.5「Restart / Reboot 恢复验证(STO-7)」,拆 6.5.1 restart(日常,无需用户授权)/ 6.5.2 reboot(谨慎,需授权 + 非盘中时段 + 回滚联系方式)/ 6.5.3 架构说明(为何只有 1 个 unit),所有命令 copy-paste 可复现。PROGRESS.md 把优先级 #2 挪到已完成区并追加变更日志。
+
+**未改代码**,仅验证 + 文档。pytest 790 passed / 78.79%(对照 STO-57 同一基线)。
+
+---
+
 ### 2026-04-22 · fix · HealthChecker 跳过未初始化 adapter,消除 Tushare DOWN 噪音(STO-57)
 
 **问题**:Ops self-probe 每轮报告 `tushare=DOWN`。根因不在 Tushare 侧,而在 `backend/data_gateway/health_checker.py::_get_adapters`:
