@@ -11,6 +11,24 @@
 
 ---
 
+### 2026-04-22 · docs · 引入 type:watch label + Auditor M8 豁免规则(STO-54)
+
+**背景**:Auditor M8 指标「`blocked:need-human` > 24h 堆积 > 3 条 = warn」被长期误触发。根因是 3 个 Watch 巡检 issue(STO-38/39/44)按旧 `ops.md` §3.11–3.12 惯例挂 `blocked:need-human` 当「永久 In Progress」路由标记,与 transition-checklist §T5「agent 卡死升级」原意冲突。STO-53 Auditor issue 抛出后 PM 决策方案 A(详见 STO-53 PM comment),拆 STO-54 执行。
+
+**改动**(纯 metadata + docs,无代码):
+
+- **Linear label**:新建 `type:watch` · 灰色 `#95A5A6` · team `Personal Dev`(`list_issue_labels` 原本无,已创建 id `d4f62119-a3a0-483b-a269-c763c734ec69`)
+- **3 个 Watch issue labels 重置**:STO-38 / STO-39 / STO-44 labels 从 `[auto:stock-analysis, type:chore, blocked:need-human]` → `[auto:stock-analysis, type:chore, type:watch]`
+- **STO-42**:已 Canceled(2026-04-21 16:46Z),现时 labels 已自动变为 `[auto:stock-analysis, type:chore]`,天然满足 AC (c),无需再动
+- **`docs/agents/transition-checklist.md`**:label 约定表 5 → 6 条(加 `type:watch`),表下新增 M8 豁免注脚,明确「Watch issue 不应同时挂 `blocked:need-human`」
+- **`docs/prompts/linear/ops.md`** §5 Watch 规则:标签行改为 `auto:stock-analysis + type:chore + type:watch`,新增一行明令「不打 `blocked:need-human`(该 label 只给真正卡死用;误打会让 M8 长期误报)」
+
+**Auditor M8 查询逻辑**不在仓库(属于外部 agent session 的 prompt),靠 transition-checklist 规约面传达。Auditor 下次 tick 读 checklist 即可看到豁免规则。
+
+pytest 790 passed / 78.79%(基线未变,本 issue 无代码)。
+
+---
+
 ### 2026-04-22 · devops · scheduler systemd 恢复验证闭环(STO-7)
 
 **背景**:旧 PROGRESS「优先级 #2:scheduler 接入 systemd」是 2025 年 Roadmap 残留。实际架构在 P5.2 后是**单 unit 单进程嵌入式调度**:`stock_analysis_api.service` 一个 unit 承载 uvicorn + APScheduler(盘中/周报) + Redis pubsub,`workers=1`(多 worker 会重复订阅 / 重复调度,见 unit 文件注释)。PM 重写 AC 为「验证 `systemctl restart` / reboot 后 APScheduler job 正确重新注册 + docs 留痕」,放弃原「新建独立 scheduler unit」方向(违反单进程架构)。

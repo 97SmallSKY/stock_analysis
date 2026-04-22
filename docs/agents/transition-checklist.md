@@ -2,17 +2,20 @@
 
 > 本文件是 **所有 4 个 agent 的唯一转换依据**。任何 state 流转前必须逐条对照本表。如本表与角色 CLAUDE.local.md 冲突，以本表为准。
 
-## Label 约定（5 个，PM 首轮 bootstrap 创建）
+## Label 约定（6 个，PM 首轮 bootstrap 创建）
 
 | Label | 含义 | 谁打 |
 |---|---|---|
-| `auto:stock-analysis` | 项目开关。agent 只处理带此 label 的 issue | **人工**（你新建 issue 时打） |
+| `auto:stock-analysis` | 项目开关。agent 只处理带此 label 的 issue | **人工**(你新建 issue 时打) |
 | `type:feature` | 新特性 → Dev 写 `docs/CHANGELOG.md` | PM |
 | `type:bug` | bug 修复 → Dev 写 `docs/CHANGELOG.md` | PM |
 | `type:chore` | 重构/文档/基建/监控 → Dev 写 `docs/DEVLOG.md` | PM |
+| `type:watch` | Watch 巡检类,永久 `In Progress`,不走 T3/T4 流转;**Auditor M8 豁免** | Ops |
 | `blocked:need-human` | agent 卡死升级人工 | agent 自动 |
 
-**不引入** `prio:*` / `area:*` / `role:*` / `status:*`（重复 Linear 原生字段）。
+**不引入** `prio:*` / `area:*` / `role:*` / `status:*`(重复 Linear 原生字段)。
+
+> **M8 豁免注脚**(STO-54):`type:watch` 的 issue 按设计永久持有 `In Progress`(非卡死),Auditor 计算 M8(`blocked:need-human` > 24h)时必须排除此类;Watch issue 也不应同时挂 `blocked:need-human`,除非真的遇到技术阻塞。
 
 ## 5 个语义 state 槽
 

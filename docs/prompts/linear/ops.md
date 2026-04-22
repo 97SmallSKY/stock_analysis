@@ -164,7 +164,8 @@ save_issue(id, state="Done", labels=[...])  # 移除所有角色标签
 ### Watch issue 特殊规则
 
 - 状态常驻 `In Progress`(永不转 Done)
-- 标签:`@ops` + `Blocked`(防自动关)+ `Task`
+- 标签:`auto:stock-analysis` + `type:chore` + **`type:watch`**(STO-54 · 用于 Auditor M8 豁免)
+- **不打** `blocked:need-human`(该 label 只给真正技术卡死用;误打会让 M8 告警长期误报)
 - 标题以 `[Watch]` 前缀
 - **正常巡检**:`save_comment` 加一行 `<日期> ✅ 指标 A=X / B=Y`
 - **异常**:`save_comment` `⚠️ 异常,已建 STO-Y 跟进` + 建子 Bug
