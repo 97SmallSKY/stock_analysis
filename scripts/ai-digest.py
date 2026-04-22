@@ -44,6 +44,16 @@ except ImportError:
 
 
 # ============================================================
+# STO-59: 代理隔离 — Linear API 不能走 SG 代理(jd 注入 HTTP_PROXY)。
+# 按 CLAUDE.md §9.3 铁律:所有 requests.Session 必须 trust_env=False。
+# bootstrap() 清 proxy env 在 main() 入口执行,本 session 兜底
+# 即使脚本被 import 式调用(无 main())也不走代理。
+# ============================================================
+_SESSION = requests.Session()
+_SESSION.trust_env = False
+
+
+# ============================================================
 # 配置
 # ============================================================
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -112,7 +122,8 @@ def linear_query(query: str, variables: dict | None = None) -> dict:
         "Content-Type": "application/json",
     }
     payload = {"query": query, "variables": variables or {}}
-    resp = requests.post(LINEAR_API_URL, json=payload, headers=headers, timeout=30)
+    # STO-59: 用 trust_env=False 的 session,避免 jd HTTP_PROXY 继承
+    resp = _SESSION.post(LINEAR_API_URL, json=payload, headers=headers, timeout=30)
     resp.raise_for_status()
     body = resp.json()
     if "errors" in body:
@@ -539,6 +550,11 @@ def render_markdown(report: DigestReport) -> str:
 # 入口
 # ============================================================
 def main():
+    # STO-59: CLAUDE.md §9.3 铁律 — 脚本第一行调 bootstrap() 清 proxy env。
+    # jd 的 HTTP_PROXY 会劫持 requests 走 SG 代理,Linear API 被墙后静默失败。
+    from backend.core.startup import bootstrap
+    bootstrap()
+
     ap = argparse.ArgumentParser(description="AI Digest — Linear 多角色挂机系统日报")
     ap.add_argument("--dry-run", action="store_true", help="只打印,不写文件不建 issue")
     ap.add_argument("--hours", type=int, default=24, help="扫描最近多少小时(默认 24)")

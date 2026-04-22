@@ -11,6 +11,22 @@
 
 ---
 
+### 2026-04-22 · fix · scripts/ai-digest.py 代理隔离加固(STO-59)
+
+**问题**:`scripts/ai-digest.py` 违反 CLAUDE.md §9.3 铁律(「任何新入口脚本第一行必须调用 `bootstrap()`;所有 `requests.Session` 都要 `trust_env=False`」),直接 `requests.post(LINEAR_API_URL, ...)`。本地 macOS 无代理侥幸不触发,但 **jd 服务器**注入 `HTTP_PROXY=<SG 代理>`,requests 默认继承该代理访问 `api.linear.app` — 若代理出境被墙,ai-digest 静默失败,每日 agent 巡检日报丢失。典型「只在线上出错」。
+
+**改动**(`scripts/ai-digest.py` +10 / -1):
+
+1. 模块级创建 `_SESSION = requests.Session()` + `_SESSION.trust_env = False`(即便脚本被 import 式调用,绕 proxy)
+2. `linear_query()` 的 `requests.post` → `_SESSION.post`
+3. `main()` 第一行 `from backend.core.startup import bootstrap; bootstrap()`(清 proxy env 一把兜底)
+
+**全项目回归**:`grep -rnE 'requests\.(get|post|put|delete|patch)' scripts/ backend/` 排除 test + Session + trust_env 后返回 **0 条**,无裸 requests 调用。
+
+**影响面**:纯脚本文件,API 行为不变,不入 pytest 路径。789 passed / 78.84% 不变。
+
+---
+
 ### 2026-04-22 · fix · [🚨Sec·URGENT] SPA fallback 路径遍历加固(STO-56)
 
 **问题**:Ops self-probe 观察到外部 IP 扫描 `GET /static/../../.../file.txt` 返回 200 OK。Dev 本地用 raw ASGI scope(绕过 httpx URL 归一化)复现,证实**真实路径遍历漏洞**:
