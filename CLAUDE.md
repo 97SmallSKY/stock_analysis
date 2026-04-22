@@ -135,12 +135,16 @@ stock_analysis/
 - 实现 **sub-agent** 之前,把 sub-agent 设计问题抛给用户并暂停循环
 - 每步必须保证 pytest 全绿,覆盖率 ≥ 75%
 
-已完成 / 进行中任务见 `TaskList` 工具输出。截至本文写入时:
-- ✅ P1 同步进度文档
-- ✅ P2 追认 ADR-0001,清理 Alembic/SQLAlchemy 死引用
-- ✅ P3 删除 `data_sources/`,ingest/lhb 降级为薄壳
-- ✅ P4 覆盖率门槛:已从 70% 抬到 75%,补 aggregator 测试 +11 case,实际 75.81%
-- ⏳ P5 jd 服务器端集成测试定时任务 → 最终部署验证
+已完成 / 进行中任务见 **Linear Project**(id `5c09b8da-a3fc-45be-b866-5dc94cf01523`)或 `TaskList` 工具输出。
+
+**当前路线图真实源**:`docs/PROGRESS.md` 的「下一步优先级」(每条绑定 Linear STO-* 编号)。截至 **2026-04-22**(STO-61 校对):
+- ✅ W1~W11 已完成;W8 之后的增量走 Linear issue 管理(STO-* 编号)
+- ✅ P4 覆盖率门槛 75%(STO-8 后实际 78.84%)
+- ✅ P5 jd 部署稳定(systemd + deploy.sh,29+ 次无事故)
+- ✅ STO-6 API 鉴权/限流(In Review 待部署)
+- ✅ STO-55 Ops self-probe 结果落盘
+- ✅ STO-56 🚨 SPA fallback 路径遍历加固
+- ⏳ 活跃优先级见 `docs/PROGRESS.md` 本节(STO-7 scheduler 验证、STO-62 前端 limit 边界、STO-58 CORS、STO-57 Tushare)
 
 ## 8. 常用自检命令
 

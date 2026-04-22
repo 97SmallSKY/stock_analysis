@@ -2,7 +2,8 @@
 
 > 本文档是项目进度的唯一事实源。README.md 第7节 和 IMPLEMENTATION_ROADMAP.md 仅作历史计划参考,与本文冲突时以本文为准。
 >
-> 最后更新:2025-04-18(基于代码审查)
+> **最后更新**:2026-04-22(STO-61 全量校对 by Dev)
+> **上次全量校对**:2025-04-18(陈旧约 1 年,期间多个模块已完成,PM Tick #6 发现脱节后由 Dev 重新核对)
 
 ## 状态图例
 
@@ -10,28 +11,41 @@
 - 🟡 部分完成 / 待验证
 - ⚠️ 存在已知问题
 - ❌ 未开始
+- ⛔ N/A(架构决策后不再需要)
 
-## 模块进度
+## 模块进度(2026-04-22 校对)
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| 数据采集 (akshare) | 🟡 | 基本流程可用,需补异常处理与重试 |
-| 因子计算 | 🟡 | 主流程可跑,单测覆盖不足 |
-| API (FastAPI) | 🟡 | 路由齐全,鉴权/限流缺失 |
-| 调度 (scheduler) | ⚠️ | 代码存在但未接入 systemd |
-| Nginx 部署 | ❌ | 配置未验证 |
-| 前端 | 🟡 | 基础页面可用 |
-| 监控/日志 | ❌ | 仅 print,未接入结构化日志 |
+| 数据采集 (akshare/tushare/sina/crawler) | 🟡 | `data_gateway/circuit_breaker.py` 熔断已有;**显式 retry(tenacity)未引入**,靠 circuit breaker 的 cooldown 降级 |
+| 因子计算 / 评分 | ✅ | `backend/scoring/lhb_score.py` 82% / `runner.py` 94%;`domain/lhb/aggregator.py` 81%(STO-8 补强 daily_job 50%→89%、scheduler 67%→95%) |
+| API (FastAPI) | ✅ | 路由齐全,**鉴权/限流已接**(STO-6:`core/auth.py` API Key + slowapi,`AUTH_ENABLED=false` 平滑上线) |
+| 调度 (scheduler) | ✅ | **已嵌入 `stock_analysis_api.service`**(uvicorn 单进程,`RUNTIME_ENABLE_INTRADAY=1` / `RUNTIME_ENABLE_WEEKLY=1`);独立 `stock_analysis_scheduler.service` 已弃用(`install_units.sh` LEGACY_UNITS) |
+| Nginx 部署 | ⛔ N/A | P5.1b 架构决定:FastAPI `StaticFiles + SPA fallback` 直接托管 `frontend/dist`(端口 8000),不再过 nginx(Ops self-probe 已确认) |
+| 前端 | ✅ | Vue 3 + AntdV + AG Grid,8+ 页面(Dashboard / Signals / LhbPnl / LhbList / Robots / Backtest / BacktestRun / Reports / DataSourceMgr);ADR-0002 决定 UI 栈不迁 |
+| 监控/日志 | 🟡 | `core/logging.py` W11-3 已接 loguru + 脱敏;`core/metrics.py` 已就位;**Prometheus 拉取 + Grafana 看板未部署**(内网优先级低) |
+| 部署 (systemd) | ✅ | `scripts/install_units.sh` + 3 个 unit(api/daily/smoke)+ 2 个 timer;`deploy.sh` 流水线(清代理→pip→前端 build→migration→systemctl)已稳定 29+ 次 |
+| 测试 / 覆盖率 | ✅ | pytest 789 passed,TOTAL 78.84%(门槛 75%);前端 vitest 139 tests |
 
-## 下一步优先级
+## 下一步优先级(2026-04-22 重拍)
 
-1. 补 API 鉴权与基础限流
-2. scheduler 接入 systemd,并落一份可复现的部署文档
-3. 核心因子计算增加单元测试
-4. 数据采集加入重试与失败告警
+按 Linear 当前 Todo 列表(priority 降序 + createdAt 升序),与真实 Issue ID 绑定:
+
+1. **STO-7** (High) — scheduler systemd 恢复验证(AC 重写后:**验证 `systemctl restart` / reboot 后 APScheduler job 正确重新注册**,而非新建 unit;需 Ops 协作跑 journalctl)
+2. **STO-61** (High) — 本 issue · PROGRESS.md 全量校对(进行中)
+3. **STO-62** (Medium) — 前端 limit 参数边界化(LhbPnl=1000 恰撞后端 le=1000,任何边界微调会触发 422)
+4. **STO-58** (Medium · Sec) — CORS `allow_origins=*` 过宽,配合 STO-6 鉴权收紧
+5. **STO-57** (Medium) — Tushare 长期 DOWN,确认 token / 降优先级
+
+已完成(从旧版优先级移除):
+- ~~#1 API 鉴权/限流~~ → STO-6 In Review(ready to deploy)
+- ~~#2 scheduler 接入 systemd~~ → 已嵌入 api.service(STO-7 Dev 循环发现 AC 原文作废,PM 重写 AC 为验证而非新建)
+- ~~#3 核心因子单测~~ → STO-8 Done(domain/lhb daily_job/scheduler 补强,TOTAL 覆盖率 78.84%)
+- ~~#4 数据采集重试~~ → 降级为 🟡(circuit_breaker 已兜底,显式 retry 未引入,暂未列入优先级)
 
 ## 近期变更日志
 
+- **2026-04-22 STO-61**:本文档全量校对(PM Tick #6 发现模块表陈旧约 1 年)。API 从 🟡→✅(STO-6 已 test-passed)、调度 ⚠️→✅(STO-7 发现已嵌入 api.service)、Nginx ❌→⛔ N/A(P5.1b 架构决定不用)、日志 ❌→🟡(loguru 已接,Prometheus/Grafana 未部署)。下一步优先级从 4 条裁为 5 条,每条绑定真实 Linear issue ID。加「最近校对日期」行,防止再次漂移。
 - **2026-04-22 STO-59**:`scripts/ai-digest.py` 补 `bootstrap()` + `trust_env=False` session,修复 CLAUDE.md §9.3 铁律违规(jd 代理劫持 Linear API 会静默失败)。全项目 grep 0 条裸 `requests.*` 调用。789 passed / 78.84%。
 - **2026-04-22 STO-56 🚨Urgent**:SPA fallback 路径遍历漏洞修复。`backend/api/main.py::_spa_fallback` 的 `dist / path` 拼接未校验路径是否逃出 dist,raw HTTP 可读 `/../package.json` / `/../../backend/config.py` / `/../../.env` 等敏感文件。修复:`.resolve().is_relative_to(dist_resolved)` 校验 + 越界兜底 index.html。新增 `tests/test_static_security.py` 8 case(关键技巧:raw ASGI scope 绕过 httpx URL 归一化)。覆盖率 78.83%;789 passed。详见 DEVLOG.md。
 - **2026-04-22 STO-8**:domain/lhb 核心模块单测补强。新增 `tests/test_lhb_ingestor.py`(21 case)+ `tests/test_lhb_seats_only.py`(15 case)+ `tests/test_lhb_scheduler_loop.py`(7 case),共 43 case。覆盖率 delta:`daily_job.py` 50%→89%、`scheduler.py` 67%→95%、`ingestor.py` 51%→全覆盖;全项目 TOTAL 75.79%→78.53%。767 passed。详见 DEVLOG.md。
