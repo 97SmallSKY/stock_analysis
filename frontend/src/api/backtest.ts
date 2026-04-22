@@ -40,8 +40,14 @@ export interface ComparisonReport {
   winner: string | null
 }
 
+// STO-46: compare 跑 N 个策略耗时可到几十秒,覆盖全局 10s timeout
+// (不改全局 http.ts 默认,仅此端点放宽到 3 分钟)
+export const COMPARE_TIMEOUT_MS = 180_000
+
 export async function compareBacktests(req: CompareReq): Promise<ComparisonReport> {
-  const { data } = await http.post<ComparisonReport>('/api/backtest/compare', req)
+  const { data } = await http.post<ComparisonReport>('/api/backtest/compare', req, {
+    timeout: COMPARE_TIMEOUT_MS,
+  })
   return data
 }
 
