@@ -45,6 +45,7 @@
 
 ## 近期变更日志
 
+- **2026-04-22 STO-57**:HealthChecker 消 Tushare DOWN 噪音。根因:未初始化 adapter 被无差别 probe。修复:`_get_adapters` 过滤 `initialized=False` 的 adapter,与 router.fetch skip-uninitialized 语义对齐。不动 manager 注册逻辑,不动 adapter 本身;未来配 token 恢复初始化会自动回归探测。新增测试 `test_uninitialized_adapter_is_skipped`。pytest 790 passed / 78.79%。
 - **2026-04-22 STO-46**:策略对比页 `timeout of 10000ms exceeded` 修复。根因:`frontend/src/api/http.ts` 全局 axios timeout=10s,`compareBacktests` 并行跑 N 策略动辄 30s+,必超时。修复:`compareBacktests` 调用时传 `{ timeout: 180_000 }`(导出常量 `COMPARE_TIMEOUT_MS` 供测试引用),不动全局(其他 API 仍 10s 快失败)。新增 `frontend/src/api/backtest.test.ts`。vitest 140/140、pytest 789 passed / 78.84%。CHANGELOG 记一条 fix。
 - **2026-04-22 STO-61**:本文档全量校对(PM Tick #6 发现模块表陈旧约 1 年)。API 从 🟡→✅(STO-6 已 test-passed)、调度 ⚠️→✅(STO-7 发现已嵌入 api.service)、Nginx ❌→⛔ N/A(P5.1b 架构决定不用)、日志 ❌→🟡(loguru 已接,Prometheus/Grafana 未部署)。下一步优先级从 4 条裁为 5 条,每条绑定真实 Linear issue ID。加「最近校对日期」行,防止再次漂移。
 - **2026-04-22 STO-59**:`scripts/ai-digest.py` 补 `bootstrap()` + `trust_env=False` session,修复 CLAUDE.md §9.3 铁律违规(jd 代理劫持 Linear API 会静默失败)。全项目 grep 0 条裸 `requests.*` 调用。789 passed / 78.84%。

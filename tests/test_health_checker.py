@@ -20,9 +20,11 @@ from backend.data_gateway.health_checker import (
 
 def _make_mock_adapter(name: str, healthy: bool = True,
                       raise_exc: Exception | None = None,
-                      cb_state: str = "CLOSED", cb_failures: int = 0):
+                      cb_state: str = "CLOSED", cb_failures: int = 0,
+                      initialized: bool = True):
     ad = MagicMock()
     ad.name.value = name
+    ad.initialized = initialized  # STO-57: 显式 bool,避免 MagicMock truthy
     if raise_exc:
         ad.health_check.side_effect = raise_exc
     else:
@@ -127,6 +129,25 @@ class TestCheckOnce:
         assert snap["crawler"].is_healthy is False
         assert snap["crawler"].error_msg is not None
         persist_mock.assert_called_once()
+
+    def test_uninitialized_adapter_is_skipped(self):
+        """STO-57: `_initialized=False` 的 adapter(如未配 token 的 TuShare)
+        不应被 HealthChecker 探测,避免每轮产生 DOWN 噪音。
+        """
+        adapters = [
+            _make_mock_adapter("akshare", healthy=True, initialized=True),
+            _make_mock_adapter("tushare", healthy=False, initialized=False),
+        ]
+        mgr = self._make_manager(adapters)
+        hc = HealthChecker(mgr)
+        with patch(
+            "backend.data_gateway.health_checker._persist",
+            return_value=1,
+        ):
+            snap = hc.check_once()
+        # 只探了 akshare,tushare(未初始化)被过滤
+        assert set(snap.keys()) == {"akshare"}
+        adapters[1].health_check.assert_not_called()
 
     def test_snapshot_persisted(self):
         adapters = [_make_mock_adapter("akshare")]

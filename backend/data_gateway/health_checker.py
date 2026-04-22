@@ -174,12 +174,22 @@ class HealthChecker:
     # ------------------------------------------------------------------
 
     def _get_adapters(self) -> list[BaseDataAdapter]:
-        """从 manager 的 router 拿已注册适配器"""
+        """从 manager 的 router 拿已注册适配器。
+
+        STO-57: 只探 `initialized=True` 的 adapter,与 router.fetch 的
+        skip-uninitialized 语义对齐(router.py:139)。未配 token 的
+        TuShareAdapter 注册后 `_initialized=False`,过去每轮都 probe 一次
+        并记一条 DOWN 噪音;现在直接跳过。后续若配上 token 恢复初始化,
+        自动回归探测。
+        """
         router = getattr(self._manager, "_router", None)
         if router is None:
             return []
         adapters_map = getattr(router, "_adapters", {})
-        return list(adapters_map.values())
+        return [
+            ad for ad in adapters_map.values()
+            if getattr(ad, "initialized", True)
+        ]
 
     def _loop(self):
         # 立即跑一次 + 之后按间隔

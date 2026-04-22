@@ -11,6 +11,33 @@
 
 ---
 
+### 2026-04-22 · fix · HealthChecker 跳过未初始化 adapter,消除 Tushare DOWN 噪音(STO-57)
+
+**问题**:Ops self-probe 每轮报告 `tushare=DOWN`。根因不在 Tushare 侧,而在 `backend/data_gateway/health_checker.py::_get_adapters`:
+
+- `DEFAULT_PRIORITY_CHAINS`(router.py)里 **Tushare 已不在任何 category 链**,业务上早已下架,仅保留实现(配 token 即可恢复)。
+- `manager.py::initialize` 对所有 adapter 无差别 `register_adapter`,包括未配 token、`_initialized=False` 的 TuShareAdapter。
+- `HealthChecker._get_adapters` 不过滤,每 5 min probe 一次,`TuShareAdapter.health_check` 见 `self._pro is None` 直接 `return False` → 记一行 DOWN。
+
+**修复**(`backend/data_gateway/health_checker.py` +8 / -1):
+
+`_get_adapters` 增加 `getattr(ad, 'initialized', True)` 过滤,语义与 `router.fetch` 的 skip-uninitialized 分支对齐(router.py:139)。未初始化 adapter 既不走业务路由,也不再被健康探测,日志噪音归零。
+
+**为何不改 manager.py 或 TuShareAdapter**:
+
+- 保留 `register_adapter(未初始化 adapter)` 语义,其他监控(如 `get_status`)仍能看到「adapter 注册了但未启用」。
+- 未来 Tushare 配上 token → `initialize()` 成功 → `_initialized=True` → HealthChecker 自动回归探测,无需二次改代码。
+
+**测试**:`tests/test_health_checker.py::TestCheckOnce::test_uninitialized_adapter_is_skipped`(新增 1 例),mock 一个 `initialized=True` 的 akshare + 一个 `initialized=False` 的 tushare,断言 snapshot 只含 akshare 且 tushare.health_check 未被调用。pytest 790 passed / 78.79%。
+
+**AC 验收 checkpoint 映射**:
+
+- (a) 修复后 HealthChecker 下轮起不再输出 `tushare=DOWN`(由 jd 部署后 Ops 巡检验证)
+- 未动 `priority_config.py`(该文件不存在,AC 原文 `data_gateway/priority_config.py` 系笔误,实际配置在 `router.py::DEFAULT_PRIORITY_CHAINS`,已无 tushare)
+- `docs/PROGRESS.md` 模块进度表数据源行本已说明 tushare 事实下架,保留原状
+
+---
+
 ### 2026-04-22 · fix · scripts/ai-digest.py 代理隔离加固(STO-59)
 
 **问题**:`scripts/ai-digest.py` 违反 CLAUDE.md §9.3 铁律(「任何新入口脚本第一行必须调用 `bootstrap()`;所有 `requests.Session` 都要 `trust_env=False`」),直接 `requests.post(LINEAR_API_URL, ...)`。本地 macOS 无代理侥幸不触发,但 **jd 服务器**注入 `HTTP_PROXY=<SG 代理>`,requests 默认继承该代理访问 `api.linear.app` — 若代理出境被墙,ai-digest 静默失败,每日 agent 巡检日报丢失。典型「只在线上出错」。
