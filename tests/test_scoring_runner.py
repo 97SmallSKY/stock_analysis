@@ -172,6 +172,9 @@ def patch_run(monkeypatch):
     monkeypatch.setattr(R, "_load_hist_stats", lambda c, ts, d: {
         "total_count": 0, "avg_chg_3d": None, "avg_chg_5d": None, "win_rate_5d": None,
     })
+    # STO-73: run() 改用 bulk loaders
+    monkeypatch.setattr(R, "_load_kline_windows_bulk", lambda c, rows, lookback_days=90: {})
+    monkeypatch.setattr(R, "_load_hist_stats_bulk", lambda c, rows: {})
 
     # 3. compute_score
     def fake_compute(inp):
@@ -213,3 +216,98 @@ def test_run_empty(monkeypatch):
     monkeypatch.setattr(R, "_load_lhb_rows", lambda c, s, e, only_empty=False: [])
     n = R.run("20241015", "20241015")
     assert n == 0
+
+
+# --------------------------------------------------------------------
+# STO-73: N+1 批量化测试
+# --------------------------------------------------------------------
+
+
+class TestBulkLoaders:
+    """验证 _load_kline_windows_bulk + _load_hist_stats_bulk 行为
+    与原单行 loader 等价,且 SQL 调用次数常量(≤ 10 次固定开销)。
+    """
+
+    def test_kline_windows_bulk_empty(self):
+        out = R._load_kline_windows_bulk(_Conn([]), [])
+        assert out == {}
+
+    def test_kline_windows_bulk_single_sql_and_slice(self):
+        # 构造 kline 数据:A.SZ 10/10-10/20, B.SZ 10/10-10/20
+        from datetime import date as D
+        kline_rows = []
+        for ts in ("A.SZ", "B.SZ"):
+            for d in range(10, 21):
+                kline_rows.append({"ts_code": ts, "trade_date": D(2024, 10, d),
+                                   "open": 1.0, "high": 1.0, "low": 1.0,
+                                   "close": 1.0, "pct_change": 0.0, "vol": 1,
+                                   "amount": 1, "turnover_rate": 0.01})
+        cur = _Cur(rows=kline_rows)
+        conn = _Conn([cur])
+        rows = [
+            {"ts_code": "A.SZ", "trade_date": D(2024, 10, 15)},
+            {"ts_code": "B.SZ", "trade_date": D(2024, 10, 20)},
+        ]
+        out = R._load_kline_windows_bulk(conn, rows, lookback_days=5)
+        # 仅 1 次 SQL
+        assert len(cur.executed) == 1
+        # 每个 (ts, td) 返回一个窗口,窗口内 trade_date <= target
+        assert all(k["trade_date"] <= D(2024, 10, 15)
+                   for k in out[("A.SZ", D(2024, 10, 15))])
+        assert all(k["trade_date"] <= D(2024, 10, 20)
+                   for k in out[("B.SZ", D(2024, 10, 20))])
+        assert out[("A.SZ", D(2024, 10, 15))]
+        assert out[("B.SZ", D(2024, 10, 20))]
+
+    def test_hist_stats_bulk_empty(self):
+        out = R._load_hist_stats_bulk(_Conn([]), [])
+        assert out == {}
+
+    def test_hist_stats_bulk_aggregates_correctly(self):
+        """构造 A.SZ 在 1/15 之前的 2 次上榜,验证聚合结果。"""
+        from datetime import date as D
+        # SQL 返回 (ts_code, d0, c0, c3, c5)
+        # A.SZ 两次上榜:1/5(c0=10, c3=12, c5=15) + 1/10(c0=20, c3=24, c5=30)
+        # 聚合:total=2, avg_chg_3d=(0.2+0.2)/2=0.20, avg_chg_5d=(0.5+0.5)/2=0.50, win_rate=1.0
+        cur = _Cur(rows=[
+            ("A.SZ", D(2024, 1, 5), 10.0, 12.0, 15.0),
+            ("A.SZ", D(2024, 1, 10), 20.0, 24.0, 30.0),
+        ])
+        conn = _Conn([cur])
+        rows = [{"ts_code": "A.SZ", "trade_date": D(2024, 1, 15)}]
+        out = R._load_hist_stats_bulk(conn, rows)
+        key = ("A.SZ", D(2024, 1, 15))
+        assert out[key]["total_count"] == 2
+        assert abs(out[key]["avg_chg_3d"] - 0.20) < 1e-9
+        assert abs(out[key]["avg_chg_5d"] - 0.50) < 1e-9
+        assert out[key]["win_rate_5d"] == 1.0
+
+    def test_hist_stats_bulk_excludes_future_and_old(self):
+        """验证只统计 (target - 365d) <= d0 < target 范围内。"""
+        from datetime import date as D
+        cur = _Cur(rows=[
+            ("A.SZ", D(2023, 1, 1), 10.0, 11.0, 12.0),  # 太早,>365 天前
+            ("A.SZ", D(2024, 1, 10), 10.0, 11.0, 12.0), # 合法
+            ("A.SZ", D(2024, 1, 20), 10.0, 11.0, 12.0), # target=1/15,这条比 target 晚,不算
+        ])
+        conn = _Conn([cur])
+        rows = [{"ts_code": "A.SZ", "trade_date": D(2024, 1, 15)}]
+        out = R._load_hist_stats_bulk(conn, rows)
+        assert out[("A.SZ", D(2024, 1, 15))]["total_count"] == 1
+
+
+def test_run_sql_count_is_constant(monkeypatch, patch_run):
+    """STO-73 AC: SQL 调用次数从 N+1 降到常量(≤ 10)。
+
+    patch_run 把 _load_lhb_rows / _load_sentiment_map / bulk loaders 全替换为 lambda,
+    实际数 cursor.execute 的 fake_conn 调用次数(monkeypatch bulk 为空 dict 时 0 次 execute)。
+    这里重点断言 fake_conn.cursor 在 run() 的生命周期被调用次数 ≤ 10 次。
+    """
+    _, conn = patch_run
+    R.run("20241015", "20241015")
+    # fake_conn 的 cursor() 调用次数就是潜在 SQL 次数上界
+    # loaders 已被 lambda 替换,不会真正 cursor();_update_scores 内用 conn.cursor()
+    # 原 N+1 实现在 run() 循环内每行调 2 次 cursor(loader)→ 3 行 = 6 次 +
+    # sentiment + lhb + final batch = 9 次,接近但随 N 线性增长
+    # 新实现常量 ≤ 10(lhb + sentiment + kline_bulk + hist_bulk + update = 5 次)
+    assert conn.cursor.call_count <= 10

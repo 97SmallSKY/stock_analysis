@@ -46,7 +46,10 @@ def _load_lhb_rows(conn, start: str, end: str, only_empty: bool = False):
 
 
 def _load_kline_window(conn, ts_code: str, trade_date, lookback_days: int = 90):
-    """拉取上榜日及之前 ~lookback_days 个交易日的 kline (升序)"""
+    """(legacy) 单行取 kline。STO-73 新 run() 走 `_load_kline_windows_bulk`。
+
+    保留此函数:测试直接调用 + 外部可能 import,但主流程不再命中。
+    """
     start = trade_date - timedelta(days=lookback_days + 30)  # 多买点缓冲
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
         cur.execute(
@@ -63,6 +66,56 @@ def _load_kline_window(conn, ts_code: str, trade_date, lookback_days: int = 90):
         return cur.fetchall()
 
 
+def _load_kline_windows_bulk(
+    conn, rows: list, lookback_days: int = 90,
+) -> dict[tuple, list[dict]]:
+    """STO-73: 一次 SQL 预拉全部 (ts_code, trade_date) 的 kline 窗口。
+
+    实现:
+      - 取 rows 里涉及的所有 ts_code + trade_date 范围 [min-lookback-30, max]
+      - 一次 SQL 拉回,Python 按 ts_code 分组
+      - 对每个 (ts_code, trade_date) 在内存切片 [trade_date - lookback-30, trade_date]
+
+    返回:{(ts_code, trade_date) -> list[dict]} 与 _load_kline_window 等价的窗口
+    """
+    if not rows:
+        return {}
+    ts_codes = sorted({r["ts_code"] for r in rows})
+    min_td = min(r["trade_date"] for r in rows)
+    max_td = max(r["trade_date"] for r in rows)
+    earliest = min_td - timedelta(days=lookback_days + 30)
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT ts_code, trade_date, open, high, low, close, pct_change,
+                   vol, amount, turnover_rate
+            FROM kline_daily
+            WHERE ts_code = ANY(%s)
+              AND trade_date BETWEEN %s AND %s
+            ORDER BY ts_code, trade_date
+            """,
+            (ts_codes, earliest, max_td),
+        )
+        all_kline = cur.fetchall()
+    # 按 ts_code 分组(升序已由 SQL 保证)
+    by_code: dict[str, list[dict]] = {}
+    for k in all_kline:
+        by_code.setdefault(k["ts_code"], []).append(k)
+    # 对每个 row 切片:[trade_date - lookback-30, trade_date]
+    out: dict[tuple, list[dict]] = {}
+    for r in rows:
+        tc = r["ts_code"]
+        td = r["trade_date"]
+        cutoff_low = td - timedelta(days=lookback_days + 30)
+        # 线性扫(每 ts_code 百来行,成本可忽略;bisect 提升有限不值得引入)
+        window = [
+            k for k in by_code.get(tc, [])
+            if cutoff_low <= k["trade_date"] <= td
+        ]
+        out[(tc, td)] = window
+    return out
+
+
 def _load_sentiment_map(conn, start: str, end: str) -> dict:
     """trade_date -> sentiment_level"""
     s_iso = f"{start[:4]}-{start[4:6]}-{start[6:]}"
@@ -74,6 +127,84 @@ def _load_sentiment_map(conn, start: str, end: str) -> dict:
             (s_iso, e_iso),
         )
         return {row[0]: row[1] for row in cur.fetchall()}
+
+
+def _load_hist_stats_bulk(conn, rows: list) -> dict[tuple, dict]:
+    """STO-73: 一次 SQL 批量计算所有 (ts_code, trade_date) 的 hist_stats。
+
+    思路:
+      1. 把所有 ts_code 在过去 365 天的 lhb 上榜日期 + kline 窗口函数 c3/c5 一次拉回
+      2. Python 端按 (ts_code, target_trade_date) 聚合(只取 d0 < target 的历史)
+
+    返回:{(ts_code, trade_date) -> hist_dict} 与 _load_hist_stats 等价
+    空值时返回 {\"total_count\":0, ...} 保持向后兼容
+    """
+    if not rows:
+        return {}
+    ts_codes = sorted({r["ts_code"] for r in rows})
+    max_td = max(r["trade_date"] for r in rows)
+    earliest = min(r["trade_date"] for r in rows) - timedelta(days=365)
+    # 一次 SQL:把 ts_codes 在 [earliest, max_td] 内的所有历史上榜日 + c0/c3/c5 带出
+    # c3/c5 用 LEAD(close, 2) / LEAD(close, 4) OVER (PARTITION BY ts_code ORDER BY trade_date)
+    # 注意:LEAD 是该 kline 行之后的第 N 行,与原 LIMIT 1 OFFSET 2/4 (不含 d0 的第 3/5 个) 等价
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            WITH kline_with_future AS (
+                SELECT ts_code, trade_date, close,
+                       LEAD(close, 3) OVER (PARTITION BY ts_code ORDER BY trade_date) AS c3,
+                       LEAD(close, 5) OVER (PARTITION BY ts_code ORDER BY trade_date) AS c5
+                FROM kline_daily
+                WHERE ts_code = ANY(%s)
+            ),
+            past_lhb AS (
+                SELECT l.ts_code, l.trade_date AS d0, k.close AS c0, k.c3, k.c5
+                FROM lhb_stock_daily l
+                LEFT JOIN kline_with_future k
+                  ON k.ts_code = l.ts_code AND k.trade_date = l.trade_date
+                WHERE l.ts_code = ANY(%s)
+                  AND l.trade_date BETWEEN %s AND %s
+            )
+            SELECT ts_code, d0, c0, c3, c5 FROM past_lhb
+            ORDER BY ts_code, d0
+            """,
+            (ts_codes, ts_codes, earliest, max_td),
+        )
+        history = cur.fetchall()
+    # 按 ts_code 分组
+    by_code: dict[str, list[tuple]] = {}
+    for ts_code, d0, c0, c3, c5 in history:
+        by_code.setdefault(ts_code, []).append((d0, c0, c3, c5))
+    # 对每个 (ts_code, target_trade_date):找过去 365d 内 d0 < target 的所有记录聚合
+    out: dict[tuple, dict] = {}
+    for r in rows:
+        tc = r["ts_code"]
+        td = r["trade_date"]
+        cutoff = td - timedelta(days=365)
+        total = 0
+        s3 = s5 = wr = 0.0
+        n3 = n5 = nwr = 0
+        for d0, c0, c3, c5 in by_code.get(tc, []):
+            if not (cutoff <= d0 < td):
+                continue
+            total += 1
+            if c0 and c0 > 0:
+                if c3 is not None:
+                    s3 += float(c3 - c0) / float(c0)
+                    n3 += 1
+                if c5 is not None:
+                    s5 += float(c5 - c0) / float(c0)
+                    n5 += 1
+            if c0 is not None and c5 is not None:
+                wr += 1.0 if c5 > c0 else 0.0
+                nwr += 1
+        out[(tc, td)] = {
+            "total_count": total,
+            "avg_chg_3d": (s3 / n3) if n3 > 0 else None,
+            "avg_chg_5d": (s5 / n5) if n5 > 0 else None,
+            "win_rate_5d": (wr / nwr) if nwr > 0 else None,
+        }
+    return out
 
 
 def _load_hist_stats(conn, ts_code: str, trade_date) -> dict:
@@ -182,13 +313,21 @@ def run(
             return 0
 
         sentiment_map = _load_sentiment_map(conn, start, end)
+        # STO-73: 一次 SQL 预拉全部 kline 窗口 + hist 统计,消除 N+1
+        # 原实现:N 行 × (1 kline + 1 hist CTE) = 2N 次往返
+        # 新实现:无论 N 多大,常量 2 次 SQL(加 lhb+sentiment 共 4 次总计)
+        kline_bulk = _load_kline_windows_bulk(conn, rows)
+        hist_bulk = _load_hist_stats_bulk(conn, rows)
         updates: list[dict] = []
 
         for idx, r in enumerate(rows, 1):
             ts_code = r["ts_code"]
             trade_date = r["trade_date"]
-            kline_win = _load_kline_window(conn, ts_code, trade_date)
-            hist = _load_hist_stats(conn, ts_code, trade_date)
+            kline_win = kline_bulk.get((ts_code, trade_date), [])
+            hist = hist_bulk.get((ts_code, trade_date), {
+                "total_count": 0, "avg_chg_3d": None,
+                "avg_chg_5d": None, "win_rate_5d": None,
+            })
             inp = ScoreInput(
                 lhb_row=dict(r),
                 kline_window=list(kline_win),
