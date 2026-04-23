@@ -97,6 +97,30 @@ pytest 831 passed(+12)/ 79.17%。
 
 ---
 
+### 2026-04-23 · docs · opencli 数据源预研(STO-76)
+
+**背景**:服务器数据源不稳定(Tushare DOWN / AkShare 偶发),用户建议评估 opencli astock 作为补充。
+
+**方法**:本机 `opencli` 可用(brew 装),`opencli astock list` + 每子命令 `--help` 抽取 Output columns + 真实 2 次调用(`longhu --limit 2` / `kline 000001 --limit 3`)验证字段与 `lhb_stock_daily` / `kline_daily` schema 对齐。
+
+**关键发现**:
+
+1. **10 个 astock 子命令**,命中本项目 7 张表(longhu / longhu-seat / kline / info / broker / market / quote 都有对应)
+2. **后端域名全是 `eastmoney.com`**(datacenter-web / push2his / emweb / quote),**与 AkShare 同源** → 不解决 AkShare 抖动根因
+3. **字段对齐 95% + 多出独有字段**:
+   - kline: `amplitude` / `is_limit_up` / `is_limit_down`(STO-64 板块阈值硬编码可借此改进)
+   - longhu: `lhb_deal_ratio` / `reason_detail` / `change_type` / `d1_return` / `d5_return`
+   - longhu-seat: `rise_probability_3day` / `broker_seen_times_3day`
+   - broker: `win_rate_10d` / `avg_pnl_10d` / `active_rank`(现有 lhb_agg_stats 仅 3/5d)
+4. **性能:2.2s/次**(Chromium headless),**批量调用不可接受**(1000 股 seat = 36 min)
+5. **缺口**:市场情绪 / 资金流 / 板块 / 北向 / 周 K 都没有
+
+**结论/建议**:作为 `DEFAULT_PRIORITY_CHAINS` 末位 fallback 接入(non-replacement),为 AkShare 解析 bug 时提供冗余。估时:150 行 adapter + 10 行 priority + 50 行单测。拆子 issue 候选 STO-76a(install)/ 76b(adapter)/ 76c(priority 接入)/(可选)76d(kline 新字段落表)。
+
+**不改代码,无 pytest 影响**。
+
+---
+
 ### 2026-04-23 · docs · 策略分类体系规划设计文档(STO-48)
 
 **不动代码**,仅产出 `docs/design/strategy-taxonomy.md`(189 行)。覆盖 AC 6 条:
