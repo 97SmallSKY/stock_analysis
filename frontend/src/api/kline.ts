@@ -1,4 +1,5 @@
 import http from './http'
+import { LIMIT_MAX_KLINE_DAILY, LIMIT_MAX_KLINE_WEEKLY, assertLimit } from './limits'
 
 export interface KlineBar {
   date: string
@@ -20,6 +21,7 @@ export interface KlineResp {
 export async function fetchKlineDaily(
   ts_code: string, from?: string, to?: string, limit = 250,
 ): Promise<KlineResp> {
+  assertLimit('fetchKlineDaily', limit, LIMIT_MAX_KLINE_DAILY)
   const params: Record<string, string | number> = { ts_code, limit }
   if (from) params.from = from
   if (to) params.to = to
@@ -30,6 +32,7 @@ export async function fetchKlineDaily(
 export async function fetchKlineWeekly(
   ts_code: string, from?: string, to?: string, limit = 104,
 ): Promise<KlineResp> {
+  assertLimit('fetchKlineWeekly', limit, LIMIT_MAX_KLINE_WEEKLY)
   const params: Record<string, string | number> = { ts_code, limit }
   if (from) params.from = from
   if (to) params.to = to

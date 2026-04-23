@@ -8,6 +8,12 @@
 
 ---
 
+### 2026-04-23 · fix · 前端 limit 越界保护 (STO-62)
+
+**影响**:开发者在调用前端 API wrapper(如 `fetchLhb`、`fetchKlineDaily`)传入超出后端允许范围的 limit 时,前端会**立即抛错**,不再让请求发到服务端再拿 422 —— debug 更直接。普通用户操作页面不会碰到。
+
+---
+
 ### 2026-04-22 · fix · CORS 跨域策略收紧 (STO-58)
 
 **影响**:后端接口默认只允许本机同源访问。若你在本地开发用 Vite dev server(`http://localhost:5173`)跨域调 jd 的接口,需要在 `.env` 里填 `ALLOWED_ORIGINS=http://localhost:5173`(示例见 `.env.example`)。

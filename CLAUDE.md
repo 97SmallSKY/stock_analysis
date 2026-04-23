@@ -203,6 +203,7 @@ grep -rn --include='*.py' -E '(from|import) (sqlalchemy|alembic)' backend/ scrip
    grep -rn 'fetchDailyKline\|/api/kline/daily' frontend/src/
    ```
 3. **边界绝对值不走小本子**:边界写在后端 `Query(...)` 作为单一事实源,前端 `api/*.ts` 里的 TypeScript 类型仅提供「可选性」,数值边界不在前端定义(防小本子脱节)。
+4. **前端 limit 必须读 `frontend/src/api/limits.ts` 常量,禁止硬编码**(STO-62):常量与后端 `le=` 一一对应;`fetchXxx` 在 wrapper 层 `assertLimit(...)` 校验,超限直接抛 `LimitOutOfRangeError` 不发 HTTP(快失败,便于调试)。改后端 `le=` 必须同步 `limits.ts`,否则 `limits.test.ts` 会红。
 
 ### 11.2 API 单测 checklist(新端点必写)
 

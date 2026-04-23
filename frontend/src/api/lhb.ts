@@ -1,4 +1,5 @@
 import http from './http'
+import { LIMIT_MAX_LHB, LIMIT_MAX_LHB_SEATS, assertLimit } from './limits'
 
 // 与 backend/api/lhb.py 对齐
 export interface LhbRow {
@@ -47,6 +48,7 @@ export interface LhbListParams {
 }
 
 export async function fetchLhb(params: LhbListParams = {}): Promise<LhbListResp> {
+  assertLimit('fetchLhb', params.limit, LIMIT_MAX_LHB)
   const { data } = await http.get<LhbListResp>('/api/lhb', { params })
   return data
 }
@@ -71,6 +73,7 @@ export interface LhbSeatParams {
 }
 
 export async function fetchLhbSeats(params: LhbSeatParams): Promise<{ rows: LhbSeatRow[] }> {
+  assertLimit('fetchLhbSeats', params.limit, LIMIT_MAX_LHB_SEATS)
   const { data } = await http.get<{ rows: LhbSeatRow[] }>('/api/lhb/seats', { params })
   return data
 }

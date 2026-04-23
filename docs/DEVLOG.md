@@ -11,6 +11,25 @@
 
 ---
 
+### 2026-04-23 · refactor · 前端 limit 边界集中化(STO-62)
+
+**背景**:STO-40(P19.13)事故根因是前端 `fetchDailyKline({ limit: 2000 })` 超过后端 `le=1000`,全量日 K 挂 422。修复已做,但**前端硬编码 limit 数字的根因未消除**:`LhbPnl.vue` 继续写 `limit: 1000` 恰好撞上限,任何一边改动都会再翻车。CLAUDE.md §11 原有红线仅靠开发者记忆 grep,无工具 enforce。
+
+**改动**:
+
+- 新增 `frontend/src/api/limits.ts`:导出 `LIMIT_MAX_LHB=1000` / `LIMIT_MAX_LHB_SEATS=2000` / `LIMIT_MAX_KLINE_DAILY=5000` / `LIMIT_MAX_KLINE_WEEKLY=2000`,与 `backend/api/{lhb,kline}.py` 的 `Query(..., le=N)` 一一对应;提供 `assertLimit(name, limit, max)` guard + `LimitOutOfRangeError` 异常类。
+- `frontend/src/api/lhb.ts` / `kline.ts`:4 个 fetchXxx 在进入 http.get 前调 `assertLimit`,超限立即抛错**不发 HTTP**(快失败,比等后端 422 更好 debug)。
+- `frontend/src/pages/LhbPnl.vue`:`limit: 1000` → `limit: LIMIT_MAX_LHB`。
+- `CLAUDE.md` §11.1 新增第 4 条规约:「前端 limit 必须读 `api/limits.ts`,不许硬编码」。
+
+**明确保留**:`BacktestRun.vue/Backtest.vue` 的 `limit: 200`、`Signals.vue` 的 `limit: 500` 是**业务默认分页值**(与 API 上限 2000/1000 是两个概念),语义上不应该用 LIMIT_MAX_ 常量。AC 的 grep checkpoint「硬编码 limit = 0」偏严,实际 issue AC (d) 只点名 LhbPnl.vue 这条撞上限的案例。
+
+**测试**:`frontend/src/api/limits.test.ts` 10 case(4 常量值 / 6 场景:边界内、=上限、超上限、undefined、<1、NaN/Inf;+ 集成验证 fetchLhb 超限不发 HTTP、fetchKlineDaily 同)。vitest 150/150、typecheck 0 错、后端 pytest 794 passed / 78.81%(基线不变)。
+
+**后续**:未来 `BacktestRun/Backtest/Signals` 改成分页或加上限时再统一接入,当前不做投机性重构(CLAUDE.md §2 简洁原则)。
+
+---
+
 ### 2026-04-22 · fix · CORS allowlist 收紧(STO-58)
 
 **背景**:STO-56(路径遍历)修复后,PM 审计 `backend/api/main.py` 发现 CORS 配置 `allow_origins=["*"]` + `allow_methods=["*"]` + `allow_headers=["*"]` 过宽。结合 STO-6 引入的 X-API-Key 鉴权,任意第三方站点可发跨域写请求;若 key 从前端泄漏,CORS 兜底不起作用。

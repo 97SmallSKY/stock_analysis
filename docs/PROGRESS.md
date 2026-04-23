@@ -31,7 +31,7 @@
 
 按 Linear 当前 Todo 列表(priority 降序 + createdAt 升序),与真实 Issue ID 绑定:
 
-1. **STO-62** (Medium) — 前端 limit 参数边界化(LhbPnl=1000 恰撞后端 le=1000,任何边界微调会触发 422)
+(活跃优先级空,等 PM 下一轮选题或人工补单)
 
 已完成(从旧版优先级移除):
 - ~~#1 API 鉴权/限流~~ → STO-6 In Review(ready to deploy)
@@ -41,11 +41,13 @@
 - ~~STO-61 PROGRESS 校对~~ → 2026-04-22 Done
 - ~~STO-57 Tushare DOWN 噪音~~ → 2026-04-22 In Review(HealthChecker 跳过 uninitialized adapter)
 - ~~STO-58 CORS 收紧~~ → 2026-04-22 In Review(allowlist + methods/headers 收敛 + 4 条单测)
+- ~~STO-62 前端 limit 边界化~~ → 2026-04-23 In Review(api/limits.ts + assertLimit + LhbPnl 改常量 + 10 vitest)
 - ~~STO-54 type:watch label~~ → 2026-04-22 In Review(M8 豁免规则)
 - ~~STO-7 scheduler 验证~~ → 2026-04-22 In Review(restart 后 4 个 job 重注册)
 
 ## 近期变更日志
 
+- **2026-04-23 STO-62**:前端 limit 边界集中化。新建 `frontend/src/api/limits.ts` 导出 4 常量(LIMIT_MAX_LHB/LHB_SEATS/KLINE_DAILY/KLINE_WEEKLY 分别 1000/2000/5000/2000)+ `assertLimit()` 快失败 guard。4 个 fetchXxx wrapper 接入,超限立即抛 `LimitOutOfRangeError` 不发 HTTP。LhbPnl.vue 的 `limit: 1000` 改读 `LIMIT_MAX_LHB`(其他业务默认分页值 200/500 保留,语义非上限)。CLAUDE.md §11.1 新增第 4 条规约。vitest 150 passed(+10)、typecheck 绿、后端 pytest 794 / 78.81% 不变。
 - **2026-04-22 STO-58 🔒**:CORS allowlist 收紧。`allow_origins=["*"]` / `allow_methods=["*"]` / `allow_headers=["*"]` → 全部收敛。`backend/config.py` 新增 `AllowedOriginsSettings`(读 `ALLOWED_ORIGINS` env,逗号分隔);main.py CORS middleware 改读 settings;methods 限定 GET/POST/PUT/DELETE/OPTIONS;headers 限定 Content-Type/X-API-Key/Authorization。`.env.example` 加配置段 + `DEPLOYMENT.md` §6.3.1 文档。新增 `tests/test_cors.py` 4 case(空/授权/未授权/PATCH 拒绝)。本地 uvicorn curl 验证:evil.com 返 400 Disallowed 无 ACA-O,localhost:5173 返 200 带 ACA-O。jd 生产空 allowlist 等同同源,前向兼容。pytest 794 passed / 78.81%。
 - **2026-04-22 STO-54**:Watch 巡检 issue 引入 `type:watch` label + Auditor M8 豁免规则(拆自 STO-53)。Linear 新建 label `type:watch`(color `#95A5A6`);STO-38/39/44 摘除 `blocked:need-human` 改挂 `type:watch`;STO-42 已 Canceled 且自动掉 label,无需动。文档:`docs/agents/transition-checklist.md` label 表从 5 条扩到 6 条加 M8 豁免注脚;`docs/prompts/linear/ops.md` Watch 规则改为标签 `auto:stock-analysis + type:chore + type:watch`、明令不打 `blocked:need-human`。Auditor M8 查询逻辑不在仓库内(外部 agent session),靠 checklist 规约面传达。纯 metadata + docs,无代码改动;pytest 790 passed / 78.79%。
 - **2026-04-22 STO-7**:scheduler systemd 恢复验证闭环。jd 上 `systemctl restart stock_analysis_api` 后 APScheduler 重新注册 4 个 job(IntradaySnapshotScheduler.{snapshot,zt_pool,cleanup}_job + WeeklyReportScheduler.run_once)且 `Scheduler started` 日志齐全,无 proxy / Redis 错误。`docs/DEPLOYMENT.md` 新增 §6.5「Restart / Reboot 恢复验证」章节(copy-paste 可复现 + 6.5.2 reboot 场景授权约束)。同步明确「不新建独立 scheduler unit」(架构级铁律写入章节内注)。未改代码,仅验证 + 文档。pytest 仍 790 passed / 78.79%。

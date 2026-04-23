@@ -147,6 +147,7 @@ import {
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { fetchLhb, type LhbRow } from '@/api/lhb'
+import { LIMIT_MAX_LHB } from '@/api/limits'
 import { fmtAmountWan } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
 import ScoreDetailModal from '@/components/ScoreDetailModal.vue'
@@ -265,7 +266,7 @@ async function load() {
       date_to: form.range.end ? toYmd(form.range.end) : undefined,
       order_by: 'trade_date',
       order_desc: true,
-      limit: 1000,
+      limit: LIMIT_MAX_LHB,
       with_tn: true,
       skip_total: true, // STO-43: 首屏跳过 COUNT(*) 加速,"已加载 N 条" 足够
     })
