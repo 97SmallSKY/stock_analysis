@@ -66,7 +66,10 @@ def run(start: str, end: str, skip_existing: bool = True) -> dict:
     from backend.data_gateway.manager import DataSourceManager
     from backend.domain.lhb.daily_job import run_range
 
+    # STO-72: 必须 initialize(),否则 get_lhb_detail 抛「未初始化」被 catch 成 warning,
+    # 导致 daily_update 日志 OK 但 0 行入库(静默数据丢失,断档 4 天才被发现)
     manager = DataSourceManager()
+    manager.initialize()
     trade_days = _load_trading_days(start, end) or list(_daterange(start, end))
     logger.info(
         f"[ingest.lhb] 待处理 {len(trade_days)} 天 [{start} -> {end}], "
