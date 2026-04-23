@@ -97,22 +97,26 @@ def _load_kline_windows_bulk(
             (ts_codes, earliest, max_td),
         )
         all_kline = cur.fetchall()
-    # 按 ts_code 分组(升序已由 SQL 保证)
+    # 按 ts_code 分组(升序已由 SQL 保证)+ 预计算 trade_date 列表供 bisect 用
+    import bisect
     by_code: dict[str, list[dict]] = {}
+    dates_by_code: dict[str, list] = {}
     for k in all_kline:
         by_code.setdefault(k["ts_code"], []).append(k)
+        dates_by_code.setdefault(k["ts_code"], []).append(k["trade_date"])
     # 对每个 row 切片:[trade_date - lookback-30, trade_date]
     out: dict[tuple, list[dict]] = {}
     for r in rows:
         tc = r["ts_code"]
         td = r["trade_date"]
         cutoff_low = td - timedelta(days=lookback_days + 30)
-        # 线性扫(每 ts_code 百来行,成本可忽略;bisect 提升有限不值得引入)
-        window = [
-            k for k in by_code.get(tc, [])
-            if cutoff_low <= k["trade_date"] <= td
-        ]
-        out[(tc, td)] = window
+        dates = dates_by_code.get(tc, [])
+        if not dates:
+            out[(tc, td)] = []
+            continue
+        lo = bisect.bisect_left(dates, cutoff_low)
+        hi = bisect.bisect_right(dates, td)
+        out[(tc, td)] = by_code[tc][lo:hi]
     return out
 
 
