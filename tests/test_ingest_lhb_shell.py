@@ -160,3 +160,17 @@ def test_run_falls_back_to_daterange_when_calendar_empty(monkeypatch):
     trade_days_arg = args[2]
     # 自然日回退 = 3 天
     assert trade_days_arg == ["20240301", "20240302", "20240303"]
+
+
+# ----------------------------------------------------------------------
+# STO-72 回归:run() 必须显式调 manager.initialize(),否则 get_lhb_detail
+# 抛「未初始化」被 catch 成 warning,入库 0 行 exit 0,静默数据丢失。
+# ----------------------------------------------------------------------
+
+
+def test_run_initializes_manager_sto72(monkeypatch):
+    """STO-72 防回归:run() 必须调 manager.initialize()。"""
+    _, _, fake_manager = _install_fakes(monkeypatch, trading_days=["20240102"])
+    L.run("20240101", "20240103")
+    # 未调 initialize 会让 manager 的 get_lhb_detail 抛 RuntimeError,静默失败
+    fake_manager.initialize.assert_called_once()

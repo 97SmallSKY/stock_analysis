@@ -11,6 +11,60 @@
 
 ---
 
+### 2026-04-23 · fix · lhb 断档 4 天紧急修复(STO-72 🚨Urgent)
+
+**事故现象**:用户 2026-04-23 午后报告「前端数据只到 2026-04-17」,缺 4-20/4-21/4-22(3 个已收盘工作日)。systemd timer + service 显示 daily_update 正常跑了,但 DB `lhb_stock_daily` 最新 trade_date 停在 4-17,同期 `kline_daily` 和 `market_sentiment` 最新是 4-22(只有 lhb 断)。
+
+**两层根因**:
+
+**(1) 主 bug — ingest.lhb.run() 漏 initialize()**:
+
+```python
+# backend/ingest/lhb.py:69(旧)
+manager = DataSourceManager()
+# 未调 manager.initialize() ← 静默灾难
+trade_days = _load_trading_days(start, end) or ...
+summary = run_range(pg_conn, manager, trade_days, ...)
+```
+
+`daily_job.run_single_day` L118–123 的 `try/except` 把 `RuntimeError: DataSourceManager 未初始化` catch 成 `logger.warning(...)` + `return result` → main_rows=0 → daily_update 日志显示 `OK lhb_daily`,`errors=0` → **完美的假绿**。每天记录的 Ops 巡检也看不出来。
+
+对照发现 `run_seats()` L106 有 `manager.initialize()`,说明这是 2025 年某次 refactor 漏改了 `run()`。
+
+**(2) 深层 bug — upsert CardinalityViolation**:
+
+修主 bug 首次真实入库时暴露:`execute_values` + `ON CONFLICT (ts_code, trade_date) DO UPDATE` 报 `cannot affect row a second time`。说明同批 rows 有 key 重复,`merge_same_key` 有边界条件没覆盖到(trade_date 类型混用 / seats 跨 record 合并后键重复,测试中打印已去重但实际跑仍冲突,`parser/attach_seats` 路径某处会绕过 merge)。
+
+**未深究 merge 根因**,而是在 `upsert_main` / `upsert_seats` **兜底按 key 字典去重**(后入覆盖前入,与 `DO UPDATE` 语义一致)。既治标(让 STO-72 立即落地)也治本(任何未来 parser 边界漏网,upsert 层都能自愈)。
+
+**修复 3 处**(`backend/ingest/lhb.py` / `backend/domain/lhb/ingestor.py`):
+
+1. `run()` 加 `manager.initialize()`
+2. `upsert_main` 按 `(ts_code, _norm_date(trade_date))` 去重
+3. `upsert_seats` 按 `(ts_code, trade_date, broker_name, direction)` 去重
+
+**回填**:`python -m backend.cli ingest lhb --from 20260420 --to 20260422` + scoring。DB 最终状态:
+
+```
+trade_date | count
+-----------+------
+2026-04-17 |   68
+2026-04-20 |   69
+2026-04-21 |   71
+2026-04-22 |   68
+```
+
+4-23 当天 akshare 东财源尚未更新(sina fallback 拿到 1 行脏数据,`ts_code="None"`,已手工 DELETE),等 daily_update 18:40 自动跑。
+
+**回归测试**:`tests/test_ingest_lhb_shell.py::test_run_initializes_manager_sto72` 验证 `fake_manager.initialize.assert_called_once()` —— 下次再漏 initialize 会立刻红。pytest 813 passed(+1)/ 78.91%。
+
+**教训**:
+
+- 「journal 显示 OK + errors=0」≠ 「数据已入库」—— STO-38 Watch 巡检清单要加 **SQL 层真实性校验**(`SELECT MAX(trade_date) FROM lhb_stock_daily` 对比 today)。PM/Ops 看看要不要开 STO-XX 扩 Watch 规则。
+- `except Exception: logger.warning + return` 在 ingest 入口是反模式,应该让 fail-fast 向上抛,systemd exit != 0 触发告警。
+
+---
+
 ### 2026-04-23 · fix · data_gateway 目录漂移 + manager fast-path 静默吞错(STO-68)
 
 两个实锤并在一起修。
