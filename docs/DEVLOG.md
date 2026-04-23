@@ -11,6 +11,28 @@
 
 ---
 
+### 2026-04-22 · fix · CORS allowlist 收紧(STO-58)
+
+**背景**:STO-56(路径遍历)修复后,PM 审计 `backend/api/main.py` 发现 CORS 配置 `allow_origins=["*"]` + `allow_methods=["*"]` + `allow_headers=["*"]` 过宽。结合 STO-6 引入的 X-API-Key 鉴权,任意第三方站点可发跨域写请求;若 key 从前端泄漏,CORS 兜底不起作用。
+
+**修复**:
+
+- `backend/config.py` 新增 `AllowedOriginsSettings`(读 `ALLOWED_ORIGINS` 逗号分隔 env),空列表 = 同源场景无需 CORS(jd 生产默认)
+- `backend/api/main.py::create_app` CORS middleware 改读 `settings.cors.origins`,`allow_methods` 收敛到 `[GET, POST, PUT, DELETE, OPTIONS]`,`allow_headers` 收敛到 `[Content-Type, X-API-Key, Authorization]`
+- `.env.example` 新增 `ALLOWED_ORIGINS` 配置段,含本地开发 / jd 生产 / 跨域生产三种填法示例
+
+**验证**(本地 uvicorn `:18765` + curl 3 种 Origin):
+
+- `Origin: https://evil.com` → `400 Disallowed CORS origin`,无 `Access-Control-Allow-Origin` 响应头 ✅
+- `Origin: http://localhost:5173` → `200 OK`,`Access-Control-Allow-Origin: http://localhost:5173` ✅
+- 同源无 Origin header → 直接到 handler(无 CORS 干预) ✅
+
+**测试**:`tests/test_cors.py` 4 条(空 allowlist / 授权源 / 未授权源 / PATCH 不在 allow_methods),全绿。全量 pytest 794 passed / 78.81%。
+
+**前向兼容**:jd 生产不填 `ALLOWED_ORIGINS`(空列表)等同于「同源部署」,现有前端访问不受影响。本地 Vite dev 要跨域调 jd 接口的同学需手动填 env(DEPLOYMENT.md §6.3.1 说明)。
+
+---
+
 ### 2026-04-22 · docs · 引入 type:watch label + Auditor M8 豁免规则(STO-54)
 
 **背景**:Auditor M8 指标「`blocked:need-human` > 24h 堆积 > 3 条 = warn」被长期误触发。根因是 3 个 Watch 巡检 issue(STO-38/39/44)按旧 `ops.md` §3.11–3.12 惯例挂 `blocked:need-human` 当「永久 In Progress」路由标记,与 transition-checklist §T5「agent 卡死升级」原意冲突。STO-53 Auditor issue 抛出后 PM 决策方案 A(详见 STO-53 PM comment),拆 STO-54 执行。

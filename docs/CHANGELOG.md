@@ -8,6 +8,14 @@
 
 ---
 
+### 2026-04-22 · fix · CORS 跨域策略收紧 (STO-58)
+
+**影响**:后端接口默认只允许本机同源访问。若你在本地开发用 Vite dev server(`http://localhost:5173`)跨域调 jd 的接口,需要在 `.env` 里填 `ALLOWED_ORIGINS=http://localhost:5173`(示例见 `.env.example`)。
+
+**用户不感知的生产环境**(访问 jd 的前端)不需任何操作 —— 前端 SPA 与 API 同在 :8000,同源无需 CORS。
+
+---
+
 ### 2026-04-22 · fix · 策略对比不再超时 (STO-46)
 
 **问题**:在「策略对比」页勾选多个策略后点「运行对比」,约 10 秒后报 `timeout of 10000ms exceeded`,看不到任何对比结果。

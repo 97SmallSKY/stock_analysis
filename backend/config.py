@@ -87,10 +87,21 @@ class AuthSettings:
 
 
 @dataclass
+class AllowedOriginsSettings:
+    """CORS allowlist (STO-58)。
+
+    空列表 = 同源场景无需 CORS(jd 生产:前端 SPA 和 API 都在 :8000)。
+    非空 = 只允许列出源跨域;未列源 OPTIONS 响应不带 Access-Control-Allow-Origin。
+    """
+    origins: List[str] = field(default_factory=lambda: _list("ALLOWED_ORIGINS"))
+
+
+@dataclass
 class Settings:
     db: DBSettings = field(default_factory=DBSettings)
     ds: DataSourceSettings = field(default_factory=DataSourceSettings)
     auth: AuthSettings = field(default_factory=AuthSettings)
+    cors: AllowedOriginsSettings = field(default_factory=AllowedOriginsSettings)
     log_level: str = field(default_factory=lambda: _get("LOG_LEVEL", "INFO"))
 
 

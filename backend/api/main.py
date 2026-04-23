@@ -87,18 +87,19 @@ def create_app() -> FastAPI:
         version="0.3.0",  # W3 完成
         description="龙虎榜量化交易分析系统 - 数据网关 + 评分 + 策略",
     )
+    from backend.config import get_settings
+    s = get_settings()
+
+    # CORS allowlist (STO-58): 空列表表示同源(jd 生产默认),非空限制到指定源。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=s.cors.origins,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type", "X-API-Key", "Authorization"],
     )
 
     # 初始化数据源管理器(进程内单例)
     from backend.data_gateway.manager import DataSourceManager
-    from backend.config import get_settings
-
-    s = get_settings()
     DataSourceManager.reset_instance()
     mgr = DataSourceManager.get_instance()
     mgr.initialize({

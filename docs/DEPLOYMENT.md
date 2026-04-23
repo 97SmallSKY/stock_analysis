@@ -191,6 +191,25 @@ curl http://localhost:8000/api/data-sources/status | jq '.adapters'
 curl -X POST http://localhost:8000/api/data-sources/adapter/<name>/circuit/close
 ```
 
+### 6.3.1 CORS 配置(STO-58)
+
+`.env` 的 `ALLOWED_ORIGINS` 控制跨域 allowlist(逗号分隔):
+
+- **空值**(jd 生产默认):前端 SPA 和 API 同源于 `:8000`,无需 CORS。未授权跨域源会被 middleware 拦截返回 `400 Disallowed CORS origin`
+- **本地开发**:`ALLOWED_ORIGINS=http://localhost:5173`(Vite dev server 跨域到 `:8000`)
+- **跨域生产**(如把前端部署到 CDN 域):`ALLOWED_ORIGINS=https://yourdomain.com`
+
+`allow_methods` 已收敛到 `GET/POST/PUT/DELETE/OPTIONS`,`allow_headers` 收敛到 `Content-Type/X-API-Key/Authorization`,变更需改 `backend/api/main.py::create_app` 中的 `add_middleware(CORSMiddleware, ...)`。
+
+验证命令:
+
+```bash
+# 未授权源应 400 + 无 ACA-Origin
+curl -H 'Origin: https://evil.com' -X OPTIONS -i 'http://<host>:8000/api/health'
+# 授权源应 200 + ACA-Origin: <origin>
+curl -H 'Origin: http://localhost:5173' -X OPTIONS -i 'http://<host>:8000/api/health'
+```
+
 ### 6.4 盘中快照延迟 / 调度没跑
 APScheduler job 嵌在 API 进程里,过滤其日志:
 ```bash
