@@ -76,10 +76,13 @@ stock_analysis/
 │   ├── core/                 # bootstrap (清代理) / 日志 / metrics / runtime
 │   ├── data_gateway/         # 数据网关(唯一!根目录旧 data_sources/ 已删)
 │   │   ├── adapters/         # akshare / tushare / sina / crawler
-│   │   ├── manager.py        # DataSourceManager
-│   │   ├── priority_config.py
-│   │   ├── cache_manager.py
+│   │   ├── base_adapter.py   # Adapter 抽象 + category 分发
+│   │   ├── category.py       # DataCategory / AdapterName 枚举
+│   │   ├── manager.py        # DataSourceManager(单例)
+│   │   ├── router.py         # 路由 + 优先级链 DEFAULT_PRIORITY_CHAINS
 │   │   ├── circuit_breaker.py
+│   │   ├── failed_registry.py
+│   │   ├── fetch_audit.py
 │   │   └── health_checker.py
 │   ├── db/                   # psycopg2 连接封装(无 ORM)
 │   │   ├── session.py        # pg_conn() 上下文管理器

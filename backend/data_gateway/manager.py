@@ -171,8 +171,11 @@ class DataSourceManager:
             ad = self._router._adapters.get(AdapterName.AKSHARE)
             if ad is not None and hasattr(ad, "get_lhb_seats_for_codes"):
                 return ad.get_lhb_seats_for_codes(trade_date, codes)
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as e:  # noqa: BLE001
+            # STO-68: 打日志避免 fast-path 长期异常静默退化到全量 router (10-100x 降速)
+            logger.warning(
+                "[Manager] akshare fast-path 异常, 降级到 router: %s", e
+            )
         return self._router.fetch_lhb_seats(trade_date)
 
     def get_realtime_quote(self, ts_codes: list) -> Optional[pd.DataFrame]:

@@ -11,6 +11,55 @@
 
 ---
 
+### 2026-04-23 · fix · data_gateway 目录漂移 + manager fast-path 静默吞错(STO-68)
+
+两个实锤并在一起修。
+
+**(A) CLAUDE.md §4 目录漂移**:
+
+issue 指出 `priority_config.py` 不存在(git log 无历史)。实锤 `ls backend/data_gateway/*.py` 发现 `cache_manager.py` 也不存在(同样幽灵)。范围微扩,一次性把整个子树对齐真实磁盘:
+
+原 5 行(2 条死引用 + 漏注路由入口):
+```
+├── manager.py
+├── priority_config.py   ← 不存在
+├── cache_manager.py     ← 不存在
+├── circuit_breaker.py
+└── health_checker.py
+```
+
+改 8 行(全部真实文件 + router 标注「路由+优先级链」):
+```
+├── base_adapter.py   # Adapter 抽象 + category 分发
+├── category.py       # DataCategory / AdapterName 枚举
+├── manager.py        # DataSourceManager(单例)
+├── router.py         # 路由 + 优先级链 DEFAULT_PRIORITY_CHAINS
+├── circuit_breaker.py
+├── failed_registry.py
+├── fetch_audit.py
+└── health_checker.py
+```
+
+**关于 docs 下其他引用**:`docs/CODE_REVIEW.md` / `IMPLEMENTATION_ROADMAP.md` / `重写方案_v2.md` / `多数据源重构方案设计.md` / `DEVLOG.md` 都提到 priority_config.py,但这些是**历史设计文档或事实记录**(CLAUDE.md §2 P1/P3:历史参考 + 与 ADR 冲突以 ADR 为准),它们提 priority_config 是在描述「曾经计划过的」,保留不动。
+
+**(B) `manager.py:174` fast-path 吞错**:
+
+```diff
+-except Exception:  # noqa: BLE001
+-    pass
++except Exception as e:  # noqa: BLE001
++    # STO-68: 打日志避免 fast-path 长期异常静默退化到全量 router (10-100x 降速)
++    logger.warning(
++        "[Manager] akshare fast-path 异常, 降级到 router: %s", e
++    )
+```
+
+`logger` 模块头部 `logger = logging.getLogger(__name__)` 已就绪,无需新 import。fallback 语义完全保留(仍继续走 `return self._router.fetch_lhb_seats(trade_date)`)。按 AC B2:「无需单测,降级语义本就是容错路径,日志是观测即可」。
+
+pytest 812 passed / 78.88%,基线不变。
+
+---
+
 ### 2026-04-23 · refactor · 测试基建 + 脚本 shebang 统一(STO-67)
 
 两处卫生修整合并,PM Tick #17 审计清单。
