@@ -144,7 +144,13 @@ _SEAT_COLS = [
 
 
 def upsert_seats(conn, records: list[LhbRecord], id_map: dict[tuple, int]) -> int:
-    rows = []
+    # STO-72: 兜底按 (ts_code, trade_date, broker_name, direction) 去重,
+    # 防多个 record 的 seats 合并后同键重复触发 ON CONFLICT CardinalityViolation。
+    idx_ts = _SEAT_COLS.index("ts_code")
+    idx_td = _SEAT_COLS.index("trade_date")
+    idx_br = _SEAT_COLS.index("broker_name")
+    idx_dir = _SEAT_COLS.index("direction")
+    row_by_key: dict[tuple, tuple] = {}
     for r in records:
         if not r.seats:
             continue
@@ -154,7 +160,10 @@ def upsert_seats(conn, records: list[LhbRecord], id_map: dict[tuple, int]) -> in
             continue
         for s in r.seats:
             d_row = s.to_db_row(r.ts_code, d, sid)
-            rows.append(tuple(d_row.get(c) for c in _SEAT_COLS))
+            row = tuple(d_row.get(c) for c in _SEAT_COLS)
+            key = (row[idx_ts], row[idx_td], row[idx_br], row[idx_dir])
+            row_by_key[key] = row   # 后入覆盖前入(与 DO UPDATE 语义一致)
+    rows = list(row_by_key.values())
 
     if not rows:
         return 0
