@@ -11,16 +11,13 @@
         </a-space>
       </template>
 
+      <!-- STO-46 UI 重设计(2026-04-23):表单字段从单行并排改为左栏垂直一行一个,
+           与右侧候选策略列表左对齐,视觉更清晰。单仓比例改百分比显示,提交时内部仍按 0-1 小数。 -->
       <a-row :gutter="12">
         <a-col :span="10">
           <a-form-item label="日期范围">
-            <!-- P19.6d (2026-04-20): 日期范围快捷钮。
-                 P19.10: Backtest 需手动触发「运行对比」,不自动 run(成本高),
-                 仅展示当前区间即可,无需 @change -->
             <DateRangeQuickPick v-model="range" />
           </a-form-item>
-        </a-col>
-        <a-col :span="4">
           <a-form-item label="初始资金">
             <a-input-number
               v-model:value="initialCapital"
@@ -30,8 +27,6 @@
               style="width: 100%;"
             />
           </a-form-item>
-        </a-col>
-        <a-col :span="3">
           <a-form-item label="最大持仓">
             <a-input-number
               v-model:value="maxPositions"
@@ -40,18 +35,18 @@
               style="width: 100%;"
             />
           </a-form-item>
-        </a-col>
-        <a-col :span="3">
           <a-form-item label="单仓比例">
             <a-input-number
-              v-model:value="perPositionPct"
-              :min="0.05" :max="1" :step="0.05"
+              v-model:value="perPositionPctInput"
+              :min="5" :max="100" :step="5"
+              :formatter="pctFormatter"
+              :parser="pctParser"
               :disabled="running"
               style="width: 100%;"
             />
           </a-form-item>
         </a-col>
-        <a-col :span="8">
+        <a-col :span="14">
           <a-form-item label="候选策略">
             <!-- STO-47: 策略下拉显示中文名 + hover tooltip 显示 description。
                  用 slot 自定义 option 渲染,外包 a-tooltip 供 hover。 -->
@@ -257,6 +252,22 @@ const range = ref<DateRange>(defaultRange())
 const initialCapital = ref(1_000_000)
 const maxPositions = ref(5)
 const perPositionPct = ref(0.2)
+// STO-46: UI 显示百分比(5~100),内部仍为 0-1 小数供 API 提交
+const perPositionPctInput = computed({
+  get: () => Math.round(perPositionPct.value * 100),
+  set: (v: number) => {
+    // 保护:null/NaN 时保持原值;输入后除 100 得小数
+    if (v === null || v === undefined || Number.isNaN(v)) return
+    perPositionPct.value = +(v / 100).toFixed(4)
+  },
+})
+const pctFormatter = (v: number | undefined): string =>
+  v === undefined || v === null ? '' : `${v}%`
+const pctParser = (v: string | undefined): number => {
+  if (!v) return 0
+  const n = Number(v.replace('%', '').trim())
+  return Number.isNaN(n) ? 0 : n
+}
 const pickedStrategies = ref<string[]>([])
 // STO-47: option 携带富信息,供下拉展示中文名 + hover tooltip
 interface StrategyOption {
