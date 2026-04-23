@@ -45,6 +45,26 @@ pytest 813 passed / 78.96%(+0.05pp,行为不变)。
 
 ---
 
+### 2026-04-23 · refactor · strategies 表 parent_category 大类列(STO-75)
+
+**动机**:STO-48 设计文档评审通过后 PM 拆出第一个子任务:数据模型基础。
+
+**改动**:
+
+- `db/init/06_STO-75_strategy_parent_category.sql`:online DDL(`ADD COLUMN IF NOT EXISTS`)+ 部分索引 + 回填(LHB → EVENT_DRIVEN)
+- `backend/domain/strategy/categories.py`:3 大类常量 + 暂缓/排除分类常量(代码层保留供未来启用,UI 不显示)+ `validate_parent_category()` + `display_name()` 工具函数
+- `tests/test_strategy_categories.py`:12 case 覆盖常量内容 / 白名单校验 / 展示层 fallback
+
+**设计决策**(沿用 STO-48 文档方案 C):
+- 不建 `strategy_category` 字典表,常量维护在 Python 中(柔性,利于 i18n)
+- `parent_category NULL` = 未归类,合法状态
+- `validate_parent_category` 只接受 3 大类(暂缓/排除类从外部 API 写入时拒绝)
+- `display_name` 兜底更宽,暂缓/排除类也返回中文名(DB 历史数据可能有这些值)
+
+pytest 831 passed(+12)/ 79.17%。
+
+---
+
 ### 2026-04-23 · perf · scoring runner N+1 批量化(STO-73)
 
 **动机**:STO-70 审计 A 条,1 个月区间 3000+ 行 × 2 次 SQL/行 ≈ 12000+ 次 DB 往返。
