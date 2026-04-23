@@ -91,6 +91,40 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
 # 技术面评分
 # --------------------------------------------------------------------
 
+# STO-64: 各板块涨跌停板阈值(ST 规则优先判断,涨跌幅满分阈值随之调整)
+LIMIT_UP_RATIO_BY_MARKET: dict[str, float] = {
+    "主板": 0.10,
+    "创业板": 0.20,
+    "科创板": 0.20,
+    "ST": 0.05,
+}
+
+# day_pct 5 档档位因子:limit_up * [0.95, 0.70, 0.50, 0.30, 0.15]
+# 原硬编码为主板 10% 下的 0.095/0.07/0.05/0.03(fallback 0),档次不变,按板块放缩
+_TECH_DAY_PCT_FACTORS = (0.95, 0.70, 0.50, 0.30, 0.15)
+_TECH_DAY_PCT_SCORES = (100.0, 85.0, 70.0, 50.0, 30.0)
+
+
+def _market_of(ts_code: str, name: str | None = None) -> str:
+    """根据 ts_code + name 判断板块(主板 / 创业板 / 科创板 / ST)。
+
+    ST 判定优先:name 含 'ST' / '*ST' 无论是哪个市场都按 5% 涨跌停处理(监管规则)。
+    否则按 ts_code 前缀:
+      - 3 开头(SZ)→ 创业板 20%
+      - 68 开头(SH)→ 科创板 20%
+      - 其余 60/00/002 等 → 主板 10%
+
+    北交所(8 / 92 开头,BJ)已通过 STO-31 在采集层止损,不会进入 lhb_stock_daily。
+    """
+    if name and ("ST" in name.upper()):  # '*ST' 也命中
+        return "ST"
+    code = ts_code.split(".")[0] if ts_code else ""
+    if code.startswith("3"):
+        return "创业板"
+    if code.startswith("68"):
+        return "科创板"
+    return "主板"
+
 
 def compute_tech_score(inp: ScoreInput) -> tuple[float, dict]:
     """返回 (分数 0-100, 明细 dict)。"""
@@ -99,18 +133,16 @@ def compute_tech_score(inp: ScoreInput) -> tuple[float, dict]:
     win = inp.kline_window
 
     # 1. 当日涨跌幅 (权重 0.30)
+    # STO-64: 按板块查涨跌停板,动态阈值避免创业板/ST 打分偏低
+    market = _market_of(str(row.get("ts_code") or ""), row.get("name"))
+    limit_up = LIMIT_UP_RATIO_BY_MARKET[market]
     # pct_change 是小数 0.0523 = 5.23%
     pct = abs(_safe_float(row.get("pct_change")))
-    if pct >= 0.095:
-        s1 = 100.0
-    elif pct >= 0.07:
-        s1 = 85.0
-    elif pct >= 0.05:
-        s1 = 70.0
-    elif pct >= 0.03:
-        s1 = 50.0
-    else:
-        s1 = 30.0
+    s1 = 10.0  # fallback:未触及 15% × limit_up 也算弱势
+    for factor, score in zip(_TECH_DAY_PCT_FACTORS, _TECH_DAY_PCT_SCORES):
+        if pct >= limit_up * factor:
+            s1 = score
+            break
     detail["day_pct"] = s1
 
     # 2. 近 5 日累计涨幅 (权重 0.25)

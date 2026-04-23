@@ -279,3 +279,101 @@ class TestRobustness:
                "float_market_cap": Decimal("1000000")}
         result = compute_score(ScoreInput(lhb_row=row))
         assert 0 <= result["score"] <= 100
+
+
+# --------------------------------------------------------------------
+# STO-64: 板块感知的涨跌停阈值(compute_tech_score day_pct 子项)
+# --------------------------------------------------------------------
+
+
+from backend.scoring.lhb_score import _market_of, LIMIT_UP_RATIO_BY_MARKET
+
+
+class TestMarketDetection:
+    def test_mainboard_sz(self):
+        assert _market_of("000001.SZ", "平安银行") == "主板"
+
+    def test_mainboard_sh(self):
+        assert _market_of("600519.SH", "贵州茅台") == "主板"
+
+    def test_chinext(self):
+        assert _market_of("300750.SZ", "宁德时代") == "创业板"
+
+    def test_star_market(self):
+        assert _market_of("688981.SH", "中芯国际") == "科创板"
+
+    def test_st_flag_overrides_mainboard(self):
+        assert _market_of("000001.SZ", "ST 平安") == "ST"
+
+    def test_st_flag_overrides_chinext(self):
+        assert _market_of("300001.SZ", "*ST 创业") == "ST"
+
+    def test_st_flag_case_insensitive(self):
+        assert _market_of("600001.SH", "st 测试") == "ST"
+
+    def test_no_name_falls_back_to_prefix(self):
+        assert _market_of("688999.SH", None) == "科创板"
+
+    def test_limit_up_table_covers_4_markets(self):
+        assert LIMIT_UP_RATIO_BY_MARKET == {
+            "主板": 0.10, "创业板": 0.20, "科创板": 0.20, "ST": 0.05,
+        }
+
+
+class TestTechScoreByMarket:
+    """4 种板块 × 2 个用例(满分阈值 + 中档阈值),覆盖 STO-64 AC (d)。"""
+
+    def _row(self, ts_code: str, name: str, pct: float) -> dict:
+        return {"ts_code": ts_code, "name": name, "pct_change": pct,
+                "turnover_rate": 0.05, "amount": 100000, "l_net": 0,
+                "l_buy": 0, "l_sell": 0, "float_market_cap": 100000}
+
+    # 主板:10% 涨停。0.095 满分,0.03 触发 50 档
+    def test_mainboard_at_limit(self):
+        s, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("000001.SZ", "平安银行", 0.095)))
+        assert d["day_pct"] == 100.0
+
+    def test_mainboard_mid(self):
+        _, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("000001.SZ", "平安银行", 0.05)))
+        assert d["day_pct"] == 70.0  # 10% * 0.50 = 0.05 触发 70 档
+
+    # 创业板:20% 涨停。0.19 满分(20%*0.95),0.10 触发 70 档(20%*0.50)
+    def test_chinext_at_limit(self):
+        _, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("300750.SZ", "宁德时代", 0.19)))
+        assert d["day_pct"] == 100.0
+
+    def test_chinext_mid(self):
+        _, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("300750.SZ", "宁德时代", 0.10)))
+        assert d["day_pct"] == 70.0
+
+    # 科创板:20% 涨停,同创业板
+    def test_star_at_limit(self):
+        _, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("688981.SH", "中芯国际", 0.19)))
+        assert d["day_pct"] == 100.0
+
+    def test_star_mid(self):
+        _, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("688981.SH", "中芯国际", 0.10)))
+        assert d["day_pct"] == 70.0
+
+    # ST:5% 涨停。0.0475 满分(5%*0.95),0.025 触发 70 档(5%*0.50)
+    def test_st_at_limit(self):
+        _, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("000001.SZ", "ST 平安", 0.0475)))
+        assert d["day_pct"] == 100.0
+
+    def test_st_mid(self):
+        _, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("000001.SZ", "*ST 测试", 0.025)))
+        assert d["day_pct"] == 70.0
+
+    # 回归:主板 9% 不该因为新代码变低(旧阈值 9.5 给 85,新阈值 10%*0.70=7% 给 85,9% 仍在 [7, 9.5) → 85)
+    def test_mainboard_9pct_still_85(self):
+        _, d = compute_tech_score(ScoreInput(
+            lhb_row=self._row("000001.SZ", "平安", 0.09)))
+        assert d["day_pct"] == 85.0

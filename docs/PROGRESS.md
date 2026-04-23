@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-04-23 STO-64**:scoring 技术面阈值改为板块感知。`backend/scoring/lhb_score.py` 加 `LIMIT_UP_RATIO_BY_MARKET = {主板:10% / 创业板:20% / 科创板:20% / ST:5%}` + `_market_of(ts_code, name)` helper(ST 按 name 含 'ST'/'*ST' 优先判定,否则 3/68 前缀 SZ/SH,fallback 主板)。`compute_tech_score` day_pct 档位改 `limit_up × [0.95, 0.70, 0.50, 0.30, 0.15]` 动态阈值,主板行为完全兼容(10%×[0.95...]=原硬编码 0.095/0.07/0.05/0.03);创业板 19% 才给满分 100、ST 4.75% 就能满分,公平性大幅改善。新增 18 条单测(板块识别 9 + tech_score 4×2+1 回归),pytest 812 / 78.88%。
 - **2026-04-23 STO-60**:requirements.txt 错引 ADR-0001 修复(实为 SQLAlchemy,不是 Celery)。grep 确认仓库无 Celery 专项 ADR / PROGRESS 章节 —— **补 ADR-0003 `adopt-apscheduler-not-celery.md`**(背景 / 决策 / 后果 / 何时重评)。`requirements.txt:17` + `docs/DEPLOYMENT.md:8` 注释全部改为引用 ADR-0003。纯文档 0 代码,pytest 794 / 78.81% 不变。
 - **2026-04-23 STO-49**:linear/README.md 瑕疵修订。§3 编号断层修复(把 §3.7 末尾 Worktree 物理隔离小节提级为独立 §3.8,编号 3.1-3.11 连续无跳号);Project ID 硬编码 5 处 → 1 处(仅 L17 §0 速查表保留,其他 4 处 L25/L238/L260/L274 改引用 `PROJECT_ID` 占位 / `见 L17 速查表`)。按 AC 明确不改:§3.10 的 §4.6 引用 / 变更日志 `2026-04-20` 日期。git diff 10 lines ≤ 30,pytest 794 passed。
 - **2026-04-23 STO-62**:前端 limit 边界集中化。新建 `frontend/src/api/limits.ts` 导出 4 常量(LIMIT_MAX_LHB/LHB_SEATS/KLINE_DAILY/KLINE_WEEKLY 分别 1000/2000/5000/2000)+ `assertLimit()` 快失败 guard。4 个 fetchXxx wrapper 接入,超限立即抛 `LimitOutOfRangeError` 不发 HTTP。LhbPnl.vue 的 `limit: 1000` 改读 `LIMIT_MAX_LHB`(其他业务默认分页值 200/500 保留,语义非上限)。CLAUDE.md §11.1 新增第 4 条规约。vitest 150 passed(+10)、typecheck 绿、后端 pytest 794 / 78.81% 不变。

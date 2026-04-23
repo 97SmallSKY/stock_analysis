@@ -11,6 +11,30 @@
 
 ---
 
+### 2026-04-23 · refactor · scoring 技术面阈值板块感知(STO-64)
+
+**背景**:`compute_tech_score` 的涨跌幅 5 档阈值硬编码为 0.095/0.07/0.05/0.03 + fallback,按主板 10% 涨跌停板设计。对 20cm 创业板/科创板 → 15% 强势股给到 100 满分但档次已顶(正常应该 0.19 才满分);对 5cm ST 股 → `pct >= 0.095` 永不触发满分,ST 强势股分数被系统性低估。
+
+**修复**(`backend/scoring/lhb_score.py`):
+
+- 常量 `LIMIT_UP_RATIO_BY_MARKET = {"主板":0.10, "创业板":0.20, "科创板":0.20, "ST":0.05}`
+- 常量因子 `_TECH_DAY_PCT_FACTORS = (0.95, 0.70, 0.50, 0.30, 0.15)` + `_TECH_DAY_PCT_SCORES = (100,85,70,50,30)` fallback=10
+- `_market_of(ts_code, name)` helper:**ST 优先**(name 含 'ST' 或 '*ST',大小写无关)→ 5% 涨跌停;否则 ts_code 前缀 3 → 创业板 / 68 → 科创板 / 其他 → 主板。北交所(8/92 前缀)通过 STO-31 在采集层止损,不会进入 lhb_stock_daily。
+- `compute_tech_score` 循环 `zip(factors, scores)` 取首个满足 `pct >= limit_up*factor` 的档位
+
+**主板回归兼容**:10% × (0.95, 0.70, 0.50, 0.30) = 0.095, 0.07, 0.05, 0.03 — 完全等价旧硬编码;所有旧 tech_score 测试(20 条)0 失败。
+
+**新覆盖**:
+
+- `TestMarketDetection` 9 条:主板 SZ/SH、创业板、科创板、ST 覆盖主板 / ST 覆盖创业板、大小写无关、name=None fallback、常量表完整性
+- `TestTechScoreByMarket` 9 条:4 市场 × 2 档(满分 + 中档)+ 主板 9% 兼容性回归(0.09 仍命中 85 档)
+
+pytest 812 passed(从 794 +18)/ 78.88%(+0.07pp)。
+
+**明确不做**(AC):不改 fund/hist 子评分、不引入 ML 重训权重。
+
+---
+
 ### 2026-04-23 · docs · 补 ADR-0003「用 APScheduler 替代 Celery」+ 修 requirements.txt 错引(STO-60)
 
 **背景**:PM Tick #6 审计 `requirements.txt:17` 发现注释「不使用 Celery(详见 docs/ADR/0001 + docs/progress.md)」错引。ADR-0001 实际讲「放弃 SQLAlchemy + Alembic」,和 Celery 无关。
