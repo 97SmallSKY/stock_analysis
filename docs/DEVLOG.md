@@ -45,6 +45,38 @@ pytest 813 passed / 78.96%(+0.05pp,行为不变)。
 
 ---
 
+### 2026-04-23 · perf · scoring runner N+1 批量化(STO-73)
+
+**动机**:STO-70 审计 A 条,1 个月区间 3000+ 行 × 2 次 SQL/行 ≈ 12000+ 次 DB 往返。
+
+**实现**(`backend/scoring/runner.py` +150 行):
+
+1. **`_load_kline_windows_bulk`**:一次 SQL 拉 `ts_code ANY(%s) AND trade_date BETWEEN [min-150d, max]`,Python 按 ts_code 分组,**bisect.bisect_left/right 切片** O(log N)
+2. **`_load_hist_stats_bulk`**:一次 SQL + `LEAD(close, 3/5) OVER (PARTITION BY ts_code ORDER BY trade_date)` 窗口函数,Python 端按 (ts_code, target_trade_date) 聚合
+3. `run()` 改用两个 bulk loader,单行 `_load_kline_window` / `_load_hist_stats` 保留(legacy,白盒测试仍覆盖)
+
+**SQL 调用次数**:从 2N+2 降到 **常量 4**(lhb + sentiment + kline_bulk + hist_bulk),新增 `test_run_sql_count_is_constant` 断言 `cursor.call_count ≤ 10`。
+
+**jd 真实 benchmark**(区间 2026-03-01~03-31,1395 行):
+
+| 路径 | 总耗时 | kline 分量 | hist 分量 |
+|---|---|---|---|
+| old(N+1) | 29.3s | ~15s | ~14s |
+| new(bulk) | **20.0s** | 16.3s(**IO 主导**) | **0.7s(16x)** |
+| speedup | 1.5x | 1.3x | **16x** |
+
+**未达 AC 10x 门槛**,诚实报告:hist_stats 分量达成(16x),kline 分量被 IO 物理带宽主导(35 万行 kline_daily 传输),单次 SQL vs 多次 SQL 在 IO 主导场景下差距只有连接建立开销。进一步优化需要:**减列 / 拆日期窗口 / 服务端聚合**,属独立子任务(不在 STO-73 AC 范围内)。
+
+**测试**:`TestBulkLoaders` 5 case(空、单 SQL + 切片、聚合正确、超窗口排除、未来日期排除)+ `test_run_sql_count_is_constant`。pytest 819 passed(+6)/ 79.13%(+0.21pp),行为语义不变。
+
+**明确不做**(为将来 STO-XX):
+
+- kline_bulk SELECT 减列(去 amount/turnover_rate 等冷字段)
+- 分批日期窗口(按周而非全区间拉)
+- 服务端 CTE 直接算 tech_score(侵入 scoring 逻辑,非本 issue 范畴)
+
+---
+
 ### 2026-04-23 · docs · 策略分类体系规划设计文档(STO-48)
 
 **不动代码**,仅产出 `docs/design/strategy-taxonomy.md`(189 行)。覆盖 AC 6 条:
