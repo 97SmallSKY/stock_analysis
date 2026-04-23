@@ -11,6 +11,31 @@
 
 ---
 
+### 2026-04-23 · docs · linear/README.md 瑕疵修订(STO-49)
+
+PM Tick #6 审计确认 2 项瑕疵:§3 编号断层(3.7 → 3.9 跳过 3.8)+ Project ID 硬编码 5 处(原 Dev 报 2、PM 实测 4、我 grep 是 5:L17/L25/L238/L260/L274)。
+
+**改动**:
+
+- `docs/prompts/linear/README.md` §3.7 末尾的 `#### 🌳 Worktree 物理隔离(v3.2,并发安全前提)` 小节提级为独立 `### 3.8`。理由:该小节自成一体讨论 worktree 架构(「并发安全前提」),从 §3.7(分支铁律)独立出来语义更清晰。§3.9/3.10/3.11 编号无需改(本就正确)。
+- Project ID 硬编码 5 处 → 1 处:L17 保留(速查表单一事实源);L25(§3.9 叙述)/L238(§3.9 代码块)/L260(条件判断)/L274(assert)全改 `PROJECT_ID` 占位 + 注释「见 L17 速查表」。L246 / L253 的 `PROJECT_ID=...` 变量用法已存在,直接复用语义。
+
+**明确不做**(AC 指明):
+
+- 不改 §3.10 引用 §4.6 的字符串(PM 确认 §4.6 存在于 L291「跨角色授权场景」,引用有效)
+- 不改变更日志 `**2026-04-20** 初版拆分`(PM 确认日期有效)
+
+**验证**:
+
+- `grep -nE '^### 3\.' docs/prompts/linear/README.md` → 3.1-3.11 连续 ✅
+- `grep -c '5c09b8da-a3fc-45be-b866-5dc94cf01523' docs/prompts/linear/README.md` → 1 ≤ 1 ✅
+- `grep -n '§4\.6' docs/prompts/linear/README.md` → L291 命中 ✅
+- `git diff --stat` → 5 insertions(+), 5 deletions(-) ≤ 30 ✅
+
+仅文档,无代码;pytest 794 passed / 78.81% 基线不变。
+
+---
+
 ### 2026-04-23 · refactor · 前端 limit 边界集中化(STO-62)
 
 **背景**:STO-40(P19.13)事故根因是前端 `fetchDailyKline({ limit: 2000 })` 超过后端 `le=1000`,全量日 K 挂 422。修复已做,但**前端硬编码 limit 数字的根因未消除**:`LhbPnl.vue` 继续写 `limit: 1000` 恰好撞上限,任何一边改动都会再翻车。CLAUDE.md §11 原有红线仅靠开发者记忆 grep,无工具 enforce。

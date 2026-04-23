@@ -22,7 +22,7 @@
 
 ⚠️ **分支铁律**:`main` 与 `new-branch` 是**两套独立代码**,禁止跨分支 merge / rebase / cherry-pick。AI 默认工作在 `new-branch`。
 
-⚠️ **多项目提醒**:`Personal Dev` team 下**同时存在多个 project**(当前 2 个:龙虎榜量化交易分析系统 / wqbridge),它们**共用同一个 STO 编号池**,仅靠 issue ID 无法识别归属。本仓库的工作**严格限定在 `龙虎榜量化交易分析系统` 项目**(ID `5c09b8da-a3fc-45be-b866-5dc94cf01523`),详见 §3.9。
+⚠️ **多项目提醒**:`Personal Dev` team 下**同时存在多个 project**(当前 2 个:龙虎榜量化交易分析系统 / wqbridge),它们**共用同一个 STO 编号池**,仅靠 issue ID 无法识别归属。本仓库的工作**严格限定在 `龙虎榜量化交易分析系统` 项目**(ID 见 L17 速查表),详见 §3.9。
 
 ---
 
@@ -129,7 +129,7 @@ new-branch (发布分支,Ops 部署来源)
 3. **Ops JIT merge 部署** —— 部署前最后一刻 `git merge --ff-only origin/<type>/STO-X-<slug>` 到 new-branch,失败即拒
 4. **PM 只读 new-branch** —— 扫代码 / 建 issue 前 `git checkout new-branch`,**禁止** checkout 其他分支
 
-#### 🌳 Worktree 物理隔离(v3.2,并发安全前提)
+### 3.8 🌳 Worktree 物理隔离(v3.2,并发安全前提)
 
 > **背景**:4 个 AI Agent 同时挂机,若共用一个工作区,`git checkout` 会互相践踏(Dev 在写半成品时,Test 把工作区切到另一分支 → Dev 下轮回来写错分支)。
 
@@ -235,7 +235,7 @@ docs/STO-40-claude-md
 ```
 仓库路径:   ~/Develop/personal/stock_analysis
 Project:     龙虎榜量化交易分析系统
-Project ID:  5c09b8da-a3fc-45be-b866-5dc94cf01523
+Project ID:  <PROJECT_ID>    # 见 §0 速查表(L17)
 ```
 
 **本仓库下运行的所有 AI,工作范围严格限定此 project**。
@@ -257,7 +257,7 @@ Project ID:  5c09b8da-a3fc-45be-b866-5dc94cf01523
 3. **按 ID 操作前必先 `get_issue` 验证 `projectId`**
  ```python
  info = get_issue(id="STO-X")
- if info.projectId != "5c09b8da-a3fc-45be-b866-5dc94cf01523":
+ if info.projectId != PROJECT_ID:   # 见 §0 速查表(L17)
      save_comment(id="STO-X", body="⚠️ 此 issue 属于其他 project,本仓库 AI 拒绝操作")
      return  # 跳过,处理下一条
  # 通过验证后才能 save_issue / save_comment
@@ -271,7 +271,7 @@ Project ID:  5c09b8da-a3fc-45be-b866-5dc94cf01523
 # 扫本项目 In Progress,应该只看到 STO 编号中属于龙虎榜的
 issues = list_issues(project=PROJECT_ID, state="In Progress")
 for i in issues:
-    assert i.projectId == "5c09b8da-a3fc-45be-b866-5dc94cf01523"
+    assert i.projectId == PROJECT_ID   # 见 §0 速查表(L17)
 ```
 
 ---
