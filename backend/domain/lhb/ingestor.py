@@ -104,11 +104,18 @@ def upsert_main(conn, records: list[LhbRecord]) -> dict[tuple, int]:
     """写 lhb_stock_daily, 返回 {(ts_code, trade_date) -> id}."""
     if not records:
         return {}
-    rows = []
+    # STO-72: upsert 前按 (ts_code, trade_date) 兜底去重,避免 parser/merge_same_key 的
+    # 边界条件(trade_date 类型混用 / ts_code 前后缀差异)导致 ON CONFLICT DO UPDATE
+    # 命中同一行两次而 CardinalityViolation。后入覆盖前入,与 DO UPDATE 语义一致。
+    idx_ts = _MAIN_COLS.index("ts_code")
+    idx_td = _MAIN_COLS.index("trade_date")
+    row_by_key: dict[tuple, tuple] = {}
     for r in records:
         d = r.to_main_row()
         d["trade_date"] = _norm_date(d["trade_date"])
-        rows.append(tuple(d.get(c) for c in _MAIN_COLS))
+        row = tuple(d.get(c) for c in _MAIN_COLS)
+        row_by_key[(row[idx_ts], row[idx_td])] = row
+    rows = list(row_by_key.values())
 
     col_list = ",".join(_MAIN_COLS)
     update_cols = [c for c in _MAIN_COLS if c not in ("ts_code", "trade_date")]
