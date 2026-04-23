@@ -45,6 +45,23 @@ pytest 813 passed / 78.96%(+0.05pp,行为不变)。
 
 ---
 
+### 2026-04-23 · docs · 策略分类体系规划设计文档(STO-48)
+
+**不动代码**,仅产出 `docs/design/strategy-taxonomy.md`(189 行)。覆盖 AC 6 条:
+
+1. **现状盘点**:`strategies` 表 category 字段现只用过 'LHB';`backend/domain/strategy/` 仅 2 策略(`lhb_hot_money` + `lhb_institution`),都映射到「事件驱动」大类
+2. **聚焦 3 类**:事件驱动(现有 LHB 策略归此)+ 趋势跟踪(新)+ 多因子选股(复用 scoring 模块)
+3. **明确排除**:HFT(频率)/ 做市(牌照)/ 套利(跨市场)/ 期权(数据)
+4. **数据模型方案 C**(推荐):`ALTER TABLE strategies ADD COLUMN parent_category VARCHAR(32)`,两级(大类 + 子类 LHB_HOT_MONEY 等);不建独立字典表(小表 overkill)
+5. **前端分组**:`/backtest` 列表按 parent_category 折叠,`?cat=EVENT_DRIVEN` URL 参数默认展开
+6. **与 backtest/robot 关系**:分类仅影响展示聚合,不影响回测引擎
+
+**子 issue 候选 ≥ 3**:STO-48a(列+迁移)/ STO-48b(前端分组)/ STO-48c(ma_cross_strategy)/ STO-48d(multi_factor_score_top)/ STO-48e(breakout_strategy),待 PM 评审后拆。
+
+**本 issue 按 AC tracking 要求保留到所有子 issue 完成**,不因文档产出转 Done。
+
+---
+
 ### 2026-04-23 · fix · lhb 断档 4 天紧急修复(STO-72 🚨Urgent)
 
 **事故现象**:用户 2026-04-23 午后报告「前端数据只到 2026-04-17」,缺 4-20/4-21/4-22(3 个已收盘工作日)。systemd timer + service 显示 daily_update 正常跑了,但 DB `lhb_stock_daily` 最新 trade_date 停在 4-17,同期 `kline_daily` 和 `market_sentiment` 最新是 4-22(只有 lhb 断)。
