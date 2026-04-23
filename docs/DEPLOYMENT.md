@@ -5,7 +5,7 @@
 > 架构速查(P5.2 后):
 >
 > - **1 个 systemd unit**:`stock_analysis_api.service`(uvicorn + 嵌入的 APScheduler + WebSocket)
-> - **不使用 Celery**(调度走进程内 APScheduler;详见 docs/ADR 与 progress)
+> - **不使用 Celery**(调度走进程内 APScheduler;决策见 `docs/ADR/0003-adopt-apscheduler-not-celery.md`)
 > - **不使用 Alembic**(schema 通过 `db/init/*.sql` 手动 psql 应用;ADR-0001)
 > - **不使用 nginx**(FastAPI 直接 serve `frontend/dist`,一端口通吃;P5.1b)
 > - **PostgreSQL**:远程 `117.72.184.8`(生产默认),本机可选

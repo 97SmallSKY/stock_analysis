@@ -11,6 +11,33 @@
 
 ---
 
+### 2026-04-23 · docs · 补 ADR-0003「用 APScheduler 替代 Celery」+ 修 requirements.txt 错引(STO-60)
+
+**背景**:PM Tick #6 审计 `requirements.txt:17` 发现注释「不使用 Celery(详见 docs/ADR/0001 + docs/progress.md)」错引。ADR-0001 实际讲「放弃 SQLAlchemy + Alembic」,和 Celery 无关。
+
+**排查**(git grep):
+
+- 仓库 ADR 只有 0001(SQLAlchemy)/ 0002(UI 框架),**无 Celery 决策 ADR**
+- `docs/DEPLOYMENT.md:8` 头注释已说「不使用 Celery,详见 docs/ADR 与 progress」但实际 ADR 里无记录,也是错引
+- `docs/PROGRESS.md` grep 无 Celery 专项决策段,只有 STO-7 顺带提及「APScheduler 嵌入 api.service」
+- `docs/IMPLEMENTATION_ROADMAP.md` / `docs/重写方案_v2.md` / `docs/龙虎榜...完整重写方案.md` 有「用 Celery」的旧设计稿,但这些是历史文档(`CLAUDE.md` 的 P3:`重写方案_v2.md` 与 ADR 冲突时以 ADR 为准)
+
+**修复**:
+
+- 新建 `docs/ADR/0003-adopt-apscheduler-not-celery.md`:追认决策(P5.2 期已实现),写清背景(4 个原因:调度场景简单 / 运维复杂度不划算 / 进程内状态共享更顺 / 单机 workers=1)、决策边界(APScheduler 嵌入 api.service、禁止独立 scheduler unit)、正负后果、何时重评(单 job > 5min / 水平扩展 / durable queue / 多租户)。
+- `requirements.txt:17` 注释改引 ADR-0003;顺手把 Redis 用途从「cache」扩到「cache / pubsub」(实际 `runtime.py` 已用 pubsub)。
+- `docs/DEPLOYMENT.md:8` 头注释改引 ADR-0003 精确路径。
+
+**验证**:
+
+- `ls docs/ADR/` → 3 个 ADR(0001/0002/0003)
+- `grep Celery requirements.txt` → 只剩 1 处引用且指 0003
+- `grep -rn 'docs/ADR/0001.*Celery' .` → 0 命中
+
+仅文档,pytest 794 passed / 78.81% 基线。
+
+---
+
 ### 2026-04-23 · docs · linear/README.md 瑕疵修订(STO-49)
 
 PM Tick #6 审计确认 2 项瑕疵:§3 编号断层(3.7 → 3.9 跳过 3.8)+ Project ID 硬编码 5 处(原 Dev 报 2、PM 实测 4、我 grep 是 5:L17/L25/L238/L260/L274)。
