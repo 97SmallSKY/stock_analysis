@@ -11,6 +11,29 @@
 
 ---
 
+### 2026-04-23 · refactor · 测试基建 + 脚本 shebang 统一(STO-67)
+
+两处卫生修整合并,PM Tick #17 审计清单。
+
+**(A) `tests/conftest.py` 改 dotenv**:
+
+- 旧:10 行自实现 `load_env()`,手工 split `=` + `setdefault`,不处理引号/转义/多行值
+- 新:`from dotenv import load_dotenv; load_dotenv(Path(__file__).parent.parent / '.env', override=False)` 一行
+- `override=False` 对齐旧 `setdefault` 语义(已存在 env 不覆盖)
+- `requirements.txt` 早已含 `python-dotenv>=1.0`,无新依赖
+
+**(B) `scripts/daily_update.sh` shebang 统一**:
+
+- 审计前:13 个 .sh 用 `#!/usr/bin/env bash`,唯独 daily_update.sh 用 `#!/bin/bash`
+- macOS Homebrew bash 在 `/opt/homebrew/bin/bash`,`#!/bin/bash` 会失败(本地开发偶发)
+- 修复:统一 `#!/usr/bin/env bash`;现 `head -1 scripts/*.sh | grep '^#!' | sort -u | wc -l = 1`
+
+**验证**:pytest 812 passed / 78.88%(基线不变,.env 加载行为一致);`grep -c load_env tests/conftest.py = 0`。
+
+**明确不做**(AC):不重写 conftest 其他部分、不改 .py 脚本 shebang。
+
+---
+
 ### 2026-04-23 · refactor · scoring 技术面阈值板块感知(STO-64)
 
 **背景**:`compute_tech_score` 的涨跌幅 5 档阈值硬编码为 0.095/0.07/0.05/0.03 + fallback,按主板 10% 涨跌停板设计。对 20cm 创业板/科创板 → 15% 强势股给到 100 满分但档次已顶(正常应该 0.19 才满分);对 5cm ST 股 → `pct >= 0.095` 永不触发满分,ST 强势股分数被系统性低估。

@@ -6,21 +6,11 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from pathlib import Path
 
+from dotenv import load_dotenv
 
-def load_env():
-    """从.env文件加载环境变量"""
-    env_path = Path(__file__).parent.parent / ".env"
-    if env_path.exists():
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    key, value = line.split("=", 1)
-                    os.environ.setdefault(key.strip(), value.strip())
-
-
-# 启动时加载.env
-load_env()
+# STO-67: 改用 python-dotenv(已在 requirements.txt),不再自实现 .env 解析。
+# override=False 对应旧 setdefault 语义:已存在的环境变量不被覆盖。
+load_dotenv(Path(__file__).parent.parent / ".env", override=False)
 
 # 从.env读取数据库配置
 DB_CONFIG = {
