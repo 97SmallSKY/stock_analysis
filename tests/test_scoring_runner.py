@@ -59,20 +59,22 @@ class _Conn:
 
 class TestSimpleLoaders:
     def test_load_lhb_rows_plain(self):
+        # STO-70 C: f-string → 参数化,SQL 固定含 score=0 分支,but only_empty 作为 bool 参数
         cur = _Cur(rows=[{"id": 1, "ts_code": "A.SZ", "trade_date": date(2024, 10, 15)}])
         conn = _Conn([cur])
         rows = R._load_lhb_rows(conn, "20241015", "20241016")
         assert rows[0]["ts_code"] == "A.SZ"
         sql, params = cur.executed[0]
         assert "BETWEEN" in sql
-        assert "score = 0" not in sql      # only_empty=False
+        assert params[-1] is False   # only_empty=False 默认
 
     def test_load_lhb_rows_only_empty(self):
         cur = _Cur(rows=[])
         conn = _Conn([cur])
         R._load_lhb_rows(conn, "20241015", "20241016", only_empty=True)
-        sql, _ = cur.executed[0]
-        assert "score = 0" in sql
+        sql, params = cur.executed[0]
+        assert "score = 0" in sql    # 条件 SQL 永在,靠 bool 参数决定是否生效
+        assert params[-1] is True
 
     def test_load_kline_window(self):
         cur = _Cur(rows=[{"close": 10.0}, {"close": 10.5}])
@@ -193,7 +195,7 @@ def test_run_processes_all(patch_run):
     assert calls["compute"] == 3
     # 中间批次门槛 500 行, 不触发; 末尾 flush 一次
     assert len(calls["batch"]) == 1
-    assert conn.commit.called
+    # STO-70 B: 不再手动 conn.commit(),依赖 pg_conn() 上下文。
 
 
 def test_run_limit(patch_run):

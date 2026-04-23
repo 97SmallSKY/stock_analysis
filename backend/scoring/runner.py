@@ -28,22 +28,20 @@ logger = logging.getLogger(__name__)
 
 
 def _load_lhb_rows(conn, start: str, end: str, only_empty: bool = False):
+    # STO-70 C: 全量参数化,避免 f-string 拼 WHERE(虽然字面量白名单无注入,但不一致)
     s_iso = f"{start[:4]}-{start[4:6]}-{start[6:]}"
     e_iso = f"{end[:4]}-{end[4:6]}-{end[6:]}"
-    where_empty = "AND (score = 0 OR score IS NULL)" if only_empty else ""
+    sql = """
+        SELECT id, ts_code, trade_date, name, pct_change, turnover_rate,
+               amount, l_buy, l_sell, l_net, reason, reason_type,
+               industry, market_cap, float_market_cap
+        FROM lhb_stock_daily
+        WHERE trade_date BETWEEN %s AND %s
+          AND (%s::bool = FALSE OR score = 0 OR score IS NULL)
+        ORDER BY trade_date, ts_code
+    """
     with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            f"""
-            SELECT id, ts_code, trade_date, name, pct_change, turnover_rate,
-                   amount, l_buy, l_sell, l_net, reason, reason_type,
-                   industry, market_cap, float_market_cap
-            FROM lhb_stock_daily
-            WHERE trade_date BETWEEN %s AND %s
-            {where_empty}
-            ORDER BY trade_date, ts_code
-            """,
-            (s_iso, e_iso),
-        )
+        cur.execute(sql, (s_iso, e_iso, bool(only_empty)))
         return cur.fetchall()
 
 
@@ -209,14 +207,14 @@ def run(
                 ),
             })
             if idx % 500 == 0:
+                # STO-70 B: 不手动 conn.commit(),依赖 pg_conn() 上下文最终原子 commit。
+                # 中途失败语义改为:整个区间回滚(与 CLAUDE.md §9.1 一致)。
                 _update_scores(conn, updates)
-                conn.commit()
                 logger.info(f"[scoring] 进度 {idx}/{len(rows)}")
                 updates = []
 
         if updates:
             _update_scores(conn, updates)
-            conn.commit()
 
         logger.info(f"[scoring] 完成: {len(rows)} 行已评分")
         return len(rows)

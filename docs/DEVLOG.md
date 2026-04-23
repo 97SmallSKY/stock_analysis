@@ -11,6 +11,40 @@
 
 ---
 
+### 2026-04-23 · refactor · scoring/runner.py 事务 + SQL 参数化(STO-70 B/C)
+
+**背景**:STO-70 审计提出 3 个问题 A/B/C。本 PR 做 B+C(安全 ≈20 行),A(N+1 批量化 + 10x benchmark)影响 ≈100 行且需真实数据 benchmark,风险更高,**拆子任务 STO-73** 独立做(Backlog 待 PM 流转),不在本 commit 顺手扛。
+
+**B · 删除手动 conn.commit()**:
+
+`pg_conn()` 上下文管理器已负责 commit/rollback(CLAUDE.md §9.1 铁律)。`runner.py:213 / 219` 的 `conn.commit()` 违反该铁律——中途 raise 时已 commit 的批次无法回滚,一致性被破坏。删掉两处后,整个区间要么全 commit 要么全回滚,符合原子语义。
+
+**C · `_load_lhb_rows` f-string → 参数化**:
+
+旧:
+```python
+where_empty = "AND (score = 0 OR score IS NULL)" if only_empty else ""
+cur.execute(f"...{where_empty}", (s_iso, e_iso))
+```
+
+新:
+```python
+cur.execute(
+    "... AND (%s::bool = FALSE OR score = 0 OR score IS NULL) ...",
+    (s_iso, e_iso, bool(only_empty))
+)
+```
+
+当 `only_empty=False` 时 `%s::bool = FALSE` 为真,短路求值直接满足 `WHERE`,行为等价于无过滤。`only_empty=True` 时 `%s::bool = FALSE` 为假,进入实际过滤。对齐 `backend/db/writer.py` 全参数化惯例。
+
+**测试更新**:2 条白盒测试断言旧 SQL 字面量和 `conn.commit.called`,与实现细节耦合。改为行为断言(断言传入 `bool` 参数位),11/11 绿。
+
+pytest 813 passed / 78.96%(+0.05pp,行为不变)。
+
+**留给 STO-73**:AC A 的 N+1 批量化 + benchmark。我在 STO-70 comment 里请 PM 流转 STO-73 到 Ready for Dev。
+
+---
+
 ### 2026-04-23 · fix · lhb 断档 4 天紧急修复(STO-72 🚨Urgent)
 
 **事故现象**:用户 2026-04-23 午后报告「前端数据只到 2026-04-17」,缺 4-20/4-21/4-22(3 个已收盘工作日)。systemd timer + service 显示 daily_update 正常跑了,但 DB `lhb_stock_daily` 最新 trade_date 停在 4-17,同期 `kline_daily` 和 `market_sentiment` 最新是 4-22(只有 lhb 断)。
