@@ -63,7 +63,21 @@
         </a-col>
       </a-row>
 
+      <a-empty
+        v-if="!historyLoading && historyRows.length === 0"
+        description="还没有回测任务。跑第一个回测看看你的策略表现。"
+        class="sto36-empty"
+      >
+        <a-space direction="vertical" :size="8">
+          <a-button type="primary" @click="router.push('/backtest')">跑第一个回测</a-button>
+          <router-link to="/changelog">
+            <a-typography-link>查看使用说明 →</a-typography-link>
+          </router-link>
+        </a-space>
+      </a-empty>
+
       <a-table
+        v-else
         :data-source="historyRows"
         :columns="historyColumns"
         :loading="historyLoading"

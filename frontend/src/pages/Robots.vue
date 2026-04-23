@@ -16,7 +16,18 @@
         </a-space>
       </template>
 
-      <a-empty v-if="!loading && robots.length === 0" description="暂无机器人注册" />
+      <a-empty
+        v-if="!loading && robots.length === 0"
+        description="还没有机器人。创建第一个开始模拟炒股吧。"
+        class="sto36-empty"
+      >
+        <a-space direction="vertical" :size="8">
+          <a-button type="primary" @click="openCreate">创建第一个机器人</a-button>
+          <router-link to="/changelog">
+            <a-typography-link>查看使用说明 →</a-typography-link>
+          </router-link>
+        </a-space>
+      </a-empty>
 
       <a-table
         v-else
