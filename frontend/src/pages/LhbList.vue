@@ -110,6 +110,13 @@ import 'ag-grid-community/styles/ag-theme-quartz.css'
 import { useLhbStore } from '@/stores/lhb'
 import type { LhbRow, LhbListParams, LhbSeatRow } from '@/api/lhb'
 import { fmtAmountWan, fmtPct, fmtDate, rankClass } from '@/utils/format'
+import { findTerm } from '@/utils/glossary'
+
+// STO-83: ag-grid 列 header 悬浮原生 tooltip(术语 brief)。
+// ag-grid 不接入 Vue 组件以保持轻量,Ant Table 那边用 TermTooltip ⓘ 图标。
+function termTooltip(key: string): string | undefined {
+  return findTerm(key)?.brief
+}
 import { useStockDrill } from '@/composables/useStockDrill'
 import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
 import { defaultRange, toYmd, type DateRange } from '@/utils/date_range'
@@ -159,7 +166,7 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
     valueFormatter: (p) => fmtDate(p.value as string | null),
     sortable: true,
   },
-  { headerName: '上榜原因', field: 'reason', flex: 1, minWidth: 200, tooltipField: 'reason' },
+  { headerName: '上榜原因', field: 'reason', flex: 1, minWidth: 200, tooltipField: 'reason', headerTooltip: termTooltip('reason') },
   {
     headerName: '收盘', field: 'close', width: 100, type: 'numericColumn',
     valueFormatter: (p) => (p.value != null ? Number(p.value).toFixed(2) : '-'),
@@ -173,21 +180,25 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
   {
     headerName: '买入 (万)', field: 'buy_amount', width: 120, type: 'numericColumn',
     valueFormatter: (p) => fmtAmountWan(p.value as number | null),
+    headerTooltip: termTooltip('buy_amount'),
   },
   {
     headerName: '卖出 (万)', field: 'sell_amount', width: 120, type: 'numericColumn',
     valueFormatter: (p) => fmtAmountWan(p.value as number | null),
+    headerTooltip: termTooltip('sell_amount'),
   },
   {
     headerName: '净额 (万)', field: 'net_amount', width: 120, type: 'numericColumn',
     valueFormatter: (p) => fmtAmountWan(p.value as number | null),
     cellStyle: (p) => ({ color: (p.value ?? 0) >= 0 ? '#d4380d' : '#389e0d' }),
     sortable: true,
+    headerTooltip: termTooltip('net_amount'),
   },
   {
     headerName: '评分', field: 'score', width: 90, type: 'numericColumn',
     valueFormatter: (p) => (p.value != null ? Number(p.value).toFixed(1) : '-'),
     sortable: true,
+    headerTooltip: termTooltip('score'),
   },
   // P16.5: T+1 / T+5 次日收益 (依赖 with_tn=true)
   {
@@ -200,6 +211,7 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
       fontFamily: 'SF Mono, Menlo, monospace',
     }),
     sortable: true,
+    headerTooltip: termTooltip('t1_pnl_pct'),
   },
   {
     headerName: 'T+5', field: 't5_pnl_pct', width: 90, type: 'numericColumn',
@@ -211,6 +223,7 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
       fontFamily: 'SF Mono, Menlo, monospace',
     }),
     sortable: true,
+    headerTooltip: termTooltip('t5_pnl_pct'),
   },
 ])
 
