@@ -43,3 +43,4 @@ frontend/.vite/
 
 # Agent worktrees (Linear + /loop unattended setup)
 .worktrees/
+CLAUDE.local.md
