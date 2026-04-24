@@ -97,6 +97,31 @@ pytest 831 passed(+12)/ 79.17%。
 
 ---
 
+### 2026-04-24 · devops · systemd hook 自动回填 STO-38 巡检 comment(STO-78)
+
+**痛点**:STO-38(Watch · daily 巡检)依赖 Ops agent 主动扫日志,2 天内漏跑 2 次(STO-71/77 连续 AUDIT),设计模式必然漏。
+
+**方案**:利用 systemd unit 间的 `OnSuccess=/OnFailure=` 依赖声明,daily.service 结束时**自动**触发一个 oneshot notify.service → shell 脚本 → curl Linear commentCreate mutation。
+
+**4 个交付件**:
+
+1. `scripts/linear_comment.sh` — 通用 Linear commentCreate 封装。用 python3 json.dumps 做字符串转义(避免 shell 引号地狱),**永远 exit 0**(即使 curl 失败 / 无 token,hook 失败不能影响主业务)
+2. `scripts/daily_update_notify.sh` — notify 主逻辑。从 `logs/daily_update.log` grep `daily_update END` 那行 + tail -5 构造 markdown body,调 linear_comment.sh
+3. `deploy/systemd/stock_analysis_daily_notify.service` — oneshot unit,`ExecStart=/bin/bash scripts/daily_update_notify.sh ${STATE}`,不 enable(只被 hook 触发)
+4. `deploy/systemd/stock_analysis_daily.service` — 加 `OnSuccess=stock_analysis_daily_notify.service` + `OnFailure=stock_analysis_daily_notify.service` 两行
+
+**Token 管理**:`LINEAR_API_TOKEN` 走 `/etc/default/stock_analysis`(已有 EnvironmentFile 注入渠道),root:root 0600,不入 git(`.env*` 和 `/etc/default/*` 都不在仓库)。
+
+**部署文档**:`docs/ops/daily-auto-notify.md` 4 步(注入 token / 安装 unit / 手测 / 验证),含故障排查表。
+
+**失败语义防递归**:notify.service 不指向自己(OnFailure 不存在 chain),shell 脚本 exit 0,避免「notify 挂了还触发 notify」死循环。
+
+**AC 偏差说明**:AC 写的目录是 `ops/units/stock_analysis_daily.service`,实际项目用 `deploy/systemd/`(CLAUDE.md §6 部署路径)。按实际走,AC 此点已在 comment 说明。AC 还提「systemctl --user」,但实际 daily.service 是 system unit(User=root),保持 system 路径。
+
+pytest 831 / 79.17% 基线不变(无代码改动)。
+
+---
+
 ### 2026-04-23 · docs · opencli 数据源预研(STO-76)
 
 **背景**:服务器数据源不稳定(Tushare DOWN / AkShare 偶发),用户建议评估 opencli astock 作为补充。

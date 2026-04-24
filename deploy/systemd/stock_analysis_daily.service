@@ -2,6 +2,9 @@
 Description=stock_analysis daily pm data update (LHB + seats + sentiment + kline + score)
 After=network-online.target postgresql.service
 Wants=network-online.target
+# STO-78: 结束后 hook 自动往 Linear STO-38 留巡检 comment(OnSuccess/OnFailure 各一次)
+OnSuccess=stock_analysis_daily_notify.service
+OnFailure=stock_analysis_daily_notify.service
 
 [Service]
 Type=oneshot

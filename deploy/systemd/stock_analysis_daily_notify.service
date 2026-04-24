@@ -1,0 +1,25 @@
+# STO-78: 由 stock_analysis_daily.service OnSuccess/OnFailure 触发,
+# 自动往 Linear STO-38(Watch · daily 巡检)留 comment,替代 Ops 人工扫日志。
+#
+# 不设 [Install]:本 unit 只被 hook 触发,不单独 enable。
+
+[Unit]
+Description=stock_analysis daily auto-notify hook (STO-78 → Linear STO-38)
+# Requires: LINEAR_API_TOKEN 在 /etc/default/stock_analysis 已配(和主 service 共用)
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/stock_analysis
+EnvironmentFile=-/etc/default/stock_analysis
+# %RESULT%  — systemd 环境变量:"success" / "failure" / "timeout" 等
+# 但 %RESULT% 只在 OnFailure 里有语义,OnSuccess 会是 "success"。
+# 简化:直接传 %n(unit name)由 notify.sh 默认按 success 处理,
+# 如果主 service failed 会在 OnFailure 路径被 systemd 以 "failure" 触发。
+ExecStart=/bin/bash /root/stock_analysis/scripts/daily_update_notify.sh ${STATE:-success}
+# hook 失败不传染
+SuccessExitStatus=0 1 2
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stock_daily_notify
+TimeoutStartSec=60
