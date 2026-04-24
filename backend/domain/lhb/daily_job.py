@@ -268,6 +268,26 @@ def run_range(
             _maybe_close(conn)
 
     logger.info(f"[lhb.daily_job] 区间完成: {summary}")
+
+    # STO-9: fail > 0 触发告警, 让 Ops 可见
+    if summary["fail"] > 0:
+        try:
+            from backend.core.alerts import send_alert, AlertLevel, AlertCategory
+            level = AlertLevel.CRITICAL if summary["done_days"] == 0 else AlertLevel.ERROR
+            send_alert(
+                level,
+                AlertCategory.BATCH_JOB,
+                source="lhb.daily_job.run_range",
+                message=f"龙虎榜批任务失败 {summary['fail']}/{summary['total_days']} 天",
+                details={
+                    "summary": summary,
+                    "first_day": trade_days[0] if trade_days else None,
+                    "last_day": trade_days[-1] if trade_days else None,
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     return summary
 
 

@@ -11,6 +11,31 @@
 
 ---
 
+### 2026-04-24 · devops · 数据采集告警落盘(STO-9)
+
+**背景**:`base_adapter._safe_request` 已经有完整的指数退避重试 + 硬超时 + 熔断链路,但「永久失败」的外部可见性只有 `logger.error`,Ops 拉不到结构化信号。STO-9 AC 剩下的实打实是**告警通道**。
+
+**方案**(最小闭环,不引新依赖):
+
+1. `db/init/07_STO-9_alert_log.sql` —— 新建 `alert_log` 表(level/category/source/message/details JSONB),3 个索引(created_at / level / ack+created)。
+2. `backend/core/alerts.py` —— `send_alert(level, category, source, message, details, conn_factory=None)`:落 DB + 打日志;DB 失败静默降级,不阻塞主流程。`AlertLevel` = INFO/WARN/ERROR/CRITICAL,`AlertCategory` = NETWORK/API/BATCH_JOB/DATA_QUALITY。
+3. `circuit_breaker.py::record_failure` —— CLOSED→OPEN 时 `_emit_trip_alert()`:CRITICAL + NETWORK,details 含 failure_count/threshold/last_error。异常包起来不影响状态机。
+4. `domain/lhb/daily_job.py::run_range` —— 末尾 `summary["fail"] > 0` 触发告警:全失败 → CRITICAL,部分失败 → ERROR,source=`lhb.daily_job.run_range`,details 含 summary + 日期区间。
+
+**没做的**(明确边界):
+- webhook 分发留给 Ops 层写 cron 轮询 `alert_log`(AC 原文「最小方案用 alert_log 表」,已覆盖)。
+- scoring/runner 尚未接入(其本身有 `raise` 传递错误,调用方已感知);后续若需要 Ops 零打扰可在 `cli` 层包一层。
+
+**测试**(`tests/test_alerts.py`,9 条):
+- send_alert 三种路径(正常写库 / details=None / DB 抛异常静默降级)
+- 4 种 level 都能 dispatch
+- 熔断 trip 触发 1 次 alert,alert 抛异常不污染状态机
+- run_range 全失败→CRITICAL / 部分失败→ERROR / 全成功→不告警
+
+pytest 840 passed + 覆盖率 79.29%。
+
+---
+
 ### 2026-04-23 · refactor · scoring/runner.py 事务 + SQL 参数化(STO-70 B/C)
 
 **背景**:STO-70 审计提出 3 个问题 A/B/C。本 PR 做 B+C(安全 ≈20 行),A(N+1 批量化 + 10x benchmark)影响 ≈100 行且需真实数据 benchmark,风险更高,**拆子任务 STO-73** 独立做(Backlog 待 PM 流转),不在本 commit 顺手扛。
