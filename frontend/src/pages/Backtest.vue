@@ -11,71 +11,67 @@
         </a-space>
       </template>
 
-      <!-- STO-46 UI 重设计(2026-04-23):表单字段从单行并排改为左栏垂直一行一个,
-           与右侧候选策略列表左对齐,视觉更清晰。单仓比例改百分比显示,提交时内部仍按 0-1 小数。 -->
-      <a-row :gutter="12">
-        <a-col :span="10">
-          <a-form-item label="日期范围">
-            <DateRangeQuickPick v-model="range" />
-          </a-form-item>
-          <a-form-item label="初始资金">
-            <a-input-number
-              v-model:value="initialCapital"
-              :step="100000"
-              :min="10000"
-              :disabled="running"
-              style="width: 100%;"
-            />
-          </a-form-item>
-          <a-form-item label="最大持仓">
-            <a-input-number
-              v-model:value="maxPositions"
-              :min="1" :max="20"
-              :disabled="running"
-              style="width: 100%;"
-            />
-          </a-form-item>
-          <a-form-item label="单仓比例">
-            <a-input-number
-              v-model:value="perPositionPctInput"
-              :min="5" :max="100" :step="5"
-              :formatter="pctFormatter"
-              :parser="pctParser"
-              :disabled="running"
-              style="width: 100%;"
-            />
-          </a-form-item>
-        </a-col>
-        <a-col :span="14">
-          <a-form-item label="候选策略">
-            <!-- STO-47: 策略下拉显示中文名 + hover tooltip 显示 description。
-                 用 slot 自定义 option 渲染,外包 a-tooltip 供 hover。 -->
-            <a-select
-              v-model:value="pickedStrategies"
-              mode="multiple"
-              :options="strategyOptions"
-              placeholder="选 >= 1 个策略"
-              :disabled="running"
-              style="width: 100%;"
-              :filter-option="filterStrategyOption"
-            >
-              <template #option="{ value, label, description, category }">
-                <a-tooltip
-                  :title="description || label"
-                  placement="right"
-                  :mouse-enter-delay="0.3"
-                >
-                  <div class="strategy-opt">
-                    <span class="strategy-opt__label">{{ label }}</span>
-                    <span v-if="category" class="strategy-opt__tag">{{ category }}</span>
-                    <span class="strategy-opt__code">{{ value }}</span>
-                  </div>
-                </a-tooltip>
-              </template>
-            </a-select>
-          </a-form-item>
-        </a-col>
-      </a-row>
+      <!-- STO-46 UI v3(2026-04-24 用户反馈):移除左右分栏 a-row/a-col,
+           改为纵向单栏流式布局,全部字段(含候选策略)都左对齐到同一列,
+           一行一个 form-item。输入控件宽度 420px 防止过宽。 -->
+      <div class="backtest-form-vertical">
+        <a-form-item label="日期范围">
+          <DateRangeQuickPick v-model="range" />
+        </a-form-item>
+        <a-form-item label="初始资金">
+          <a-input-number
+            v-model:value="initialCapital"
+            :step="100000"
+            :min="10000"
+            :disabled="running"
+            style="width: 420px;"
+          />
+        </a-form-item>
+        <a-form-item label="最大持仓">
+          <a-input-number
+            v-model:value="maxPositions"
+            :min="1" :max="20"
+            :disabled="running"
+            style="width: 420px;"
+          />
+        </a-form-item>
+        <a-form-item label="单仓比例">
+          <a-input-number
+            v-model:value="perPositionPctInput"
+            :min="5" :max="100" :step="5"
+            :formatter="pctFormatter"
+            :parser="pctParser"
+            :disabled="running"
+            style="width: 420px;"
+          />
+        </a-form-item>
+        <a-form-item label="候选策略">
+          <!-- STO-47: 策略下拉显示中文名 + hover tooltip 显示 description。 -->
+          <a-select
+            v-model:value="pickedStrategies"
+            mode="multiple"
+            :options="strategyOptions"
+            placeholder="选 >= 1 个策略"
+            :disabled="running"
+            style="width: 100%; max-width: 720px;"
+            :filter-option="filterStrategyOption"
+          >
+            <template #option="{ value, label, description, category }">
+              <a-tooltip
+                :title="description || label"
+                placement="right"
+                :mouse-enter-delay="0.3"
+              >
+                <div class="strategy-opt">
+                  <span class="strategy-opt__label">{{ label }}</span>
+                  <span v-if="category" class="strategy-opt__tag">{{ category }}</span>
+                  <span class="strategy-opt__code">{{ value }}</span>
+                </div>
+              </a-tooltip>
+            </template>
+          </a-select>
+        </a-form-item>
+      </div>
 
       <!-- STO-46: 勾选后给出视觉提示,引导用户点「运行对比」。
            若 canRun=false,tooltip 会告诉用户缺什么(日期/策略)。 -->
