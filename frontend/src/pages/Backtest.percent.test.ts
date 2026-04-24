@@ -87,8 +87,10 @@ describe('STO-46 源文件契约', () => {
     }
   })
 
-  it('右栏候选策略 a-col span 扩到 14', () => {
-    // 原 :span="8" 改 14,验证布局 migrate
-    expect(src).toMatch(/<a-col :span="14">\s*<a-form-item label="候选策略">/)
+  it('v3:全部 form-item 纵向单栏,候选策略也在同一个 .backtest-form-vertical 容器', () => {
+    // v3(2026-04-24 用户反馈):移除左右分栏 a-col,全部纵向左对齐
+    expect(src).toContain('backtest-form-vertical')
+    // 候选策略 form-item 不再嵌套在 a-col 里
+    expect(src).not.toMatch(/<a-col :span="\d+">\s*<a-form-item label="候选策略">/)
   })
 })
