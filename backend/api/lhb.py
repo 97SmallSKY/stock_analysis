@@ -49,7 +49,7 @@ def list_lhb(
     reason: Optional[str] = Query(None, description="上榜原因模糊匹配"),
     net_amount_min: Optional[float] = Query(None, description="最小净买入"),
     score_min: Optional[float] = Query(None, description="最小评分"),
-    order_by: str = Query("trade_date", pattern="^(trade_date|net_amount|score)$"),
+    order_by: str = Query("trade_date", pattern="^(trade_date|net_amount|score|pct_change)$"),
     order_desc: bool = Query(True),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -93,6 +93,7 @@ def list_lhb(
         "trade_date": "trade_date",
         "net_amount": "l_net",
         "score": "score",
+        "pct_change": "pct_change",
     }
     order_col = ORDER_COL.get(order_by, "trade_date")
 
@@ -137,6 +138,8 @@ def list_lhb(
         SELECT l.ts_code,
                si.name AS name,
                l.trade_date, l.reason,
+               l.close_price AS close,
+               l.pct_change,
                l.l_buy   AS buy_amount,
                l.l_sell  AS sell_amount,
                l.l_net   AS net_amount,
