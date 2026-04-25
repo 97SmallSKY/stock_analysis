@@ -11,6 +11,16 @@
 
 ---
 
+### 2026-04-25 · fix · cli.py `--n-days` 默认值同步 DEFAULT_N_DAYS(STO-91)
+
+**背景**:STO-81 给 `lhb_tn_price` 加了 T+3/7/10,`tn_price_backfill.DEFAULT_N_DAYS` 改为 `(1,2,3,5,7,10)`,但 `backend/cli.py` 的 argparse `--n-days` default 仍是 `"1,2,3,5,10"`,不带参数调用时 N=7 不会被 backfill。
+
+**修复**:一行 default 同步 + 新增 `tests/test_cli_defaults.py`,用正则从 `cli.py` 源文件 grep default 断言与 `DEFAULT_N_DAYS` tuple 相等,**防再次脱节**(比断言 argparse 对象更稳,不依赖重构出 `build_parser`)。
+
+pytest 845 passed / 78.90%。
+
+---
+
 ### 2026-04-24 · devops · 数据采集告警落盘(STO-9)
 
 **背景**:`base_adapter._safe_request` 已经有完整的指数退避重试 + 硬超时 + 熔断链路,但「永久失败」的外部可见性只有 `logger.error`,Ops 拉不到结构化信号。STO-9 AC 剩下的实打实是**告警通道**。
