@@ -11,6 +11,24 @@
 
 ---
 
+### 2026-04-25 · feature · 回测任务 DB 持久化(STO-88)
+
+**背景**:STO-80 拆出第一片(80a)。原 `backend/api/backtest.py` 用 in-memory `TaskStore`,服务重启丢任务历史。AC 字面要求新建 `backtest_runs` 表 + APScheduler + `/api/backtest/run`/`/history`。
+
+**自主决策(C')**:开工后发现 `backtest_tasks/results` 表(已在 schema 里但未启用)有 FK strategies + BIGSERIAL,与现有 uuid hex task_id 不兼容,改造 (B) 方案成本超预期。改用轻量持久化:
+
+- `db/init/08_STO-88_backtest_runs.sql` 新建轻量表(text task_id pk + status + config jsonb + result_json jsonb + 时间戳),3 个索引
+- `_persist_run()` helper:`INSERT ... ON CONFLICT (task_id) DO UPDATE`,DB 失败仅 warning 不抛(回测主流程不受影响)
+- `submit_backtest()` 写 PENDING 行;`_default_runner()` 完成时写 SUCCESS/FAILED + result_json/error_message
+- `/api/backtest/history` 已存在(P7.1),AC (d) 该端点本就满足
+- BackgroundTasks 不换 APScheduler:单进程异步已足够,引调度器只增运维负担
+
+**测试**:5 case 覆盖 PENDING/SUCCESS/FAILED 各路径 + DB 失败降级 + submit 端到端 INSERT 触发。pytest 850 passed(+5)/ 78.91%。
+
+**部署提醒**:Ops 部署前必须手动 apply `db/init/08_STO-88_backtest_runs.sql`,否则首次 submit 会触发 warning(不阻断回测,但持久化失效)。
+
+---
+
 ### 2026-04-25 · fix · cli.py `--n-days` 默认值同步 DEFAULT_N_DAYS(STO-91)
 
 **背景**:STO-81 给 `lhb_tn_price` 加了 T+3/7/10,`tn_price_backfill.DEFAULT_N_DAYS` 改为 `(1,2,3,5,7,10)`,但 `backend/cli.py` 的 argparse `--n-days` default 仍是 `"1,2,3,5,10"`,不带参数调用时 N=7 不会被 backfill。
