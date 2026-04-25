@@ -21,6 +21,10 @@ export interface LhbRow {
   t1_limit_up?: boolean | null
   t5_pnl_pct?: number | null
   t5_high_pct?: number | null
+  // STO-81: T+3 / T+7 / T+10 未来收益
+  t3_pnl_pct?: number | null
+  t7_pnl_pct?: number | null
+  t10_pnl_pct?: number | null
 }
 
 export interface LhbListResp {

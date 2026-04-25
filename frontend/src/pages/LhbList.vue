@@ -214,6 +214,17 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
     headerTooltip: termTooltip('t1_pnl_pct'),
   },
   {
+    headerName: 'T+3', field: 't3_pnl_pct', width: 90, type: 'numericColumn',
+    valueFormatter: (p) =>
+      (p.value != null ? (Number(p.value) * 100).toFixed(2) + '%' : '-'),
+    cellStyle: (p) => ({
+      color: p.value == null ? 'rgba(0,0,0,.25)' :
+        Number(p.value) >= 0 ? '#d4380d' : '#389e0d',
+      fontFamily: 'SF Mono, Menlo, monospace',
+    }),
+    sortable: true,
+  },
+  {
     headerName: 'T+5', field: 't5_pnl_pct', width: 90, type: 'numericColumn',
     valueFormatter: (p) =>
       (p.value != null ? (Number(p.value) * 100).toFixed(2) + '%' : '-'),
@@ -224,6 +235,28 @@ const columnDefs = computed<ColDef<LhbRow>[]>(() => [
     }),
     sortable: true,
     headerTooltip: termTooltip('t5_pnl_pct'),
+  },
+  {
+    headerName: 'T+7', field: 't7_pnl_pct', width: 90, type: 'numericColumn',
+    valueFormatter: (p) =>
+      (p.value != null ? (Number(p.value) * 100).toFixed(2) + '%' : '-'),
+    cellStyle: (p) => ({
+      color: p.value == null ? 'rgba(0,0,0,.25)' :
+        Number(p.value) >= 0 ? '#d4380d' : '#389e0d',
+      fontFamily: 'SF Mono, Menlo, monospace',
+    }),
+    sortable: true,
+  },
+  {
+    headerName: 'T+10', field: 't10_pnl_pct', width: 90, type: 'numericColumn',
+    valueFormatter: (p) =>
+      (p.value != null ? (Number(p.value) * 100).toFixed(2) + '%' : '-'),
+    cellStyle: (p) => ({
+      color: p.value == null ? 'rgba(0,0,0,.25)' :
+        Number(p.value) >= 0 ? '#d4380d' : '#389e0d',
+      fontFamily: 'SF Mono, Menlo, monospace',
+    }),
+    sortable: true,
   },
 ])
 

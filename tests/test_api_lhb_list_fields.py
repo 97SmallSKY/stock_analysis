@@ -117,3 +117,37 @@ def test_list_rejects_unknown_order_by(client, monkeypatch):
     r = cli.get("/api/lhb?order_by=close&limit=5")
     # close 不在白名单 → 422
     assert r.status_code == 422
+
+
+def test_list_with_tn_returns_t3_t7_t10(client, monkeypatch):
+    """STO-81: with_tn=true 返回 T+3 / T+7 / T+10 三列。"""
+    cli, _ = client
+    # count + 主查询两次,模拟返回含 tN 字段
+    rows = [(
+        "000001.SZ", "平安", __import__('datetime').date(2026, 4, 20), "R",
+        10.0, 0.02, 1.0, 1.0, 1.0, 1.0, 50.0, None,
+        0.01, False, 0.03, 0.05, 0.02, 0.07, 0.10,
+    )]
+    cols = [
+        "ts_code", "name", "trade_date", "reason",
+        "close", "pct_change",
+        "buy_amount", "sell_amount", "net_amount", "turnover",
+        "score", "score_detail",
+        "t1_pnl_pct", "t1_limit_up", "t3_pnl_pct",
+        "t5_pnl_pct", "t5_high_pct",
+        "t7_pnl_pct", "t10_pnl_pct",
+    ]
+    fake_pg, holder = _make_pg([([(1,)], ["count"]), (rows, cols)])
+    monkeypatch.setattr("backend.api.lhb.pg_conn", fake_pg)
+
+    r = cli.get("/api/lhb?with_tn=true&limit=5")
+    assert r.status_code == 200, r.text
+    row = r.json()["rows"][0]
+    assert row.get("t3_pnl_pct") == pytest.approx(0.03)
+    assert row.get("t7_pnl_pct") == pytest.approx(0.07)
+    assert row.get("t10_pnl_pct") == pytest.approx(0.10)
+    sql = holder["conn"].cur.last_sql
+    # 确保 SQL 确实 JOIN 了 tn3 / tn7 / tn10
+    assert "tn3.pnl_pct AS t3_pnl_pct" in sql
+    assert "tn7.pnl_pct AS t7_pnl_pct" in sql
+    assert "tn10.pnl_pct AS t10_pnl_pct" in sql

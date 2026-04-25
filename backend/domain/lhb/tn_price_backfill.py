@@ -24,7 +24,7 @@ from backend.db.session import pg_conn
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_N_DAYS = (1, 2, 3, 5, 10)
+DEFAULT_N_DAYS = (1, 2, 3, 5, 7, 10)
 
 # 主板涨跌停幅度近似 10%, 实际 ST/创业板/科创板不同, 留给上层按 ts_code 前缀扩展
 LIMIT_PCT = 0.099

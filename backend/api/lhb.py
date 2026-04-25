@@ -122,17 +122,24 @@ def list_lhb(
 
     order_dir = "DESC" if order_desc else "ASC"
     # P10.1: LEFT JOIN stock_info 补股票简称 name;stock_info 为空也不影响主查询
-    # P16.5: with_tn=True 时 LEFT JOIN lhb_tn_price 透出 T+1 / T+5 收益
+    # P16.5: with_tn=True 时 LEFT JOIN lhb_tn_price 透出 T+N 收益
+    # STO-81: 扩展 T+3 / T+7 / T+10 三列
     tn_select = ""
     tn_joins = ""
     if with_tn:
         tn_select = (
             ", tn1.pnl_pct AS t1_pnl_pct, tn1.is_limit_up AS t1_limit_up,"
-            "  tn5.pnl_pct AS t5_pnl_pct, tn5.high_pct AS t5_high_pct"
+            "  tn3.pnl_pct AS t3_pnl_pct,"
+            "  tn5.pnl_pct AS t5_pnl_pct, tn5.high_pct AS t5_high_pct,"
+            "  tn7.pnl_pct AS t7_pnl_pct,"
+            "  tn10.pnl_pct AS t10_pnl_pct"
         )
         tn_joins = (
             " LEFT JOIN lhb_tn_price tn1 ON tn1.stock_daily_id=l.id AND tn1.n_day=1"
+            " LEFT JOIN lhb_tn_price tn3 ON tn3.stock_daily_id=l.id AND tn3.n_day=3"
             " LEFT JOIN lhb_tn_price tn5 ON tn5.stock_daily_id=l.id AND tn5.n_day=5"
+            " LEFT JOIN lhb_tn_price tn7 ON tn7.stock_daily_id=l.id AND tn7.n_day=7"
+            " LEFT JOIN lhb_tn_price tn10 ON tn10.stock_daily_id=l.id AND tn10.n_day=10"
         )
     sql = f"""
         SELECT l.ts_code,
