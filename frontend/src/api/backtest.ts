@@ -103,3 +103,26 @@ export async function fetchBacktestHistory(
   const { data } = await http.get<BacktestHistoryResp>('/api/backtest/history', { params })
   return data
 }
+
+// STO-89 / STO-80b: 提交单策略回测任务 (POST /api/backtest)
+export interface SubmitBacktestReq {
+  strategy_name: string
+  start_date: string             // YYYY-MM-DD
+  end_date: string
+  initial_capital?: number
+  params?: Record<string, unknown>
+  max_positions?: number
+  per_position_pct?: number
+}
+
+export interface SubmitBacktestResp {
+  task_id: string
+  status: string
+}
+
+export async function submitBacktest(
+  req: SubmitBacktestReq,
+): Promise<SubmitBacktestResp> {
+  const { data } = await http.post<SubmitBacktestResp>('/api/backtest', req)
+  return data
+}

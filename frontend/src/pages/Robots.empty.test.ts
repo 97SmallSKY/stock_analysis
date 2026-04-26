@@ -18,9 +18,10 @@ describe('STO-36 空态 CTA 文案', () => {
     expect(src).toContain('/changelog')
   })
 
-  it('BacktestRun.vue 包含「跑第一个回测」CTA', () => {
+  // STO-89 (2026-04-26): BacktestRun.vue 拆成 form-only,历史页内容迁移到 BacktestHistory.vue
+  it('BacktestHistory.vue 包含「跑第一个回测」CTA', () => {
     const src = fs.readFileSync(
-      path.resolve(__dirname, 'BacktestRun.vue'), 'utf8',
+      path.resolve(__dirname, 'BacktestHistory.vue'), 'utf8',
     )
     expect(src).toContain('跑第一个回测')
     expect(src).toContain("router.push('/backtest')")
@@ -36,9 +37,9 @@ describe('STO-36 空态 CTA 文案', () => {
     expect(src).toMatch(/<a-table[\s\S]*?v-else/)
   })
 
-  it('BacktestRun 非空时渲染 table(回归)', () => {
+  it('BacktestHistory 非空时渲染 table(回归)', () => {
     const src = fs.readFileSync(
-      path.resolve(__dirname, 'BacktestRun.vue'), 'utf8',
+      path.resolve(__dirname, 'BacktestHistory.vue'), 'utf8',
     )
     expect(src).toMatch(/historyRows\.length === 0/)
     expect(src).toMatch(/<a-table[\s\S]*?v-else/)

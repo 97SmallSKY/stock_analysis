@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-04-26 STO-89**:回测前端 80b 落地(拆 BacktestRun 为表单页 + 新增 BacktestHistory)。STO-80 子 issue 第 2 片,依赖 STO-88 (已 deploy ok) 后端 API。改动:(1) `frontend/src/api/backtest.ts` +`submitBacktest(req)` 调 POST /api/backtest;(2) `BacktestHistory.vue` 从原 BacktestRun.vue 拷贝(class 改名 + 加「提交新回测」跳 /backtest-run 按钮),保留所有 KPI/列表/排序功能;(3) `BacktestRun.vue` 重写为 form-only 页(策略下拉/起止日期/初始资金/持仓参数,`canSubmit` computed + `disabledReason` 校验 5 种场景 YYYY-MM-DD/起止反向/资金过低);(4) `router/index.ts` +`/backtest-history` 路由;(5) `App.vue` 菜单加「回测历史」项;(6) `Robots.empty.test.ts` 的 BacktestRun CTA 断言迁到 BacktestHistory.vue;(7) 新增 `BacktestRun.test.ts` 8 case(校验 5 种 + 提交成功/失败/canSubmit=false 保护)。vitest 175 passed (+8)/ typecheck 绿 / pytest 862 / 79.26% 不变。
 - **2026-04-26 STO-94**:市场情绪自动补齐 + 落后告警(High type:data-bug)。根因初判:sentiment.run 走 _load_trading_days(只读 trade_calendar),若 trade_calendar 滞后则 days=[],静默 return 0 ⇒ 情绪采集无告警滞后。改动 3 处:
 1. `sentiment.py` 新增 `_check_sentiment_drift()` 内置检查,每次 run 末尾对比 `max(market_sentiment.trade_date)` vs `max(lhb_records.trade_date)`,差值 > 1 天则 `send_alert(ERROR, DATA_QUALITY)`(d 监控,AC 原要求 journalctl 报 ERROR 但核心是 alert_log 落盘 + Ops 巡检);
 2. `sentiment.py` 新增 `catchup()` 函数,CLI 加 `ingest sentiment-catchup` 子命令,自动扫描 LHB 与 sentiment max date 差值,调用 `run()` 补齐缺失日(b 监控);
