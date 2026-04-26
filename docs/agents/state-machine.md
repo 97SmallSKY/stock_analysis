@@ -18,6 +18,11 @@
 | Ready to Deploy | `In Review` | `4bb1e0c1-5f34-4ee7-bbb3-a98b1fc94943` | started | Dev → Ops |
 | Done | `Done` | `84365c14-55a8-49c4-8c98-12ee4c03764f` | completed | Ops |
 
+> ⚠️ **STO-95 教训**(2026-04-26):调 `list_issues(state=...)` 时,**必须用 Linear state 名**(右列),**不能用语义槽名**(左列)。
+> 例如 `state="Ready to Deploy"` 永远返回 [] —— 该名字在 Linear 里不存在,正确查询是 `state="In Review"`。
+> 此 bug 导致 STO-94 在 In Review 卡 12h+ 无人部署,因 Ops 稳态循环查询用了语义槽名。
+> 任何 agent 的 prompt / 本地 CLAUDE.local.md 引用 state 字符串前,**先核对此表右列**。
+
 ## 非主线 state（不参与 T1~T6 流转，仅用于终态归档）
 
 | Linear state | id | type | 用途 |

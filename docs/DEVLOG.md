@@ -11,6 +11,18 @@
 
 ---
 
+### 2026-04-26 · fix · Linear state 名映射陷阱(STO-95)
+
+**根因**:Ops 稳态循环 `list_issues(state="Ready to Deploy")` 永远返回 [],导致 STO-94 卡 In Review 12h+。本 team 实际不存在名为 `Ready to Deploy` 的 state —— 它只是 `docs/agents/transition-checklist.md` §5 的语义槽名,Linear 实名是 `In Review`。
+
+**修复**:
+- `.worktrees/sa-ops/CLAUDE.local.md` line 130 `state = "Ready to Deploy"` → `state = "In Review"`(私有文件不入 git)
+- `docs/agents/state-machine.md` 5 槽映射表后追加 P0 警告,强调调 `list_issues` 必须用右列 Linear 名而非左列语义槽
+
+**预防**:`state-machine.md` 已加显眼 ⚠️ 块,后续 agent prompt 引用 state 字符串前都该先核对此表。
+
+---
+
 ### 2026-04-25 · feature · 回测任务 DB 持久化(STO-88)
 
 **背景**:STO-80 拆出第一片(80a)。原 `backend/api/backtest.py` 用 in-memory `TaskStore`,服务重启丢任务历史。AC 字面要求新建 `backtest_runs` 表 + APScheduler + `/api/backtest/run`/`/history`。
