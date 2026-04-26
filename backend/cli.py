@@ -62,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--from", dest="start", default="20240101")
     st.add_argument("--to", dest="end", default=_today())
 
+    # STO-94: sentiment-catchup 子命令
+    stc = ingest_sub.add_parser("sentiment-catchup", help="补齐 market_sentiment 落后 LHB 的缺口")
+
     sc = sub.add_parser("score", help="龙虎榜评分批量计算")
     sc.add_argument("--from", dest="start", default="20240101")
     sc.add_argument("--to", dest="end", default=_today())
@@ -110,6 +113,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.dataset == "sentiment":
             from backend.ingest import sentiment
             sentiment.run(args.start, args.end)
+        elif args.dataset == "sentiment-catchup":
+            from backend.ingest import sentiment
+            stats = sentiment.catchup()
+            print("[sentiment-catchup] stats:", stats)
     elif args.cmd == "score":
         from backend.scoring import runner as score_runner
         score_runner.run(

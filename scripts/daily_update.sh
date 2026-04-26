@@ -60,6 +60,8 @@ run_step 1200 lhb_seats python -m backend.cli ingest lhb-seats --from "$TODAY" -
 
 # 3) 市场情绪 — 轻量,5 分钟
 run_step 300 sentiment python -m backend.cli ingest sentiment --from "$TODAY" --to "$TODAY"
+# 3b) STO-94: sentiment 落后 LHB 时自动补齐(kline 步骤放在后面,catchup 用已存在的 kline_daily 反算)
+run_step 600 sentiment-catchup python -m backend.cli ingest sentiment-catchup
 
 # 4) 日K线(全市场增量) — 重量级(5000 只 × akshare),90 分钟
 run_step 5400 kline python -m backend.cli ingest kline --from "$TODAY" --to "$TODAY" --codes all

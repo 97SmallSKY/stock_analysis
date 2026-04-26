@@ -8,6 +8,16 @@
 
 ---
 
+### 2026-04-26 · fix · 市场情绪自动补齐 + 落后告警 (STO-94)
+
+修复用户反馈的「市场情绪日期与龙虎榜不同步」(LHB 4-24,情绪 4-17 滞后 7 天)问题:
+
+- 新增 `python -m backend.cli ingest sentiment-catchup` 命令,自动扫描 `lhb_records` 与 `market_sentiment` 最新日期差,补齐缺失日;部署后 Ops 会跑一次填补 4-18~4-24
+- `daily_update.sh` 在每日采集后自动调用 catchup,即便偶发某天失败,次日也会自动补回
+- 每次 sentiment 采集后内部检查日期落后 LHB 是否 > 1 天,超出阈值 `journalctl` 报 ERROR 并落 `alert_log`,Ops 巡检可见
+
+---
+
 ### 2026-04-26 · fix · 指数快照接口加重试 + 缓存,远端瞬断不再 502 (STO-87)
 
 Dashboard 顶部的「上证 / 深证 / 创业板 / 沪深300」实时指数,在东财数据源瞬断时不再显示 502 错误:
