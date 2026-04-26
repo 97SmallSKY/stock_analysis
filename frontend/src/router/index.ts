@@ -38,6 +38,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '回测历史' },
   },
   {
+    path: '/backtest-history/:taskId',
+    name: 'backtest-detail',
+    component: () => import('@/pages/BacktestDetail.vue'),
+    meta: { title: '回测详情' },
+  },
+  {
     path: '/reports',
     name: 'reports',
     component: () => import('@/pages/Reports.vue'),

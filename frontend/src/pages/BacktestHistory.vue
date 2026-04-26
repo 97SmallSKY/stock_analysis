@@ -87,7 +87,10 @@
         size="small"
       >
         <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'status'">
+          <template v-if="column.key === 'task_id'">
+            <a @click="router.push(`/backtest-history/${record.task_id}`)">{{ record.task_id }}</a>
+          </template>
+          <template v-else-if="column.key === 'status'">
             <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
           </template>
           <template v-else-if="column.key === 'total_return'">

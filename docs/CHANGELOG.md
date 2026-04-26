@@ -8,6 +8,17 @@
 
 ---
 
+### 2026-04-26 · feature · 回测详情页:收益/回撤曲线 + 无未来函数架子 (STO-90)
+
+回测历史列表点击 task_id 跳新的详情页:
+
+- `/backtest-history/:taskId` 显示核心 KPI(总收益/年化/最大回撤/夏普)
+- **收益曲线**(nav)+ **回撤曲线**(基于 peak 推导)两张 echarts line 图,支持缩放
+- **买卖点架子**:后端当前 `result` 只存 nav_series,trades 详情未落盘,此处是无未来函数截断函数(`utils/backtest_truncate.ts`)+ 单测 7 case 覆盖,后端补齐 trades_sample 后直接接入 markPoint
+- 历史页 `task_id` 列变蓝色可点击链接
+
+---
+
 ### 2026-04-26 · feature · 回测任务页拆分 + 提交表单 (STO-89)
 
 「回测任务」菜单从单一历史列表页拆成 2 个页面:

@@ -126,3 +126,54 @@ export async function submitBacktest(
   const { data } = await http.post<SubmitBacktestResp>('/api/backtest', req)
   return data
 }
+
+// STO-90 / STO-80c: 回测任务详情 (GET /api/backtest/{task_id})
+export interface NavPoint {
+  date: string                    // YYYY-MM-DD
+  nav: number                     // 相对初始资金单位净值,起点 1.0
+  total_assets: number
+  cash: number
+  position_value: number
+  position_count: number
+  pnl_daily: number
+  pnl_daily_pct: number
+  trade_count: number
+  buy_amount: number
+  sell_amount: number
+}
+
+export interface BacktestTaskDetail {
+  task_id: string
+  strategy_name: string
+  start_date: string
+  end_date: string
+  initial_capital: number
+  status: string
+  progress: number
+  error_message: string | null
+  started_at: string | null
+  finished_at: string | null
+  elapsed_seconds: number | null
+  params: Record<string, unknown>
+  result: {
+    final_assets?: number
+    total_return?: number
+    trade_count?: number
+    nav_series?: NavPoint[]
+  } | null
+  metrics: {
+    total_return?: number
+    annual_return?: number
+    sharpe_ratio?: number
+    max_drawdown?: number
+    win_rate?: number
+    n_trades?: number
+  } | null
+}
+
+export async function fetchBacktestTask(
+  taskId: string,
+): Promise<BacktestTaskDetail> {
+  const { data } = await http.get<BacktestTaskDetail>(`/api/backtest/${encodeURIComponent(taskId)}`)
+  return data
+}
