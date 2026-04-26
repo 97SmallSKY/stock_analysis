@@ -145,22 +145,22 @@ def _merge_db_fill(external_row: dict, db_row: dict | None) -> dict:
 
 
 def catchup() -> dict:
-    """STO-94 (b): 自动补齐 market_sentiment 与 lhb_records 之间的缺口。
+    """STO-94 (b): 自动补齐 market_sentiment 与 lhb_stock_daily 之间的缺口。
 
-    策略:取 `lhb_records.max(trade_date)` 作为目标终点,
+    策略:取 `lhb_stock_daily.max(trade_date)` 作为目标终点,
     `market_sentiment.max(trade_date) + 1 天` 作为起点;
     若起点 > 终点则无需补。
 
     返回 dict: {need_catchup, start, end, inserted}
     """
     with pg_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT MAX(trade_date) FROM lhb_records")
+        cur.execute("SELECT MAX(trade_date) FROM lhb_stock_daily")
         lhb_max = (cur.fetchone() or (None,))[0]
         cur.execute("SELECT MAX(trade_date) FROM market_sentiment")
         sent_max = (cur.fetchone() or (None,))[0]
 
     if lhb_max is None:
-        logger.info("[ingest.sentiment.catchup] lhb_records 为空,跳过")
+        logger.info("[ingest.sentiment.catchup] lhb_stock_daily 为空,跳过")
         return {"need_catchup": False, "start": None, "end": None, "inserted": 0}
 
     from datetime import timedelta as _td
@@ -266,7 +266,7 @@ def run(start: str, end: str, skip_existing: bool = True) -> int:
 
 
 def _check_sentiment_drift(conn) -> None:
-    """检查 market_sentiment 最新日期 vs lhb_records 最新日期,滞后 > 1 天则告警。
+    """检查 market_sentiment 最新日期 vs lhb_stock_daily 最新日期,滞后 > 1 天则告警。
 
     任何异常(连接/SQL/类型)都吞掉,告警监控不能阻塞主流程。
     """
@@ -276,7 +276,7 @@ def _check_sentiment_drift(conn) -> None:
             cur.execute("SELECT MAX(trade_date) FROM market_sentiment")
             row = cur.fetchone()
             sentiment_max = row[0] if row and row[0] else None
-            cur.execute("SELECT MAX(trade_date) FROM lhb_records")
+            cur.execute("SELECT MAX(trade_date) FROM lhb_stock_daily")
             row = cur.fetchone()
             lhb_max = row[0] if row and row[0] else None
 
