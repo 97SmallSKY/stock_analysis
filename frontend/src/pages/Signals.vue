@@ -70,7 +70,7 @@
                   {{ record.score != null ? Number(record.score).toFixed(1) : '-' }}
                 </a-tag>
               </template>
-              <template v-else-if="column.key === 't1_pnl_pct' || column.key === 't5_pnl_pct'">
+              <template v-else-if="column.key === 't1_pnl_pct' || column.key === 't3_pnl_pct' || column.key === 't5_pnl_pct' || column.key === 't7_pnl_pct' || column.key === 't10_pnl_pct'">
                 <span
                   v-if="record[column.key] != null"
                   :style="{ color: (record[column.key] ?? 0) >= 0 ? '#d4380d' : '#389e0d', fontFamily: 'SF Mono, Menlo, monospace' }"
@@ -328,14 +328,26 @@ const columns = [
     sorter: (a: LhbRow, b: LhbRow) => (a.score ?? -1) - (b.score ?? -1),
     defaultSortOrder: 'descend' as const,
   },
-  // P16.5: T+1 / T+5 次日收益 (lhb_tn_price JOIN)
+  // P16.5 + STO-103: T+1 / T+3 / T+5 / T+7 / T+10 次日收益 (lhb_tn_price JOIN)
   {
-    title: 'T+1', key: 't1_pnl_pct', dataIndex: 't1_pnl_pct', width: 90, align: 'right' as const,
+    title: 'T+1', key: 't1_pnl_pct', dataIndex: 't1_pnl_pct', width: 80, align: 'right' as const,
     sorter: (a: LhbRow, b: LhbRow) => (a.t1_pnl_pct ?? -999) - (b.t1_pnl_pct ?? -999),
   },
   {
-    title: 'T+5', key: 't5_pnl_pct', dataIndex: 't5_pnl_pct', width: 90, align: 'right' as const,
+    title: 'T+3', key: 't3_pnl_pct', dataIndex: 't3_pnl_pct', width: 80, align: 'right' as const,
+    sorter: (a: LhbRow, b: LhbRow) => (a.t3_pnl_pct ?? -999) - (b.t3_pnl_pct ?? -999),
+  },
+  {
+    title: 'T+5', key: 't5_pnl_pct', dataIndex: 't5_pnl_pct', width: 80, align: 'right' as const,
     sorter: (a: LhbRow, b: LhbRow) => (a.t5_pnl_pct ?? -999) - (b.t5_pnl_pct ?? -999),
+  },
+  {
+    title: 'T+7', key: 't7_pnl_pct', dataIndex: 't7_pnl_pct', width: 80, align: 'right' as const,
+    sorter: (a: LhbRow, b: LhbRow) => (a.t7_pnl_pct ?? -999) - (b.t7_pnl_pct ?? -999),
+  },
+  {
+    title: 'T+10', key: 't10_pnl_pct', dataIndex: 't10_pnl_pct', width: 90, align: 'right' as const,
+    sorter: (a: LhbRow, b: LhbRow) => (a.t10_pnl_pct ?? -999) - (b.t10_pnl_pct ?? -999),
   },
   { title: '评分明细', key: 'score_detail', width: 90 },
 ]
