@@ -11,6 +11,16 @@
 
 ---
 
+### 2026-04-27 · docs · save_issue 必带 project 铁律 · 全 agent 同步(STO-96)
+
+**根因**:Ops `list_issues(project=PROJECT_ID)` 漏扫 STO-94(背景见 STO-94 / STO-95)。规约层只在 README §3.9 出现,各 agent prompt 的代码示例没贯彻,Ops 实际查询时 `project` 过滤行为不一致。
+
+**修复**:`docs/prompts/linear/{dev,ops,test}.md` 中的 `save_issue(...)` 示例统一注入 `project=PROJECT_ID`(README 中讲解段落保留对照示例不动)。本地 `.worktrees/sa-{dev,ops,audit}/CLAUDE.local.md` 同步加铁律段(私有文件不入 git,各 agent 下次 /loop 自动加载)。
+
+**预防**:Auditor 后续可加扫描:`grep -E 'save_issue\\(' | grep -v 'project='` 命中即告警。
+
+---
+
 ### 2026-04-26 · fix · Linear state 名映射陷阱(STO-95)
 
 **根因**:Ops 稳态循环 `list_issues(state="Ready to Deploy")` 永远返回 [],导致 STO-94 卡 In Review 12h+。本 team 实际不存在名为 `Ready to Deploy` 的 state —— 它只是 `docs/agents/transition-checklist.md` §5 的语义槽名,Linear 实名是 `In Review`。
