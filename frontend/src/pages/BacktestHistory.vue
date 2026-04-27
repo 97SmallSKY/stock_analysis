@@ -97,17 +97,17 @@
           </template>
           <template v-else-if="column.key === 'total_return'">
             <span :style="{ color: (record.total_return ?? 0) >= 0 ? '#d4380d' : '#389e0d' }">
-              {{ fmtPct(record.total_return) }}
+              {{ fmtFractionPct(record.total_return) }}
             </span>
           </template>
           <template v-else-if="column.key === 'max_drawdown'">
-            <span style="color: #389e0d;">{{ fmtPct(record.max_drawdown) }}</span>
+            <span style="color: #389e0d;">{{ fmtFractionPct(record.max_drawdown) }}</span>
           </template>
           <template v-else-if="column.key === 'sharpe'">
             {{ record.sharpe != null ? Number(record.sharpe).toFixed(2) : '-' }}
           </template>
           <template v-else-if="column.key === 'win_rate'">
-            {{ fmtPct(record.win_rate) }}
+            {{ fmtFractionPct(record.win_rate) }}
           </template>
           <template v-else-if="column.key === 'elapsed_seconds'">
             {{ record.elapsed_seconds != null ? record.elapsed_seconds.toFixed(1) + ' s' : '-' }}
@@ -128,7 +128,7 @@ import {
   listStrategies, fetchBacktestHistory,
   type BacktestHistoryRow,
 } from '@/api/backtest'
-import { fmtPct } from '@/utils/format'
+import { fmtFractionPct } from '@/utils/format'
 import { summarizeHistory, buildHistoryRowClickHandler } from '@/utils/backtest_history'
 
 const router = useRouter()

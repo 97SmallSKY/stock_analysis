@@ -25,6 +25,14 @@ export function fmtPct(v: number | null | undefined, digits = 2): string {
   return `${v.toFixed(digits)}%`
 }
 
+// STO-102: 把 0~1 分数(如 0.2591)格式化为 `25.91%`。后端回测 metrics
+// (total_return / max_drawdown / win_rate) 存的是分数,而 fmtPct 直接拼 `%`
+// 会少两位,与详情页 `pctOr(v)=v*100` 不一致。
+export function fmtFractionPct(v: number | null | undefined, digits = 2): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return '-'
+  return `${(v * 100).toFixed(digits)}%`
+}
+
 /**
  * STO-30: 股票价格自适应精度格式化。
  *

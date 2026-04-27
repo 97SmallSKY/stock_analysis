@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  fmtAmount, fmtPct, fmtNumber, fmtDate, healthColor, cbColor, rankClass,
+  fmtAmount, fmtPct, fmtFractionPct, fmtNumber, fmtDate, healthColor, cbColor, rankClass,
   fmtAmountWan, formatPrice,
 } from './format'
 
@@ -32,6 +32,26 @@ describe('fmtPct', () => {
   })
   it('空值', () => {
     expect(fmtPct(null)).toBe('-')
+  })
+})
+
+describe('fmtFractionPct (STO-102)', () => {
+  it('分数 → 百分比 (×100)', () => {
+    expect(fmtFractionPct(0.2591)).toBe('25.91%')
+    expect(fmtFractionPct(0.3077)).toBe('30.77%')
+    expect(fmtFractionPct(-0.2591)).toBe('-25.91%')
+  })
+  it('0 / 1 边界', () => {
+    expect(fmtFractionPct(0)).toBe('0.00%')
+    expect(fmtFractionPct(1)).toBe('100.00%')
+  })
+  it('指定位数', () => {
+    expect(fmtFractionPct(0.12345, 3)).toBe('12.345%')
+  })
+  it('空值 → -', () => {
+    expect(fmtFractionPct(null)).toBe('-')
+    expect(fmtFractionPct(undefined)).toBe('-')
+    expect(fmtFractionPct(NaN)).toBe('-')
   })
 })
 
