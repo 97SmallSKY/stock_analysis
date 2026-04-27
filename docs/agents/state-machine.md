@@ -25,7 +25,9 @@
 | `Canceled` | `9f1c208f-25d5-4756-b95a-2f6e9c9ef09e` | canceled | 需求取消 — PM 决策，加 `blocked:need-human` 后由人工拍板 |
 | `Duplicate` | `9332d6aa-db06-459c-ba16-e514fe275203` | canceled | 与其他 issue 重复 — PM 在 comment 指明 duplicate-of |
 
-## 标签清单（5 个标准 label 已就位）
+## 标签清单
+
+### 核心 6 个（transition-checklist.md T1-T5 直接引用）
 
 | Label | id | 用途 |
 |---|---|---|
@@ -33,13 +35,22 @@
 | `type:feature` | `3cda0595-c173-494a-949d-ea5ab3ed0b23` | 新特性 → Dev 写 CHANGELOG.md |
 | `type:bug` | `24d60901-25bc-4352-8232-2cbed9465e35` | bug → Dev 写 CHANGELOG.md |
 | `type:chore` | `8e26c8fb-f266-4495-a652-fe4ef47dec26` | 重构/文档/基建 → Dev 写 DEVLOG.md |
-| `blocked:need-human` | `bcc3949f-71d1-4af3-99ec-76bdf2da7a31` | agent 升级人工 |
+| `type:watch` | `d4f62119-a3a0-483b-a269-c763c734ec69` | Watch 巡检类 issue,永久 In Progress,Auditor M8 豁免 |
+| `blocked:need-human` | `bcc3949f-71d1-4af3-99ec-76bdf2da7a31` | agent 卡死升级人工(红色紧急,火灾) |
 
-## 首轮 bootstrap 结果（2026-04-21）
+### 扩展 4 个（2026-04-25 新增）
 
-- ✅ 5 个标准 label 已存在，无需 `create_issue_label`
-- ✅ 7 个 Linear state 已映射到 5 语义槽 + 2 终态归档
-- ✅ sentinel issue `[PM] bootstrap done` 已创建（state=Backlog，label=`auto:stock-analysis`+`type:chore`）
+| Label | id | 用途 |
+|---|---|---|
+| `needs:human-decision` | `03bfdd9a-9828-464f-824e-20f044d7d979` | 正常流程等用户拍板的非紧急决策(粉色,不紧急);见 CLAUDE.local.md §6 场景 |
+| `domain:lhb` | `65e034a8-3c92-4fe0-9dcf-96164fd4b85e` | 龙虎榜业务域 issue,便于按域切片统计/路由 |
+| `verified:human` | `5e9714ac-da28-4289-966f-ac2c1e71ec51` | 人工已验证通过,与自动化 test-passed 区分 |
+| `type:data-bug` | `41c677f4-d29f-4706-b29d-a994b86d5231` | 数据质量 bug(数据源错/字段单位/缺失行),Dev 需查 ingest/domain 层 |
+
+## Bootstrap 结果
+
+- 2026-04-21：6 核心 label 到位,5 语义槽 + 2 终态归档映射完成
+- 2026-04-25：补 4 扩展 label(needs:human-decision / domain:lhb / verified:human / type:data-bug)
 
 ---
 
