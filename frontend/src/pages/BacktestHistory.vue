@@ -84,6 +84,8 @@
         :loading="historyLoading"
         :pagination="{ pageSize: 20, showSizeChanger: false }"
         :row-key="(r: BacktestHistoryRow) => r.task_id"
+        :custom-row="customRow"
+        :row-class-name="() => 'history-row-clickable'"
         size="small"
       >
         <template #bodyCell="{ column, record }">
@@ -127,7 +129,7 @@ import {
   type BacktestHistoryRow,
 } from '@/api/backtest'
 import { fmtPct } from '@/utils/format'
-import { summarizeHistory } from '@/utils/backtest_history'
+import { summarizeHistory, buildHistoryRowClickHandler } from '@/utils/backtest_history'
 
 const router = useRouter()
 const historyRows = ref<BacktestHistoryRow[]>([])
@@ -206,6 +208,18 @@ function goCompare() {
   router.push('/backtest')
 }
 
+const handleRowClick = buildHistoryRowClickHandler((taskId) => {
+  router.push(`/backtest-history/${taskId}`)
+})
+
+function customRow(record: BacktestHistoryRow) {
+  return {
+    onClick: (event: MouseEvent) => {
+      handleRowClick(record.task_id, event.target as HTMLElement | null)
+    },
+  }
+}
+
 onMounted(() => {
   refreshStrategies()
   loadHistory()
@@ -215,4 +229,5 @@ onMounted(() => {
 <style scoped>
 .backtest-history-page { padding: 12px; }
 .kpi-row { margin-bottom: 16px; }
+:deep(.history-row-clickable) { cursor: pointer; }
 </style>

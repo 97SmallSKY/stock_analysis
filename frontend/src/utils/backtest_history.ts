@@ -30,3 +30,13 @@ export function summarizeHistory(rows: HistoryRow[]): HistoryKPI {
   const bestSharpe = sharpes.length ? Math.max(...sharpes) : 0
   return { total, success, successRate, avgReturn, bestSharpe }
 }
+
+export function buildHistoryRowClickHandler(
+  navigate: (taskId: string) => void,
+) {
+  return (taskId: string, target: HTMLElement | null) => {
+    if (target && target.closest('a, button')) return false
+    navigate(taskId)
+    return true
+  }
+}
