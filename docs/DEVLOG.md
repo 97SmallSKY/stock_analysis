@@ -11,6 +11,20 @@
 
 ---
 
+### 2026-04-27 · docs · Ops sub-agent 单 issue 单调用边界硬约束(STO-100)
+
+**根因**:sa-ops 主 session 把多 issue 打包给单次 `stock-ops-ui-verifier` 调用,sub-agent 跨 issue 多页截图 → token/上下文累积 → return message 截断丢报告(2026-04-27 STO-98 实测 10 行清单无产出)。
+
+**修复**:committable 模板两处同步 PM 在 sa-ops 私有文件的 patch:
+- `docs/agents/SUB/stock-ops-ui-verifier-mcp.md` 顶部加 §单次调用边界 · 严禁批量入参,含 `ERROR_BATCH_INPUT` verdict
+- `docs/agents/SUB/sa-ops-CLAUDE.local.md` 调 sub-agent 段加 STO-100 硬约束引用块 + `issue_id: STO-xx` 单值示例,反模式段加批处理禁令
+- 私有 `.worktrees/sa-ops/{CLAUDE.local.md,.claude/agents/*}` 已由 PM 直接改(gitignore 不入 git,下次 /loop 自动加载)
+- `verify_data.md` / `stock-ops-ui-verifier-vision.md` 仅存在于 sa-ops 私有worktree,无 committable twin,本次未同步(PM 后续补模板)
+
+**预防**:新 bootstrap 拷贝本模板即带规则,不再依赖 sa-ops 本地 patch。
+
+---
+
 ### 2026-04-27 · docs · save_issue 必带 project 铁律 · 全 agent 同步(STO-96)
 
 **根因**:Ops `list_issues(project=PROJECT_ID)` 漏扫 STO-94(背景见 STO-94 / STO-95)。规约层只在 README §3.9 出现,各 agent prompt 的代码示例没贯彻,Ops 实际查询时 `project` 过滤行为不一致。

@@ -79,10 +79,19 @@ targets = [i for i in issues if 'blocked:need-human' not in i.labels]
 
 ### 调用 sub-agent 写法
 
+> **🚨 STO-100 硬约束**:`issue_id` 必须是**单一** STO-xx,严禁:
+> - 传 issue id 数组(如 `[STO-90, STO-89]`)
+> - 传 umbrella issue(如 STO-98 内含 10 行抽查清单)
+> - 任何「一次跑 N 个」的批量语义
+>
+> Ready to Verify 队列即便 ≥ 2 条,**主 session 必须逐条 Agent 串行调用**,每次只塞 1 个 issue。违反 → sub-agent 跨 issue 累积 token 超窗口 → return 截断丢报告(2026-04-27 STO-98 实测)。
+>
+> 遇 umbrella 抽查需求正确做法:**主 session 把 umbrella 拆成 N 个独立 verify ticket**(或直接 N 次 Agent 调用,每次只验 1 行),不要把整张表交给单次 sub-agent。
+
 ```
 调用 Agent 工具：stock-ops-ui-verifier
 传入：
-  issue_id:       <Linear issue ID，如 STO-42>
+  issue_id:       STO-xx       # ← 必须单值,不接数组/umbrella
   issue_title:    <issue 标题>
   verify_comment: <Dev @Ops ready comment 里「验证:」段的完整内容>
   base_url:       http://117.72.184.8:8000
@@ -239,3 +248,6 @@ git push origin HEAD:new-branch
 - ❌ 数据巡检失败不建 issue（静默失败）
 - ❌ Playwright MCP 失败直接打 FAIL（先判断是服务问题还是功能问题）
 - ❌ 在 Ready to Verify 阶段未跑 UI 验证就直接移 Ready to Deploy
+- ❌ **批量塞多个 issue 给单次 sub-agent**(STO-100):
+  - 错:`Agent(stock-ops-ui-verifier, issue_id=[STO-90, STO-89, ...])` / 把 STO-98 整张抽查表传过去
+  - 对:N 次 `Agent(...)` 串行,每次单 issue;遇 umbrella 抽查先拆成 N 个独立 verify ticket
