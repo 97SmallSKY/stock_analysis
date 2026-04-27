@@ -2,115 +2,84 @@
   <div class="backtest-run-page">
     <a-card :bordered="false">
       <template #title>
-        <span>回测任务 · 历史记录</span>
+        <span>回测任务 · 提交新任务</span>
       </template>
       <template #extra>
-        <a-space>
-          <a-select
-            v-model:value="historyFilter.status"
-            placeholder="状态"
-            allow-clear
-            style="width: 120px;"
-            :options="[
-              { value: 'PENDING', label: 'PENDING' },
-              { value: 'RUNNING', label: 'RUNNING' },
-              { value: 'SUCCESS', label: 'SUCCESS' },
-              { value: 'FAILED', label: 'FAILED' },
-            ]"
-            @change="loadHistory"
-          />
-          <a-select
-            v-model:value="historyFilter.strategy_name"
-            placeholder="策略"
-            allow-clear
-            style="width: 200px;"
-            :options="strategyOptions"
-            @change="loadHistory"
-          />
-          <a-button :loading="historyLoading" @click="loadHistory">刷新</a-button>
-          <a-button @click="goCompare">去策略对比</a-button>
-        </a-space>
+        <a-button @click="router.push('/backtest-history')">查看历史任务 →</a-button>
       </template>
 
-      <a-row :gutter="12" class="kpi-row" v-if="kpi.total > 0">
-        <a-col :span="6">
-          <a-statistic title="总任务" :value="kpi.total" />
-        </a-col>
-        <a-col :span="6">
-          <a-statistic
-            title="成功率"
-            :value="kpi.successRate"
-            :precision="1"
-            suffix="%"
-            :value-style="{ color: kpi.successRate >= 80 ? '#d4380d' : '#262626' }"
+      <a-form :label-col="{ span: 5 }" :wrapper-col="{ span: 16 }" class="backtest-submit-form">
+        <a-form-item label="策略" required>
+          <a-select
+            v-model:value="form.strategy_name"
+            placeholder="请选择已注册策略"
+            :options="strategyOptions"
+            show-search
+            :filter-option="(input: string, option: any) => option.label.toLowerCase().includes(input.toLowerCase())"
           />
-        </a-col>
-        <a-col :span="6">
-          <a-statistic
-            title="平均收益"
-            :value="kpi.avgReturn"
-            :precision="2"
-            suffix="%"
-            :value-style="{ color: kpi.avgReturn >= 0 ? '#d4380d' : '#389e0d' }"
-          />
-        </a-col>
-        <a-col :span="6">
-          <a-statistic
-            title="最佳 Sharpe"
-            :value="kpi.bestSharpe"
-            :precision="2"
-          />
-        </a-col>
-      </a-row>
+        </a-form-item>
 
-      <a-empty
-        v-if="!historyLoading && historyRows.length === 0"
-        description="还没有回测任务。跑第一个回测看看你的策略表现。"
-        class="sto36-empty"
-      >
-        <a-space direction="vertical" :size="8">
-          <a-button type="primary" @click="router.push('/backtest')">跑第一个回测</a-button>
-          <router-link to="/changelog">
-            <a-typography-link>查看使用说明 →</a-typography-link>
-          </router-link>
-        </a-space>
-      </a-empty>
+        <a-form-item label="起始日期" required>
+          <a-input v-model:value="form.start_date" placeholder="YYYY-MM-DD" />
+        </a-form-item>
 
-      <a-table
-        v-else
-        :data-source="historyRows"
-        :columns="historyColumns"
-        :loading="historyLoading"
-        :pagination="{ pageSize: 20, showSizeChanger: false }"
-        :row-key="(r: BacktestHistoryRow) => r.task_id"
-        size="small"
+        <a-form-item label="结束日期" required>
+          <a-input v-model:value="form.end_date" placeholder="YYYY-MM-DD" />
+        </a-form-item>
+
+        <a-form-item label="初始资金(元)">
+          <a-input-number
+            v-model:value="form.initial_capital"
+            :min="10000"
+            :step="100000"
+            style="width: 240px;"
+          />
+        </a-form-item>
+
+        <a-form-item label="最大持仓数">
+          <a-input-number v-model:value="form.max_positions" :min="1" :max="50" style="width: 120px;" />
+        </a-form-item>
+
+        <a-form-item label="单仓比例">
+          <a-input-number
+            v-model:value="form.per_position_pct"
+            :min="0.01"
+            :max="1.0"
+            :step="0.05"
+            :precision="2"
+            style="width: 120px;"
+          />
+        </a-form-item>
+
+        <a-form-item :wrapper-col="{ offset: 5 }">
+          <a-space>
+            <a-button
+              type="primary"
+              :loading="submitting"
+              :disabled="!canSubmit"
+              @click="onSubmit"
+            >
+              提交回测
+            </a-button>
+            <a-typography-text v-if="disabledReason" type="secondary">
+              {{ disabledReason }}
+            </a-typography-text>
+          </a-space>
+        </a-form-item>
+      </a-form>
+
+      <a-alert
+        v-if="lastSubmit"
+        type="success"
+        :message="`已提交 task_id=${lastSubmit.task_id} (status=${lastSubmit.status})`"
+        show-icon
+        closable
+        style="margin-top: 16px;"
       >
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'status'">
-            <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
-          </template>
-          <template v-else-if="column.key === 'total_return'">
-            <span :style="{ color: (record.total_return ?? 0) >= 0 ? '#d4380d' : '#389e0d' }">
-              {{ fmtPct(record.total_return) }}
-            </span>
-          </template>
-          <template v-else-if="column.key === 'max_drawdown'">
-            <span style="color: #389e0d;">{{ fmtPct(record.max_drawdown) }}</span>
-          </template>
-          <template v-else-if="column.key === 'sharpe'">
-            {{ record.sharpe != null ? Number(record.sharpe).toFixed(2) : '-' }}
-          </template>
-          <template v-else-if="column.key === 'win_rate'">
-            {{ fmtPct(record.win_rate) }}
-          </template>
-          <template v-else-if="column.key === 'elapsed_seconds'">
-            {{ record.elapsed_seconds != null ? record.elapsed_seconds.toFixed(1) + ' s' : '-' }}
-          </template>
-          <template v-else-if="column.key === 'started_at'">
-            {{ record.started_at ? record.started_at.replace('T', ' ').slice(0, 19) : '-' }}
-          </template>
+        <template #description>
+          <a @click="router.push('/backtest-history')">前往历史页查看进度 →</a>
         </template>
-      </a-table>
+      </a-alert>
     </a-card>
   </div>
 </template>
@@ -118,79 +87,71 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { message } from 'ant-design-vue'
 import {
-  listStrategies, fetchBacktestHistory,
-  type BacktestHistoryRow,
+  listStrategies, submitBacktest,
+  type SubmitBacktestResp,
 } from '@/api/backtest'
-import { fmtPct } from '@/utils/format'
-import { summarizeHistory } from '@/utils/backtest_history'
 
 const router = useRouter()
-const historyRows = ref<BacktestHistoryRow[]>([])
-const historyLoading = ref(false)
-const historyFilter = reactive<{ status?: string; strategy_name?: string }>({})
 const strategyOptions = ref<{ value: string; label: string }[]>([])
+const submitting = ref(false)
+const lastSubmit = ref<SubmitBacktestResp | null>(null)
 
-const historyColumns = [
-  { title: 'task_id', dataIndex: 'task_id', key: 'task_id', width: 280, ellipsis: true },
-  { title: '策略', dataIndex: 'strategy_name', key: 'strategy_name', width: 160,
-    sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
-      a.strategy_name.localeCompare(b.strategy_name) },
-  { title: '状态', key: 'status', width: 100 },
-  { title: '区间', key: 'range', width: 200,
-    customRender: ({ record }: { record: BacktestHistoryRow }) =>
-      `${record.start_date} ~ ${record.end_date}` },
-  { title: '总收益', key: 'total_return', width: 110, align: 'right' as const,
-    sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
-      (a.total_return ?? -1e9) - (b.total_return ?? -1e9) },
-  { title: 'Sharpe', key: 'sharpe', width: 90, align: 'right' as const,
-    sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
-      (a.sharpe ?? -1e9) - (b.sharpe ?? -1e9) },
-  { title: '最大回撤', key: 'max_drawdown', width: 110, align: 'right' as const,
-    sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
-      (a.max_drawdown ?? -1e9) - (b.max_drawdown ?? -1e9) },
-  { title: '胜率', key: 'win_rate', width: 90, align: 'right' as const,
-    sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
-      (a.win_rate ?? -1e9) - (b.win_rate ?? -1e9) },
-  { title: '交易数', dataIndex: 'n_trades', key: 'n_trades', width: 90, align: 'right' as const,
-    sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
-      (a.n_trades ?? 0) - (b.n_trades ?? 0) },
-  { title: '耗时', key: 'elapsed_seconds', width: 90, align: 'right' as const },
-  { title: '开始时间', key: 'started_at', width: 170,
-    sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
-      (a.started_at ?? '').localeCompare(b.started_at ?? '') },
-]
+const form = reactive({
+  strategy_name: '' as string,
+  start_date: '' as string,
+  end_date: '' as string,
+  initial_capital: 1_000_000,
+  max_positions: 5,
+  per_position_pct: 0.2,
+})
 
-function statusColor(s: string) {
-  if (s === 'SUCCESS') return 'green'
-  if (s === 'RUNNING') return 'blue'
-  if (s === 'FAILED') return 'red'
-  return 'default'
-}
+// STO-89 (d): 表单校验规则
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-const kpi = computed(() => summarizeHistory(historyRows.value))
+const canSubmit = computed(() =>
+  !!form.strategy_name
+  && DATE_RE.test(form.start_date)
+  && DATE_RE.test(form.end_date)
+  && form.start_date <= form.end_date
+  && (form.initial_capital ?? 0) >= 10000,
+)
 
-async function loadHistory() {
-  historyLoading.value = true
+const disabledReason = computed(() => {
+  if (!form.strategy_name) return '请选择策略'
+  if (!DATE_RE.test(form.start_date)) return '起始日期格式需为 YYYY-MM-DD'
+  if (!DATE_RE.test(form.end_date)) return '结束日期格式需为 YYYY-MM-DD'
+  if (form.start_date > form.end_date) return '起始日期不得晚于结束日期'
+  if ((form.initial_capital ?? 0) < 10000) return '初始资金不能小于 10000'
+  return ''
+})
+
+async function onSubmit() {
+  if (!canSubmit.value) return
+  submitting.value = true
   try {
-    const body = await fetchBacktestHistory({
-      status: historyFilter.status,
-      strategy_name: historyFilter.strategy_name,
-      limit: 200,
+    const resp = await submitBacktest({
+      strategy_name: form.strategy_name,
+      start_date: form.start_date,
+      end_date: form.end_date,
+      initial_capital: form.initial_capital,
+      max_positions: form.max_positions,
+      per_position_pct: form.per_position_pct,
     })
-    historyRows.value = body.rows
-  } catch {
-    /* toast 已处理 */
+    lastSubmit.value = resp
+    message.success('回测任务已提交,执行中…')
+  } catch (e: unknown) {
+    const msg = (e as { message?: string })?.message ?? String(e)
+    message.error(`提交失败: ${msg}`)
   } finally {
-    historyLoading.value = false
+    submitting.value = false
   }
 }
 
 async function refreshStrategies() {
   try {
     const r = await listStrategies()
-    // STO-47: 后端改返回富对象 {name, description, category, default_params},
-    // 这里只需要下拉 value=name / label=中文描述(空串时 fallback 到代号)
     strategyOptions.value = (r.strategies || []).map((s) => ({
       value: s.name,
       label: s.description || s.name,
@@ -198,17 +159,13 @@ async function refreshStrategies() {
   } catch { /* ignore */ }
 }
 
-function goCompare() {
-  router.push('/backtest')
-}
+onMounted(refreshStrategies)
 
-onMounted(() => {
-  refreshStrategies()
-  loadHistory()
-})
+// 测试导出
+defineExpose({ form, canSubmit, disabledReason, onSubmit, lastSubmit })
 </script>
 
 <style scoped>
 .backtest-run-page { padding: 12px; }
-.kpi-row { margin-bottom: 16px; }
+.backtest-submit-form { max-width: 680px; }
 </style>

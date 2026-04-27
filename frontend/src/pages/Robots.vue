@@ -39,6 +39,9 @@
         :expand-row-by-click="true"
         size="middle"
       >
+        <template #headerCell="{ column }">
+          <TermTooltip v-if="column.termKey" :term="column.termKey">{{ column.title }}</TermTooltip>
+        </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'state'">
             <a-tag :color="stateColor(record.state)">{{ record.state }}</a-tag>
@@ -194,6 +197,7 @@ import {
 } from '@/api/robots'
 import { fmtAmount, fmtPct, fmtDate } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
+import TermTooltip from '@/components/TermTooltip.vue'
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
@@ -222,6 +226,7 @@ const columns = [
     title: '策略', dataIndex: 'strategy_name', key: 'strategy_name', width: 150,
     sorter: (a: RobotSnapshot, b: RobotSnapshot) =>
       (a.strategy_name ?? '').localeCompare(b.strategy_name ?? ''),
+    termKey: 'strategy',
   },
   {
     title: '现金', dataIndex: 'cash', key: 'cash', width: 140, align: 'right' as const,
@@ -232,7 +237,7 @@ const columns = [
     sorter: (a: RobotSnapshot, b: RobotSnapshot) => a.total_assets - b.total_assets,
   },
   {
-    title: '当日盈亏', dataIndex: 'daily_pnl_pct', key: 'daily_pnl_pct', width: 110, align: 'right' as const,
+    title: '当日盈亏', dataIndex: 'daily_pnl_pct', key: 'daily_pnl_pct', width: 110, align: 'right' as const, termKey: 'daily_pnl_pct',
     sorter: (a: RobotSnapshot, b: RobotSnapshot) => (a.daily_pnl_pct ?? 0) - (b.daily_pnl_pct ?? 0),
   },
   {

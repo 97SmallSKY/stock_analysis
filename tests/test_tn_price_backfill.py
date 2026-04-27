@@ -41,10 +41,10 @@ def test_run_range_default_n_days_executes_5_upserts():
     conn, cur = _mock_conn()
     with patch.object(mod, "pg_conn", return_value=conn):
         stats = mod.run_range("20260101", "20260110")
-    # 默认 N=1,2,3,5,10 → 5 个 SQL upsert
-    assert cur.execute.call_count == 5
-    assert stats["n_days"] == [1, 2, 3, 5, 10]
-    for n in (1, 2, 3, 5, 10):
+    # STO-81: 默认 N=1,2,3,5,7,10 → 6 个 SQL upsert
+    assert cur.execute.call_count == 6
+    assert stats["n_days"] == [1, 2, 3, 5, 7, 10]
+    for n in (1, 2, 3, 5, 7, 10):
         assert stats[f"n{n}_upserted"] == 42
     conn.commit.assert_called_once()
 

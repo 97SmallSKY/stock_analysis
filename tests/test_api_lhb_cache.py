@@ -117,9 +117,10 @@ def test_response_cache_hit_same_params(lhb_app, monkeypatch):
     client, lhb_mod = lhb_app
     rows = [
         ("000001.SZ", "平安银行", dt.date(2026, 4, 18), "日振幅值达到7%",
-         1000.0, 500.0, 500.0, 3000.0, 8.5, {"x": 1}),
+         10.25, 0.052, 1000.0, 500.0, 500.0, 3000.0, 8.5, {"x": 1}),
     ]
     cols = ["ts_code", "name", "trade_date", "reason",
+            "close", "pct_change",
             "buy_amount", "sell_amount", "net_amount", "turnover",
             "score", "score_detail"]
     # 只预设一次 DB 调用 —— 如果第二次也打 DB 会 AssertionError
@@ -152,9 +153,10 @@ def test_response_cache_params_differ_miss(lhb_app, monkeypatch):
     client, lhb_mod = lhb_app
     rows = [
         ("000001.SZ", "平安银行", dt.date(2026, 4, 18), "R",
-         1.0, 1.0, 1.0, 1.0, 1.0, None),
+         1.0, 0.01, 1.0, 1.0, 1.0, 1.0, 1.0, None),
     ]
     cols = ["ts_code", "name", "trade_date", "reason",
+            "close", "pct_change",
             "buy_amount", "sell_amount", "net_amount", "turnover",
             "score", "score_detail"]
     # 预设两次独立 DB 调用
@@ -182,9 +184,10 @@ def test_response_cache_skip_total_is_part_of_key(lhb_app, monkeypatch):
     client, lhb_mod = lhb_app
     rows_data = [
         ("000001.SZ", "平安", dt.date(2026, 4, 18), "R",
-         1.0, 1.0, 1.0, 1.0, 1.0, None),
+         1.0, 0.01, 1.0, 1.0, 1.0, 1.0, 1.0, None),
     ]
     cols = ["ts_code", "name", "trade_date", "reason",
+            "close", "pct_change",
             "buy_amount", "sell_amount", "net_amount", "turnover",
             "score", "score_detail"]
     canned = [
@@ -217,8 +220,9 @@ def test_response_cache_expiry_reissues_query(lhb_app, monkeypatch):
     # 把 TTL 强制设为 0.5 秒,然后等待超时
     # 测试不用真 sleep,直接篡改 entry 的 expires_at
     rows = [("000001.SZ", "平安", dt.date(2026, 4, 18), "R",
-             1.0, 1.0, 1.0, 1.0, 1.0, None)]
+             1.0, 0.01, 1.0, 1.0, 1.0, 1.0, 1.0, None)]
     cols = ["ts_code", "name", "trade_date", "reason",
+            "close", "pct_change",
             "buy_amount", "sell_amount", "net_amount", "turnover",
             "score", "score_detail"]
     canned = [

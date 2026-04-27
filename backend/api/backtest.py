@@ -158,6 +158,51 @@ class TaskResp(BaseModel):
 # ====================================================================
 
 
+def _persist_run(
+    task_id: str,
+    strategy_name: str,
+    status: str,
+    config: dict,
+    result_json: Optional[dict] = None,
+    error_message: Optional[str] = None,
+    finished: bool = False,
+) -> None:
+    """STO-88: 把回测任务写入 backtest_runs(append-only audit log)。
+
+    DB 不可用不影响回测主流程,失败仅记录 warning。
+    """
+    import json
+    try:
+        from backend.db.session import pg_conn
+        with pg_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO backtest_runs
+                  (task_id, strategy_name, status, config,
+                   result_json, error_message, finished_at)
+                VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s,
+                  CASE WHEN %s THEN NOW() ELSE NULL END)
+                ON CONFLICT (task_id) DO UPDATE SET
+                  status = EXCLUDED.status,
+                  result_json = EXCLUDED.result_json,
+                  error_message = EXCLUDED.error_message,
+                  finished_at = COALESCE(
+                    EXCLUDED.finished_at, backtest_runs.finished_at)
+                """,
+                (
+                    task_id, strategy_name, status,
+                    json.dumps(config),
+                    json.dumps(result_json) if result_json else None,
+                    error_message,
+                    finished,
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            '[backtest] persist run failed task=%s status=%s err=%s',
+            task_id, status, exc)
+
+
 def _default_runner(task: BacktestTask, store: TaskStore) -> None:
     """实际跑回测的函数. 走 BacktestEngine + 默认 DB provider."""
     from backend.domain.backtest import BacktestEngine, BacktestConfig
@@ -194,12 +239,43 @@ def _default_runner(task: BacktestTask, store: TaskStore) -> None:
             },
             metrics=asdict(metrics),
         )
+        _persist_run(
+            task_id=task.task_id,
+            strategy_name=task.strategy_name,
+            status='SUCCESS',
+            config={
+                'start_date': task.start_date.isoformat(),
+                'end_date': task.end_date.isoformat(),
+                'initial_capital': task.initial_capital,
+                'params': task.params,
+            },
+            result_json={
+                'final_assets': result.final_assets,
+                'total_return': result.total_return,
+                'trade_count': len(result.trades),
+                'metrics': asdict(metrics),
+            },
+            finished=True,
+        )
     except Exception as e:  # noqa: BLE001
         logger.exception(f'[backtest] task={task.task_id} failed')
         store.update(
             task.task_id,
             status='FAILED', error_message=str(e),
             finished_at=datetime.now(),
+        )
+        _persist_run(
+            task_id=task.task_id,
+            strategy_name=task.strategy_name,
+            status='FAILED',
+            config={
+                'start_date': task.start_date.isoformat(),
+                'end_date': task.end_date.isoformat(),
+                'initial_capital': task.initial_capital,
+                'params': task.params,
+            },
+            error_message=str(e),
+            finished=True,
         )
 
 
@@ -306,6 +382,17 @@ def submit_backtest(
             **req.params,
             'max_positions': req.max_positions,
             'per_position_pct': req.per_position_pct,
+        },
+    )
+    _persist_run(
+        task_id=task.task_id,
+        strategy_name=task.strategy_name,
+        status='PENDING',
+        config={
+            'start_date': task.start_date.isoformat(),
+            'end_date': task.end_date.isoformat(),
+            'initial_capital': task.initial_capital,
+            'params': task.params,
         },
     )
     bg.add_task(_runner, task, get_store())

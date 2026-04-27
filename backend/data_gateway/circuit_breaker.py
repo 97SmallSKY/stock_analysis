@@ -108,6 +108,26 @@ class CircuitBreaker:
                     f"连续失败{self.failure_count}次 (CLOSED → OPEN), "
                     f"将在{self.reset_timeout}秒后尝试恢复"
                 )
+                self._emit_trip_alert()
+
+    def _emit_trip_alert(self) -> None:
+        # STO-9: OPEN 事件落 alert_log。导入失败/落库失败不影响熔断状态机。
+        try:
+            from backend.core.alerts import send_alert, AlertLevel, AlertCategory
+            send_alert(
+                AlertLevel.CRITICAL,
+                AlertCategory.NETWORK,
+                source=self.name,
+                message=f"熔断触发: 连续失败 {self.failure_count} 次",
+                details={
+                    "failure_count": self.failure_count,
+                    "failure_threshold": self.failure_threshold,
+                    "reset_timeout": self.reset_timeout,
+                    "last_error": (self.last_error or "")[:500],
+                },
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _should_try_reset(self) -> bool:
         """是否应该尝试重置(从OPEN进入HALF_OPEN)"""

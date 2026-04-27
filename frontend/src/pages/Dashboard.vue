@@ -1,5 +1,24 @@
 <template>
   <div class="dashboard">
+    <!-- STO-82: 四大指数实时行情 -->
+    <a-row :gutter="16" class="index-row">
+      <a-col v-for="(item, idx) in indexItems" :key="item.code" :xs="12" :md="6">
+        <a-card :bordered="false" class="index-card" :loading="indexLoading && !indexItems.length">
+          <div class="index-name">{{ item.name }}</div>
+          <div class="index-latest" :style="{ color: item.pct >= 0 ? '#d4380d' : '#389e0d' }">
+            {{ item.latest.toFixed(2) }}
+          </div>
+          <div class="index-delta" :style="{ color: item.pct >= 0 ? '#d4380d' : '#389e0d' }">
+            {{ item.change >= 0 ? '+' : '' }}{{ item.change.toFixed(2) }}
+            ({{ item.pct >= 0 ? '+' : '' }}{{ item.pct.toFixed(2) }}%)
+          </div>
+        </a-card>
+      </a-col>
+      <a-col v-if="!indexItems.length && !indexLoading" :span="24">
+        <a-alert type="warning" show-icon :message="indexError || '指数数据暂不可用'" />
+      </a-col>
+    </a-row>
+
     <!-- KPI 四柱 -->
     <a-row :gutter="16" class="kpi-row">
       <a-col :xs="12" :md="6">
@@ -154,6 +173,7 @@ import {
   DatabaseOutlined, ReloadOutlined,
 } from '@ant-design/icons-vue'
 import { useDashboardStore } from '@/stores/dashboard'
+import { fetchIndexSnapshot, type IndexSnapshotItem } from '@/api/index'
 import type { TopLhbRow } from '@/api/dashboard'
 import {
   fmtAmountWan, fmtPct, fmtDate, healthColor, cbColor,
@@ -168,6 +188,28 @@ const topLhb = computed<TopLhbRow[]>(() => store.data?.top_lhb ?? [])
 const top1 = computed<TopLhbRow | null>(() => topLhb.value[0] ?? null)
 const adapters = computed(() => store.data?.adapters ?? [])
 const loadingFirst = computed(() => store.loading && !store.data)
+
+// STO-82: 四大指数实时行情,独立 API,失败不影响 Dashboard 主体
+const indexItems = ref<IndexSnapshotItem[]>([])
+const indexLoading = ref(false)
+const indexError = ref<string | null>(null)
+
+async function loadIndex() {
+  indexLoading.value = true
+  indexError.value = null
+  try {
+    const resp = await fetchIndexSnapshot()
+    indexItems.value = resp.items ?? []
+    if (!indexItems.value.length && resp.error) {
+      indexError.value = resp.error
+    }
+  } catch (e) {
+    indexError.value = String((e as Error)?.message ?? e)
+    indexItems.value = []
+  } finally {
+    indexLoading.value = false
+  }
+}
 
 const lhbColumns = [
   {
@@ -213,6 +255,7 @@ function scoreTagColor(v: number | null | undefined): string {
 
 function reload() {
   store.load(topN.value, true).catch(() => { /* 错误已由 http 拦截器 toast */ })
+  loadIndex()
 }
 
 onMounted(reload)
@@ -266,4 +309,17 @@ onMounted(reload)
 .adapter-name { font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
 
 .score-tag { min-width: 44px; text-align: center; }
+
+/* STO-82: 四大指数顶部卡片 */
+.index-row { margin-bottom: 16px; }
+.index-card { padding: 4px 0; }
+.index-name { color: #595959; font-size: 13px; }
+.index-latest {
+  margin-top: 4px;
+  font-size: 22px; font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.index-delta {
+  font-size: 12px; font-variant-numeric: tabular-nums;
+}
 </style>

@@ -333,3 +333,155 @@ class TestRun:
 
         n = S.run("20241015", "20241016")
         assert n == 0  # 第一天就 break
+
+
+# --------------------------------------------------------------------
+# STO-94: drift check + catchup
+# --------------------------------------------------------------------
+
+
+class _SeqCur:
+    """`_check_sentiment_drift` 用 1 个 cursor 跑 2 次 execute,fetchone 依序返回不同结果。"""
+    def __init__(self, results):
+        self._results = list(results)
+        self._idx = -1
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def execute(self, *a, **k):
+        self._idx += 1
+    def fetchone(self):
+        if 0 <= self._idx < len(self._results):
+            return self._results[self._idx]
+        return None
+
+
+class _SingleCurConn:
+    """_check_sentiment_drift 只调用 conn.cursor() 一次,返回 _SeqCur。"""
+    def __init__(self, cur): self._cur = cur
+    def cursor(self, *a, **k): return self._cur
+
+
+class TestCheckDrift:
+    def test_drift_exceeds_one_day_triggers_alert(self, monkeypatch):
+        """sentiment 落后 LHB 7 天 → send_alert 被调用 ERROR/DATA_QUALITY。"""
+        import datetime as dt
+
+        calls = []
+        def fake_send_alert(level, category, source, message, details=None, conn_factory=None):
+            calls.append((level, category, source, message, details))
+            return True
+        monkeypatch.setattr("backend.core.alerts.send_alert", fake_send_alert)
+
+        cur = _SeqCur([(dt.date(2026, 4, 17),), (dt.date(2026, 4, 24),)])
+        S._check_sentiment_drift(_SingleCurConn(cur))
+        assert len(calls) == 1
+        level, category, source, message, details = calls[0]
+        from backend.core.alerts import AlertLevel, AlertCategory
+        assert level == AlertLevel.ERROR
+        assert category == AlertCategory.DATA_QUALITY
+        assert source == "ingest.sentiment"
+        assert details["delta_days"] == 7
+
+    def test_drift_within_one_day_no_alert(self, monkeypatch):
+        """落后 1 天以内不告警(周末/当日刚跑完)。"""
+        import datetime as dt
+
+        calls = []
+        monkeypatch.setattr(
+            "backend.core.alerts.send_alert",
+            lambda *a, **k: calls.append(1) or True,
+        )
+        cur = _SeqCur([(dt.date(2026, 4, 24),), (dt.date(2026, 4, 24),)])
+        S._check_sentiment_drift(_SingleCurConn(cur))
+        assert calls == []
+
+    def test_drift_empty_tables_no_alert(self):
+        """表空(初次灌库) → 不告警。"""
+        cur = _SeqCur([(None,), (None,)])
+        S._check_sentiment_drift(_SingleCurConn(cur))  # 无异常即通过
+
+    def test_drift_non_date_types_swallowed(self):
+        """MagicMock 或其他非 date 类型:drift check 应静默跳过不抛。"""
+        conn = MagicMock()
+        # 不应抛任何异常
+        S._check_sentiment_drift(conn)
+
+
+class _CatchupConn:
+    """catchup 走 `with pg_conn() as conn, conn.cursor() as cur:` 拿 1 个 cursor。"""
+    def __init__(self, cur): self._cur = cur
+    def cursor(self, *a, **k): return self._cur
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+class TestCatchup:
+    def test_catchup_lhb_empty_returns_no_catchup(self, monkeypatch):
+        # catchup 先 SELECT lhb_records,再 SELECT market_sentiment;
+        # 但代码顺序是先 lhb 再 sentiment, 看实现…
+        # 实际:cur.execute("SELECT MAX...lhb_records") 然后 sentiment
+        cur = _SeqCur([(None,), (None,)])  # lhb_max=None, sent_max=None
+        conn = _CatchupConn(cur)
+
+        @contextmanager
+        def fake_pg():
+            yield conn
+        monkeypatch.setattr(S, "pg_conn", fake_pg)
+
+        out = S.catchup()
+        assert out["need_catchup"] is False
+        assert out["inserted"] == 0
+
+    def test_catchup_aligned_returns_no_catchup(self, monkeypatch):
+        """sentiment_max == lhb_max → start > end,不补。"""
+        import datetime as dt
+        cur = _SeqCur([(dt.date(2026, 4, 24),), (dt.date(2026, 4, 24),)])
+        conn = _CatchupConn(cur)
+
+        @contextmanager
+        def fake_pg():
+            yield conn
+        monkeypatch.setattr(S, "pg_conn", fake_pg)
+
+        out = S.catchup()
+        assert out["need_catchup"] is False
+
+    def test_catchup_triggers_run_for_gap(self, monkeypatch):
+        """lhb_max=4-24, sent_max=4-17 → 调 run('20260418','20260424')。"""
+        import datetime as dt
+        # 顺序:第 1 个 fetchone 读 lhb_max,第 2 个读 sentiment_max
+        cur = _SeqCur([(dt.date(2026, 4, 24),), (dt.date(2026, 4, 17),)])
+        conn = _CatchupConn(cur)
+
+        @contextmanager
+        def fake_pg():
+            yield conn
+        monkeypatch.setattr(S, "pg_conn", fake_pg)
+
+        calls = []
+        monkeypatch.setattr(S, "run",
+                            lambda s, e, skip_existing=True: calls.append((s, e, skip_existing)) or 5)
+        out = S.catchup()
+        assert out["need_catchup"] is True
+        assert out["start"] == "20260418"
+        assert out["end"] == "20260424"
+        assert out["inserted"] == 5
+        assert calls == [("20260418", "20260424", True)]
+
+    def test_catchup_sentiment_empty_seeds_from_lhb_max(self, monkeypatch):
+        """sentiment 空,lhb=4-24 → 从 4-24 开始补(start_d=lhb_max)。"""
+        import datetime as dt
+        cur = _SeqCur([(dt.date(2026, 4, 24),), (None,)])  # lhb=4-24, sent=None
+        conn = _CatchupConn(cur)
+
+        @contextmanager
+        def fake_pg():
+            yield conn
+        monkeypatch.setattr(S, "pg_conn", fake_pg)
+
+        calls = []
+        monkeypatch.setattr(S, "run",
+                            lambda s, e, skip_existing=True: calls.append((s, e)) or 1)
+        out = S.catchup()
+        assert out["need_catchup"] is True
+        assert calls == [("20260424", "20260424")]

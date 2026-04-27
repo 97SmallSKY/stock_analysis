@@ -131,6 +131,9 @@
         :pagination="false"
         size="small"
       >
+        <template #headerCell="{ column }">
+          <TermTooltip v-if="column.termKey" :term="column.termKey">{{ column.title }}</TermTooltip>
+        </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'ok'">
             <a-tag :color="record.ok ? 'green' : 'red'">
@@ -196,6 +199,9 @@
             :row-key="(r: BacktestHistoryRow) => r.task_id"
             size="small"
           >
+            <template #headerCell="{ column }">
+              <TermTooltip v-if="column.termKey" :term="column.termKey">{{ column.title }}</TermTooltip>
+            </template>
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'status'">
                 <a-tag :color="statusColor(record.status)">{{ record.status }}</a-tag>
@@ -237,6 +243,8 @@ import {
   type CompareStrategy, type ComparisonReport, type BacktestHistoryRow,
 } from '@/api/backtest'
 import { fmtAmount, fmtPct } from '@/utils/format'
+import TermTooltip from '@/components/TermTooltip.vue'
+import { findTerm } from '@/utils/glossary'
 import { downloadCsv, rowsToCsv } from '@/utils/csv'
 import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
 import { defaultRange, type DateRange } from '@/utils/date_range'
@@ -280,11 +288,11 @@ const report = ref<ComparisonReport | null>(null)
 const cols = [
   { title: '名称', dataIndex: 'name', key: 'name' },
   { title: '状态', key: 'ok', width: 70 },
-  { title: '总收益', dataIndex: 'total_return', key: 'total_return', width: 100, align: 'right' },
-  { title: '年化', dataIndex: 'annual_return', key: 'annual_return', width: 100, align: 'right' },
-  { title: 'Sharpe', key: 'sharpe_ratio', width: 90, align: 'right' },
-  { title: '最大回撤', key: 'max_drawdown', width: 100, align: 'right' },
-  { title: '胜率', key: 'win_rate', width: 90, align: 'right' },
+  { title: '总收益', dataIndex: 'total_return', key: 'total_return', width: 100, align: 'right', termKey: 'total_return' },
+  { title: '年化', dataIndex: 'annual_return', key: 'annual_return', width: 100, align: 'right', termKey: 'annualized' },
+  { title: 'Sharpe', key: 'sharpe_ratio', width: 90, align: 'right', termKey: 'sharpe' },
+  { title: '最大回撤', key: 'max_drawdown', width: 100, align: 'right', termKey: 'max_drawdown' },
+  { title: '胜率', key: 'win_rate', width: 90, align: 'right', termKey: 'win_rate_bt' },
   { title: '交易数', dataIndex: 'trade_count', key: 'trade_count', width: 80, align: 'right' },
   { title: '终值', key: 'final_assets', width: 140, align: 'right' },
   { title: '耗时(ms)', dataIndex: 'duration_ms', key: 'duration_ms', width: 100, align: 'right' },
@@ -386,16 +394,16 @@ const historyColumns = [
   { title: '区间', key: 'range', width: 200,
     customRender: ({ record }: { record: BacktestHistoryRow }) =>
       `${record.start_date} ~ ${record.end_date}` },
-  { title: '总收益', key: 'total_return', width: 110, align: 'right' as const,
+  { title: '总收益', key: 'total_return', width: 110, align: 'right' as const, termKey: 'total_return',
     sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
       (a.total_return ?? -1e9) - (b.total_return ?? -1e9) },
-  { title: 'Sharpe', key: 'sharpe', width: 90, align: 'right' as const,
+  { title: 'Sharpe', key: 'sharpe', width: 90, align: 'right' as const, termKey: 'sharpe',
     sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
       (a.sharpe ?? -1e9) - (b.sharpe ?? -1e9) },
-  { title: '最大回撤', key: 'max_drawdown', width: 110, align: 'right' as const,
+  { title: '最大回撤', key: 'max_drawdown', width: 110, align: 'right' as const, termKey: 'max_drawdown',
     sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
       (a.max_drawdown ?? -1e9) - (b.max_drawdown ?? -1e9) },
-  { title: '胜率', key: 'win_rate', width: 90, align: 'right' as const,
+  { title: '胜率', key: 'win_rate', width: 90, align: 'right' as const, termKey: 'win_rate_bt',
     sorter: (a: BacktestHistoryRow, b: BacktestHistoryRow) =>
       (a.win_rate ?? -1e9) - (b.win_rate ?? -1e9) },
   { title: '交易数', dataIndex: 'n_trades', key: 'n_trades', width: 90, align: 'right' as const,

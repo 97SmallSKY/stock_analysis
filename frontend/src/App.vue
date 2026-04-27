@@ -37,6 +37,10 @@
             <template #icon><LineChartOutlined /></template>
             回测任务
           </a-menu-item>
+          <a-menu-item key="/backtest-history">
+            <template #icon><HistoryOutlined /></template>
+            回测历史
+          </a-menu-item>
           <a-menu-item key="/robots">
             <template #icon><RobotOutlined /></template>
             机器人

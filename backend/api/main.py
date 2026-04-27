@@ -158,6 +158,9 @@ def create_app() -> FastAPI:
     # P7.3 K 线只读(StockDrillModal 数据源)
     from backend.api.kline import router as kline_router
     app.include_router(kline_router, prefix="/api/kline", tags=["kline"])
+    # STO-82: 首页四大指数实时行情
+    from backend.api.index import router as index_router
+    app.include_router(index_router, prefix="/api/index", tags=["index"])
     # P18.3 特性介绍:docs/CHANGELOG.md → /api/changelog
     # P20.1 (2026-04-20) 拆分:新增 /api/devlog → docs/DEVLOG.md (开发日志)
     from backend.api.changelog import router as changelog_router, devlog_router

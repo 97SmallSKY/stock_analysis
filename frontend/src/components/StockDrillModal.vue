@@ -367,14 +367,21 @@ function render() {
   //   maxVal < 10 → 3 位(低价股/北交所/ST)
   //   10~100 → 2 位(主流)
   //   >= 100 → 1 位(高价股)
-  const markPoints: { name: string; coord: [number, number]; value: string; itemStyle: Record<string, unknown>; label: Record<string, unknown> }[] = []
+  // STO-65 (2026-04-25): markPoint 从「pin 圆圈 + 白字」改为「纯文字」
+  //   - symbol: 'none' 移除圆圈底纹
+  //   - label.color 换成高饱和红/绿直接显示在 K 线旁
+  const markPoints: { name: string; coord: [number, number]; value: string; symbol: string; label: Record<string, unknown> }[] = []
   if (maxIdx >= 0) {
     markPoints.push({
       name: '区间最高',
       coord: [maxIdx, maxVal],
       value: String(maxVal),
-      itemStyle: { color: '#d4380d' },
-      label: { color: '#fff', fontSize: 11, formatter: `▲ ${formatPrice(maxVal, maxVal)}` },
+      symbol: 'none',
+      label: {
+        show: true, position: 'top', color: '#d4380d',
+        fontSize: 12, fontWeight: 'bold',
+        formatter: `▲ ${formatPrice(maxVal, maxVal)}`,
+      },
     })
   }
   if (minIdx >= 0 && minIdx !== maxIdx) {
@@ -382,8 +389,12 @@ function render() {
       name: '区间最低',
       coord: [minIdx, minVal],
       value: String(minVal),
-      itemStyle: { color: '#389e0d' },
-      label: { color: '#fff', fontSize: 11, formatter: `▼ ${formatPrice(minVal, maxVal)}` },
+      symbol: 'none',
+      label: {
+        show: true, position: 'bottom', color: '#389e0d',
+        fontSize: 12, fontWeight: 'bold',
+        formatter: `▼ ${formatPrice(minVal, maxVal)}`,
+      },
     })
   }
 
@@ -403,8 +414,8 @@ function render() {
         borderColor: '#d4380d', borderColor0: '#389e0d',
       },
       // P19.4: 标注最高/最低
+      // STO-65 (2026-04-25): 由 pin/symbolSize=48 改为纯文字标注,symbol/size 由各 markPoint 自带覆盖
       markPoint: {
-        symbol: 'pin', symbolSize: 48,
         data: markPoints,
       },
     },
@@ -427,9 +438,49 @@ function render() {
     tooltip: {
       trigger: 'axis',
       axisPointer: { type: 'cross' },
-      // STO-30: tooltip 价格按档位精度显示
-      valueFormatter: (v: number | string) =>
-        typeof v === 'number' ? formatPrice(v, maxVal) : String(v),
+      // STO-65 (2026-04-25): 自定义中文 OHLC + 涨跌幅,跟随鼠标移动
+      // K 线 series.data 顺序: [open, close, low, high]
+      formatter: (params: unknown) => {
+        const arr = Array.isArray(params) ? params : [params]
+        const k = arr.find((p: { seriesType?: string }) => p?.seriesType === 'candlestick')
+        if (!k) {
+          // 退化 (例: 用户切到 minute 没有 candlestick),回退到默认行为
+          return arr.map((p: { seriesName?: string; value?: unknown }) => {
+            const v = typeof p.value === 'number' ? formatPrice(p.value, maxVal) : String(p.value ?? '-')
+            return `${p.seriesName ?? ''} ${v}`
+          }).join('<br/>')
+        }
+        const k1 = k as { axisValueLabel?: string; data?: unknown[] }
+        const date = k1.axisValueLabel ?? ''
+        const data = (k1.data ?? []) as unknown[]
+        // echarts 蜡烛图 data 是 [idx, open, close, low, high] 或者 [open, close, low, high]
+        // 真实回调里 data 形如 [idx, open, close, low, high]
+        const offset = data.length >= 5 ? 1 : 0
+        const open = Number(data[offset] ?? 0)
+        const close = Number(data[offset + 1] ?? 0)
+        const low = Number(data[offset + 2] ?? 0)
+        const high = Number(data[offset + 3] ?? 0)
+        const pctChg = open !== 0 ? ((close - open) / open) * 100 : 0
+        const color = pctChg >= 0 ? '#d4380d' : '#389e0d'
+        const sign = pctChg >= 0 ? '+' : ''
+        const fp = (v: number) => formatPrice(v, maxVal)
+        const lines = [
+          `<div style="font-weight:600;margin-bottom:4px;">${date}</div>`,
+          `<div>开盘: <b>${fp(open)}</b></div>`,
+          `<div>收盘: <b>${fp(close)}</b></div>`,
+          `<div>最高: <b style="color:#d4380d;">${fp(high)}</b></div>`,
+          `<div>最低: <b style="color:#389e0d;">${fp(low)}</b></div>`,
+          `<div>涨跌幅: <b style="color:${color};">${sign}${pctChg.toFixed(2)}%</b></div>`,
+        ]
+        // 附 MA5/MA10(若 legend 选中)
+        for (const p of arr) {
+          const pp = p as { seriesName?: string; seriesType?: string; value?: unknown }
+          if (pp.seriesType === 'line' && typeof pp.value === 'number') {
+            lines.push(`<div>${pp.seriesName}: ${fp(pp.value as number)}</div>`)
+          }
+        }
+        return lines.join('')
+      },
     },
     // STO-30: MA5/MA10 默认不展示(满屏是线的问题),用户点 legend 才画
     legend: {

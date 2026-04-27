@@ -231,6 +231,25 @@ export const GLOSSARY: Term[] = [
     tag: 'backtest',
     brief: '回测中盈利的交易占总交易数的比例。> 50% 代表整体赚多亏少。',
   },
+  {
+    key: 'total_return',
+    name: '总收益',
+    tag: 'backtest',
+    brief: '回测区间内的累计收益率(终值/初始 - 1),不考虑时长。',
+  },
+  {
+    key: 'daily_pnl_pct',
+    name: '当日盈亏',
+    tag: 'backtest',
+    brief: '相对昨日收盘的当日浮动盈亏比例,机器人持仓市值口径。',
+  },
+  {
+    key: 'strategy',
+    name: '策略',
+    aliases: ['策略名', 'strategy_name'],
+    tag: 'backtest',
+    brief: '机器人采用的选股/择时规则,决定何时买、何时卖、仓位如何分配。',
+  },
 ]
 
 // 快速查找 map,避免每次 find 遍历

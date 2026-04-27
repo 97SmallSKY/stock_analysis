@@ -144,6 +144,40 @@ def _merge_db_fill(external_row: dict, db_row: dict | None) -> dict:
     return merged
 
 
+def catchup() -> dict:
+    """STO-94 (b): 自动补齐 market_sentiment 与 lhb_stock_daily 之间的缺口。
+
+    策略:取 `lhb_stock_daily.max(trade_date)` 作为目标终点,
+    `market_sentiment.max(trade_date) + 1 天` 作为起点;
+    若起点 > 终点则无需补。
+
+    返回 dict: {need_catchup, start, end, inserted}
+    """
+    with pg_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT MAX(trade_date) FROM lhb_stock_daily")
+        lhb_max = (cur.fetchone() or (None,))[0]
+        cur.execute("SELECT MAX(trade_date) FROM market_sentiment")
+        sent_max = (cur.fetchone() or (None,))[0]
+
+    if lhb_max is None:
+        logger.info("[ingest.sentiment.catchup] lhb_stock_daily 为空,跳过")
+        return {"need_catchup": False, "start": None, "end": None, "inserted": 0}
+
+    from datetime import timedelta as _td
+    start_d = (sent_max + _td(days=1)) if sent_max else lhb_max
+    if start_d > lhb_max:
+        logger.info(f"[ingest.sentiment.catchup] 已对齐 sentiment_max={sent_max}, lhb_max={lhb_max}")
+        return {"need_catchup": False, "start": str(sent_max), "end": str(lhb_max), "inserted": 0}
+
+    start_str = start_d.strftime("%Y%m%d")
+    end_str = lhb_max.strftime("%Y%m%d")
+    logger.info(f"[ingest.sentiment.catchup] 补采 {start_str} → {end_str}")
+    inserted = run(start_str, end_str, skip_existing=True)
+    return {
+        "need_catchup": True, "start": start_str, "end": end_str, "inserted": inserted,
+    }
+
+
 def _load_covered_days(start: str, end: str) -> set[str]:
     """已写入 market_sentiment 的交易日 (YYYYMMDD)"""
     s_iso = f"{start[:4]}-{start[4:6]}-{start[6:]}"
@@ -224,4 +258,41 @@ def run(start: str, end: str, skip_existing: bool = True) -> int:
     logger.info(
         f"[ingest.sentiment] 完成: {total} 行 (外部源 {from_api} 天 / DB反算 {from_db} 天), 失败 {fail} 天"
     )
+
+    # STO-94 (d) 监控: trade_date 落后 LHB > 1 天 → ERROR
+    _check_sentiment_drift(conn)
+
     return total
+
+
+def _check_sentiment_drift(conn) -> None:
+    """检查 market_sentiment 最新日期 vs lhb_stock_daily 最新日期,滞后 > 1 天则告警。
+
+    任何异常(连接/SQL/类型)都吞掉,告警监控不能阻塞主流程。
+    """
+    from datetime import date as _date
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT MAX(trade_date) FROM market_sentiment")
+            row = cur.fetchone()
+            sentiment_max = row[0] if row and row[0] else None
+            cur.execute("SELECT MAX(trade_date) FROM lhb_stock_daily")
+            row = cur.fetchone()
+            lhb_max = row[0] if row and row[0] else None
+
+        # 仅接受真实 date 对象,过滤 MagicMock 等
+        if not isinstance(sentiment_max, _date) or not isinstance(lhb_max, _date):
+            return
+
+        delta = (lhb_max - sentiment_max).days
+        if delta > 1:
+            from backend.core.alerts import send_alert, AlertLevel, AlertCategory
+            send_alert(
+                AlertLevel.ERROR,
+                AlertCategory.DATA_QUALITY,
+                source="ingest.sentiment",
+                message=f"市场情绪落后 LHB {delta} 天 (sentiment_max={sentiment_max}, lhb_max={lhb_max})",
+                details={"delta_days": delta, "sentiment_max": str(sentiment_max), "lhb_max": str(lhb_max)},
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[ingest.sentiment] drift check 失败: {e}")

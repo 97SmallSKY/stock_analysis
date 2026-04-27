@@ -11,6 +11,71 @@
 
 ---
 
+### 2026-04-26 · fix · Linear state 名映射陷阱(STO-95)
+
+**根因**:Ops 稳态循环 `list_issues(state="Ready to Deploy")` 永远返回 [],导致 STO-94 卡 In Review 12h+。本 team 实际不存在名为 `Ready to Deploy` 的 state —— 它只是 `docs/agents/transition-checklist.md` §5 的语义槽名,Linear 实名是 `In Review`。
+
+**修复**:
+- `.worktrees/sa-ops/CLAUDE.local.md` line 130 `state = "Ready to Deploy"` → `state = "In Review"`(私有文件不入 git)
+- `docs/agents/state-machine.md` 5 槽映射表后追加 P0 警告,强调调 `list_issues` 必须用右列 Linear 名而非左列语义槽
+
+**预防**:`state-machine.md` 已加显眼 ⚠️ 块,后续 agent prompt 引用 state 字符串前都该先核对此表。
+
+---
+
+### 2026-04-25 · feature · 回测任务 DB 持久化(STO-88)
+
+**背景**:STO-80 拆出第一片(80a)。原 `backend/api/backtest.py` 用 in-memory `TaskStore`,服务重启丢任务历史。AC 字面要求新建 `backtest_runs` 表 + APScheduler + `/api/backtest/run`/`/history`。
+
+**自主决策(C')**:开工后发现 `backtest_tasks/results` 表(已在 schema 里但未启用)有 FK strategies + BIGSERIAL,与现有 uuid hex task_id 不兼容,改造 (B) 方案成本超预期。改用轻量持久化:
+
+- `db/init/08_STO-88_backtest_runs.sql` 新建轻量表(text task_id pk + status + config jsonb + result_json jsonb + 时间戳),3 个索引
+- `_persist_run()` helper:`INSERT ... ON CONFLICT (task_id) DO UPDATE`,DB 失败仅 warning 不抛(回测主流程不受影响)
+- `submit_backtest()` 写 PENDING 行;`_default_runner()` 完成时写 SUCCESS/FAILED + result_json/error_message
+- `/api/backtest/history` 已存在(P7.1),AC (d) 该端点本就满足
+- BackgroundTasks 不换 APScheduler:单进程异步已足够,引调度器只增运维负担
+
+**测试**:5 case 覆盖 PENDING/SUCCESS/FAILED 各路径 + DB 失败降级 + submit 端到端 INSERT 触发。pytest 850 passed(+5)/ 78.91%。
+
+**部署提醒**:Ops 部署前必须手动 apply `db/init/08_STO-88_backtest_runs.sql`,否则首次 submit 会触发 warning(不阻断回测,但持久化失效)。
+
+---
+
+### 2026-04-25 · fix · cli.py `--n-days` 默认值同步 DEFAULT_N_DAYS(STO-91)
+
+**背景**:STO-81 给 `lhb_tn_price` 加了 T+3/7/10,`tn_price_backfill.DEFAULT_N_DAYS` 改为 `(1,2,3,5,7,10)`,但 `backend/cli.py` 的 argparse `--n-days` default 仍是 `"1,2,3,5,10"`,不带参数调用时 N=7 不会被 backfill。
+
+**修复**:一行 default 同步 + 新增 `tests/test_cli_defaults.py`,用正则从 `cli.py` 源文件 grep default 断言与 `DEFAULT_N_DAYS` tuple 相等,**防再次脱节**(比断言 argparse 对象更稳,不依赖重构出 `build_parser`)。
+
+pytest 845 passed / 78.90%。
+
+---
+
+### 2026-04-24 · devops · 数据采集告警落盘(STO-9)
+
+**背景**:`base_adapter._safe_request` 已经有完整的指数退避重试 + 硬超时 + 熔断链路,但「永久失败」的外部可见性只有 `logger.error`,Ops 拉不到结构化信号。STO-9 AC 剩下的实打实是**告警通道**。
+
+**方案**(最小闭环,不引新依赖):
+
+1. `db/init/07_STO-9_alert_log.sql` —— 新建 `alert_log` 表(level/category/source/message/details JSONB),3 个索引(created_at / level / ack+created)。
+2. `backend/core/alerts.py` —— `send_alert(level, category, source, message, details, conn_factory=None)`:落 DB + 打日志;DB 失败静默降级,不阻塞主流程。`AlertLevel` = INFO/WARN/ERROR/CRITICAL,`AlertCategory` = NETWORK/API/BATCH_JOB/DATA_QUALITY。
+3. `circuit_breaker.py::record_failure` —— CLOSED→OPEN 时 `_emit_trip_alert()`:CRITICAL + NETWORK,details 含 failure_count/threshold/last_error。异常包起来不影响状态机。
+4. `domain/lhb/daily_job.py::run_range` —— 末尾 `summary["fail"] > 0` 触发告警:全失败 → CRITICAL,部分失败 → ERROR,source=`lhb.daily_job.run_range`,details 含 summary + 日期区间。
+
+**没做的**(明确边界):
+- webhook 分发留给 Ops 层写 cron 轮询 `alert_log`(AC 原文「最小方案用 alert_log 表」,已覆盖)。
+- scoring/runner 尚未接入(其本身有 `raise` 传递错误,调用方已感知);后续若需要 Ops 零打扰可在 `cli` 层包一层。
+
+**测试**(`tests/test_alerts.py`,9 条):
+- send_alert 三种路径(正常写库 / details=None / DB 抛异常静默降级)
+- 4 种 level 都能 dispatch
+- 熔断 trip 触发 1 次 alert,alert 抛异常不污染状态机
+- run_range 全失败→CRITICAL / 部分失败→ERROR / 全成功→不告警
+
+pytest 840 passed + 覆盖率 79.29%。
+
+---
+
 ### 2026-04-23 · refactor · scoring/runner.py 事务 + SQL 参数化(STO-70 B/C)
 
 **背景**:STO-70 审计提出 3 个问题 A/B/C。本 PR 做 B+C(安全 ≈20 行),A(N+1 批量化 + 10x benchmark)影响 ≈100 行且需真实数据 benchmark,风险更高,**拆子任务 STO-73** 独立做(Backlog 待 PM 流转),不在本 commit 顺手扛。

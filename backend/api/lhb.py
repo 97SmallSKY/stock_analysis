@@ -49,7 +49,7 @@ def list_lhb(
     reason: Optional[str] = Query(None, description="上榜原因模糊匹配"),
     net_amount_min: Optional[float] = Query(None, description="最小净买入"),
     score_min: Optional[float] = Query(None, description="最小评分"),
-    order_by: str = Query("trade_date", pattern="^(trade_date|net_amount|score)$"),
+    order_by: str = Query("trade_date", pattern="^(trade_date|net_amount|score|pct_change)$"),
     order_desc: bool = Query(True),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -93,6 +93,7 @@ def list_lhb(
         "trade_date": "trade_date",
         "net_amount": "l_net",
         "score": "score",
+        "pct_change": "pct_change",
     }
     order_col = ORDER_COL.get(order_by, "trade_date")
 
@@ -121,22 +122,31 @@ def list_lhb(
 
     order_dir = "DESC" if order_desc else "ASC"
     # P10.1: LEFT JOIN stock_info 补股票简称 name;stock_info 为空也不影响主查询
-    # P16.5: with_tn=True 时 LEFT JOIN lhb_tn_price 透出 T+1 / T+5 收益
+    # P16.5: with_tn=True 时 LEFT JOIN lhb_tn_price 透出 T+N 收益
+    # STO-81: 扩展 T+3 / T+7 / T+10 三列
     tn_select = ""
     tn_joins = ""
     if with_tn:
         tn_select = (
             ", tn1.pnl_pct AS t1_pnl_pct, tn1.is_limit_up AS t1_limit_up,"
-            "  tn5.pnl_pct AS t5_pnl_pct, tn5.high_pct AS t5_high_pct"
+            "  tn3.pnl_pct AS t3_pnl_pct,"
+            "  tn5.pnl_pct AS t5_pnl_pct, tn5.high_pct AS t5_high_pct,"
+            "  tn7.pnl_pct AS t7_pnl_pct,"
+            "  tn10.pnl_pct AS t10_pnl_pct"
         )
         tn_joins = (
             " LEFT JOIN lhb_tn_price tn1 ON tn1.stock_daily_id=l.id AND tn1.n_day=1"
+            " LEFT JOIN lhb_tn_price tn3 ON tn3.stock_daily_id=l.id AND tn3.n_day=3"
             " LEFT JOIN lhb_tn_price tn5 ON tn5.stock_daily_id=l.id AND tn5.n_day=5"
+            " LEFT JOIN lhb_tn_price tn7 ON tn7.stock_daily_id=l.id AND tn7.n_day=7"
+            " LEFT JOIN lhb_tn_price tn10 ON tn10.stock_daily_id=l.id AND tn10.n_day=10"
         )
     sql = f"""
         SELECT l.ts_code,
                si.name AS name,
                l.trade_date, l.reason,
+               l.close_price AS close,
+               l.pct_change,
                l.l_buy   AS buy_amount,
                l.l_sell  AS sell_amount,
                l.l_net   AS net_amount,
