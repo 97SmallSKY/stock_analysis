@@ -65,7 +65,7 @@
 
 ```bash
 # Step 1: 转 In Progress + 自认 assignee
-save_issue(id="STO-X", state="In Progress", assignee="me")
+save_issue(project=PROJECT_ID, id="STO-X", state="In Progress", assignee="me")
 
 # Step 2: 从 new-branch 切独立分支(禁止在 new-branch 上改)
 git status  # 干净才开始(有改动先 git stash)
@@ -122,6 +122,7 @@ assert info.projectId == "5c09b8da-a3fc-45be-b866-5dc94cf01523", "跨项目 issu
 
 save_issue(
     id="STO-X",
+    project=PROJECT_ID,
     state="In Review",
     labels=[类型标签, "@test", "@ops"]  # 移除 @dev
 )
@@ -180,7 +181,7 @@ git commit -am "[STO-X] fix: <blocker 描述>"
 git push origin <type>/STO-X-<slug>
 
 # Linear 转回 In Review + 加回 @test + @ops
-save_issue(state="In Review", labels=[..., "@test", "@ops"])  # 移除 @dev
+save_issue(project=PROJECT_ID, state="In Review", labels=[..., "@test", "@ops"])  # 移除 @dev
 ```
 
 ### 4.2 Ops FF-only merge 失败,让我 rebase

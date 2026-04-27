@@ -107,7 +107,7 @@ git log -1 --oneline               # 记录 TEST_SHA,评论里注明
 #### ✅ 验收通过
 
 ```python
-save_issue(id="STO-X", labels=[
+save_issue(project=PROJECT_ID, id="STO-X", labels=[
     <类型标签>,
     "test-passed",  # c35a902b-0fcf-4a4f-a816-bda25a4dee0d
     "@ops",         # 68c6b943-5dee-479f-a1c6-2c7338153984
@@ -120,7 +120,7 @@ save_comment(id="STO-X", body="<test/templates.md 签字评论模板>")
 #### 🟡 验收打回(DoD 不过)
 
 ```python
-save_issue(id="STO-X", state="In Progress", labels=[
+save_issue(project=PROJECT_ID, id="STO-X", state="In Progress", labels=[
     <类型标签>,
     "@dev",
     # 移除 @test 和 @ops
@@ -196,7 +196,7 @@ save_comment(id="STO-X", body="列 blocker,引用 DoD 第几条")
 
 #### 路径 A:还在 `In Review` / `In Progress` → 打回 Dev
 ```python
-save_issue(state="In Progress", labels=[<类型>, "@dev"])  # 移除 test-passed + @ops
+save_issue(project=PROJECT_ID, state="In Progress", labels=[<类型>, "@dev"])  # 移除 test-passed + @ops
 save_comment(body="用户撤回原因:<>;补充测试用例:<>;@dev 请重开分支修复")
 ```
 

@@ -102,7 +102,7 @@ git branch -d <type>/STO-X-<slug>
 
 # Step 7: Linear 归档
 save_comment(id, body=<ops/templates.md 部署指纹模板>)
-save_issue(id, state="Done", labels=[...])  # 移除所有角色标签
+save_issue(id, project=PROJECT_ID, state="Done", labels=[...])  # 移除所有角色标签
 ```
 
 部署失败回滚详见 [ops/deploy-steps.md](./ops/deploy-steps.md)。
