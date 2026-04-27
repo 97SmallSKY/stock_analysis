@@ -40,6 +40,9 @@
         :row-key="(r: ReasonAgg) => r.reason"
         size="small"
       >
+        <template #headerCell="{ column }">
+          <TermTooltip v-if="column.termKey" :term="column.termKey">{{ column.title }}</TermTooltip>
+        </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'avg_t1' || column.key === 'avg_t5'">
             <span
@@ -73,6 +76,9 @@
             :row-key="(r: StockAgg) => r.ts_code"
             size="small"
           >
+            <template #headerCell="{ column }">
+              <TermTooltip v-if="column.termKey" :term="column.termKey">{{ column.title }}</TermTooltip>
+            </template>
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'ts_code'">
                 <StockLink :code="record.ts_code" :name="record.name" />
@@ -107,6 +113,9 @@
             :row-key="(r: StockAgg) => r.ts_code"
             size="small"
           >
+            <template #headerCell="{ column }">
+              <TermTooltip v-if="column.termKey" :term="column.termKey">{{ column.title }}</TermTooltip>
+            </template>
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'ts_code'">
                 <StockLink :code="record.ts_code" :name="record.name" />
@@ -152,6 +161,7 @@ import { fmtAmountWan } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
 import ScoreDetailModal from '@/components/ScoreDetailModal.vue'
 import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
+import TermTooltip from '@/components/TermTooltip.vue'
 import { defaultRange, toYmd, type DateRange } from '@/utils/date_range'
 import {
   aggregateByReason, aggregateByStock,
@@ -173,7 +183,7 @@ const rows = ref<LhbRow[]>([])
 // P16.5: 原因维度 TN 明细表 columns
 const reasonTnColumns = [
   {
-    title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true,
+    title: '原因', dataIndex: 'reason', key: 'reason', ellipsis: true, termKey: 'reason',
     sorter: (a: ReasonAgg, b: ReasonAgg) => a.reason.localeCompare(b.reason),
   },
   {
@@ -182,19 +192,19 @@ const reasonTnColumns = [
     defaultSortOrder: 'descend' as const,
   },
   {
-    title: '平均评分', dataIndex: 'avg_score', key: 'avg_score', width: 100, align: 'right' as const,
+    title: '平均评分', dataIndex: 'avg_score', key: 'avg_score', width: 100, align: 'right' as const, termKey: 'score',
     sorter: (a: ReasonAgg, b: ReasonAgg) => (a.avg_score ?? -1) - (b.avg_score ?? -1),
   },
   {
-    title: '平均 T+1', dataIndex: 'avg_t1', key: 'avg_t1', width: 100, align: 'right' as const,
+    title: '平均 T+1', dataIndex: 'avg_t1', key: 'avg_t1', width: 100, align: 'right' as const, termKey: 't1_pnl_pct',
     sorter: (a: ReasonAgg, b: ReasonAgg) => (a.avg_t1 ?? -999) - (b.avg_t1 ?? -999),
   },
   {
-    title: '平均 T+5', dataIndex: 'avg_t5', key: 'avg_t5', width: 100, align: 'right' as const,
+    title: '平均 T+5', dataIndex: 'avg_t5', key: 'avg_t5', width: 100, align: 'right' as const, termKey: 't5_pnl_pct',
     sorter: (a: ReasonAgg, b: ReasonAgg) => (a.avg_t5 ?? -999) - (b.avg_t5 ?? -999),
   },
   {
-    title: 'T+5 胜率', dataIndex: 't5_win_rate', key: 't5_win_rate', width: 100, align: 'right' as const,
+    title: 'T+5 胜率', dataIndex: 't5_win_rate', key: 't5_win_rate', width: 100, align: 'right' as const, termKey: 'win_rate',
     sorter: (a: ReasonAgg, b: ReasonAgg) => (a.t5_win_rate ?? -1) - (b.t5_win_rate ?? -1),
   },
 ]
@@ -209,23 +219,23 @@ const stockColumns = [
     sorter: (a: StockAgg, b: StockAgg) => a.count - b.count,
   },
   {
-    title: '买入合计', dataIndex: 'buy_sum', key: 'buy_sum', align: 'right' as const,
+    title: '买入合计', dataIndex: 'buy_sum', key: 'buy_sum', align: 'right' as const, termKey: 'buy_amount',
     sorter: (a: StockAgg, b: StockAgg) => a.buy_sum - b.buy_sum,
   },
   {
-    title: '卖出合计', dataIndex: 'sell_sum', key: 'sell_sum', align: 'right' as const,
+    title: '卖出合计', dataIndex: 'sell_sum', key: 'sell_sum', align: 'right' as const, termKey: 'sell_amount',
     sorter: (a: StockAgg, b: StockAgg) => a.sell_sum - b.sell_sum,
   },
   {
-    title: '净额', dataIndex: 'net_sum', key: 'net_sum', align: 'right' as const,
+    title: '净额', dataIndex: 'net_sum', key: 'net_sum', align: 'right' as const, termKey: 'net_amount',
     sorter: (a: StockAgg, b: StockAgg) => a.net_sum - b.net_sum,
   },
   {
-    title: '平均净买入', dataIndex: 'avg_net', key: 'avg_net', align: 'right' as const,
+    title: '平均净买入', dataIndex: 'avg_net', key: 'avg_net', align: 'right' as const, termKey: 'net_amount',
     sorter: (a: StockAgg, b: StockAgg) => a.avg_net - b.avg_net,
   },
   {
-    title: '平均评分', dataIndex: 'avg_score', key: 'avg_score', width: 90, align: 'right' as const,
+    title: '平均评分', dataIndex: 'avg_score', key: 'avg_score', width: 90, align: 'right' as const, termKey: 'score',
     sorter: (a: StockAgg, b: StockAgg) => (a.avg_score ?? -1) - (b.avg_score ?? -1),
   },
   // STO-35: 新增「详情」列,弹 ScoreDetailModal 展示期间内最高分 score_detail

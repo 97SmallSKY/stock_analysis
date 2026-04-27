@@ -73,4 +73,10 @@ describe('glossary', () => {
       expect(findTerm(k), `missing term: ${k}`).not.toBeNull()
     }
   })
+
+  it('STO-104: T+3/T+7/T+10 收益术语存在', () => {
+    for (const k of ['t1_pnl_pct', 't3_pnl_pct', 't5_pnl_pct', 't7_pnl_pct', 't10_pnl_pct']) {
+      expect(findTerm(k), `missing term: ${k}`).not.toBeNull()
+    }
+  })
 })

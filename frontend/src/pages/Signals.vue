@@ -40,6 +40,9 @@
             :row-key="rowKey"
             size="small"
           >
+            <template #headerCell="{ column }">
+              <TermTooltip v-if="column.termKey" :term="column.termKey">{{ column.title }}</TermTooltip>
+            </template>
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'ts_code'">
                 <!-- P19.12: 传 anchorDate 让 K 线 Modal 默认以该行日期为中心 -->
@@ -259,6 +262,7 @@ import { fetchLhb, type LhbRow } from '@/api/lhb'
 import { fmtAmountWan, fmtDate } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
 import DateRangeQuickPick from '@/components/DateRangeQuickPick.vue'
+import TermTooltip from '@/components/TermTooltip.vue'
 import { defaultRange, toYmd, type DateRange } from '@/utils/date_range'
 
 const router = useRouter()
@@ -316,37 +320,37 @@ const columns = [
     defaultSortOrder: 'descend' as const,
   },
   {
-    title: '上榜原因', dataIndex: 'reason', key: 'reason', ellipsis: true,
+    title: '上榜原因', dataIndex: 'reason', key: 'reason', ellipsis: true, termKey: 'reason',
     sorter: (a: LhbRow, b: LhbRow) => (a.reason ?? '').localeCompare(b.reason ?? ''),
   },
   {
-    title: '净买入', key: 'net_amount', dataIndex: 'net_amount', width: 130, align: 'right' as const,
+    title: '净买入', key: 'net_amount', dataIndex: 'net_amount', width: 130, align: 'right' as const, termKey: 'net_amount',
     sorter: (a: LhbRow, b: LhbRow) => (a.net_amount ?? 0) - (b.net_amount ?? 0),
   },
   {
-    title: '评分', key: 'score', dataIndex: 'score', width: 90, align: 'right' as const,
+    title: '评分', key: 'score', dataIndex: 'score', width: 90, align: 'right' as const, termKey: 'score',
     sorter: (a: LhbRow, b: LhbRow) => (a.score ?? -1) - (b.score ?? -1),
     defaultSortOrder: 'descend' as const,
   },
   // P16.5 + STO-103: T+1 / T+3 / T+5 / T+7 / T+10 次日收益 (lhb_tn_price JOIN)
   {
-    title: 'T+1', key: 't1_pnl_pct', dataIndex: 't1_pnl_pct', width: 80, align: 'right' as const,
+    title: 'T+1', key: 't1_pnl_pct', dataIndex: 't1_pnl_pct', width: 80, align: 'right' as const, termKey: 't1_pnl_pct',
     sorter: (a: LhbRow, b: LhbRow) => (a.t1_pnl_pct ?? -999) - (b.t1_pnl_pct ?? -999),
   },
   {
-    title: 'T+3', key: 't3_pnl_pct', dataIndex: 't3_pnl_pct', width: 80, align: 'right' as const,
+    title: 'T+3', key: 't3_pnl_pct', dataIndex: 't3_pnl_pct', width: 80, align: 'right' as const, termKey: 't3_pnl_pct',
     sorter: (a: LhbRow, b: LhbRow) => (a.t3_pnl_pct ?? -999) - (b.t3_pnl_pct ?? -999),
   },
   {
-    title: 'T+5', key: 't5_pnl_pct', dataIndex: 't5_pnl_pct', width: 80, align: 'right' as const,
+    title: 'T+5', key: 't5_pnl_pct', dataIndex: 't5_pnl_pct', width: 80, align: 'right' as const, termKey: 't5_pnl_pct',
     sorter: (a: LhbRow, b: LhbRow) => (a.t5_pnl_pct ?? -999) - (b.t5_pnl_pct ?? -999),
   },
   {
-    title: 'T+7', key: 't7_pnl_pct', dataIndex: 't7_pnl_pct', width: 80, align: 'right' as const,
+    title: 'T+7', key: 't7_pnl_pct', dataIndex: 't7_pnl_pct', width: 80, align: 'right' as const, termKey: 't7_pnl_pct',
     sorter: (a: LhbRow, b: LhbRow) => (a.t7_pnl_pct ?? -999) - (b.t7_pnl_pct ?? -999),
   },
   {
-    title: 'T+10', key: 't10_pnl_pct', dataIndex: 't10_pnl_pct', width: 90, align: 'right' as const,
+    title: 'T+10', key: 't10_pnl_pct', dataIndex: 't10_pnl_pct', width: 90, align: 'right' as const, termKey: 't10_pnl_pct',
     sorter: (a: LhbRow, b: LhbRow) => (a.t10_pnl_pct ?? -999) - (b.t10_pnl_pct ?? -999),
   },
   { title: '评分明细', key: 'score_detail', width: 90 },

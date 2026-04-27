@@ -115,11 +115,32 @@ export const GLOSSARY: Term[] = [
     brief: '龙虎榜披露后次日的涨跌幅(%)。正数表示跟买赚钱。',
   },
   {
+    key: 't3_pnl_pct',
+    name: 'T+3 收益',
+    aliases: ['3 日收益'],
+    tag: 'score',
+    brief: '龙虎榜披露后第 3 个交易日的累计涨跌幅(%)。',
+  },
+  {
     key: 't5_pnl_pct',
     name: 'T+5 收益',
     aliases: ['5 日收益'],
     tag: 'score',
     brief: '龙虎榜披露后第 5 个交易日的累计涨跌幅(%)。用于评估短线持有效果。',
+  },
+  {
+    key: 't7_pnl_pct',
+    name: 'T+7 收益',
+    aliases: ['7 日收益'],
+    tag: 'score',
+    brief: '龙虎榜披露后第 7 个交易日的累计涨跌幅(%)。',
+  },
+  {
+    key: 't10_pnl_pct',
+    name: 'T+10 收益',
+    aliases: ['10 日收益'],
+    tag: 'score',
+    brief: '龙虎榜披露后第 10 个交易日的累计涨跌幅(%)。用于评估中短线持有效果。',
   },
   {
     key: 'turnover_rate',
