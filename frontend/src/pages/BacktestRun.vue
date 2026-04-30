@@ -13,22 +13,12 @@
           <a-select
             v-model:value="form.strategy_name"
             placeholder="请选择已注册策略"
+            :options="strategyOptions"
             show-search
             :filter-option="(input: string, option: any) => option.label.toLowerCase().includes(input.toLowerCase())"
-          >
-            <a-select-option
-              v-for="s in strategies"
-              :key="s.name"
-              :value="s.name"
-              :label="s.description || s.name"
-            >
-              <a-tooltip :title="s.description || s.name" placement="right" :mouse-enter-delay="0.3">
-                <span style="display: block;">{{ s.description || s.name }}</span>
-              </a-tooltip>
-            </a-select-option>
-          </a-select>
-          <div v-if="selectedStrategy?.description" class="strategy-desc">
-            {{ selectedStrategy.description }}
+          />
+          <div v-if="selectedStrategy" class="strategy-desc">
+            {{ selectedStrategy.description || selectedStrategy.name }}
           </div>
         </a-form-item>
 

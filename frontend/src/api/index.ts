@@ -15,6 +15,6 @@ export interface IndexSnapshotResp {
 }
 
 export async function fetchIndexSnapshot(): Promise<IndexSnapshotResp> {
-  const { data } = await http.get<IndexSnapshotResp>('/api/index/snapshot')
+  const { data } = await http.get<IndexSnapshotResp>('/api/index/snapshot', { timeout: 20_000 })
   return data
 }
