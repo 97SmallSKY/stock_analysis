@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-04-30 STO-116**:策略 description 字段补充逻辑说明。`builtins.py` 中 `lhb_hot_money.description` 改为「跟随龙虎榜游资买入，游资净额≥1000万、评分≥70，单仓20%，持仓≤10天，止损-7%/止盈+15%」；`lhb_institution.description` 改为「跟随龙虎榜机构买入，要求≥2个机构买入席位、评分≥70，单仓20%，持仓≤10天，止损-7%/止盈+15%」。前端无改动。
 - **2026-04-30 STO-114**:K 线弹窗 MA5/MA10 默认显示。STO-30 设 `legend.selected={MA5:false,MA10:false}` 隐藏均线,用户反馈看不到 MA 线。改为 `selected={MA5:true,MA10:true}`;MA 数据为前端 `ma()` 计算,无需后端改动。DMA/MACD 副图另建 issue。
 - **2026-04-30 STO-113 v2**:Dashboard 修复补丁。`fetchIndexSnapshot` timeout 10s → 20s(上轮改的是 dashboard 请求,漏了 index/snapshot 这个接口也会超时);STO-107 v2 使用 `strategyOptions`(label=description)替换自定义 `a-select-option + a-tooltip` 方案(antd dropdown portal 内 tooltip 不渲染)。
 - **2026-04-30 STO-113**:Dashboard 首页三合一修复。(1) `cbColor` 加 `.toLowerCase()` 修复大写 `CLOSED` 不显示绿色 bug + 新增 2 case 单测;(2) `fetchDashboard` timeout 10s → 30s;(3) `_latest_sentiment()` 移除 `WHERE up_down_ratio IS NOT NULL` 限制(该列长期 NULL 导致数据停留在 2026-04-17,现取最新行)。

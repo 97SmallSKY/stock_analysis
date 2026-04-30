@@ -38,7 +38,7 @@ class LhbHotMoneyStrategy(BaseStrategy):
 
     name = "lhb_hot_money"
     category = "LHB"
-    description = "龙虎榜游资跟随"
+    description = "跟随龙虎榜游资买入，游资净额≥1000万、评分≥70，单仓20%，持仓≤10天，止损-7%/止盈+15%"
 
     DEFAULT_PARAMS = {
         "score_threshold": 70,
@@ -123,7 +123,7 @@ class LhbInstitutionStrategy(LhbHotMoneyStrategy):
 
     name = "lhb_institution"
     category = "LHB"
-    description = "龙虎榜机构跟随"
+    description = "跟随龙虎榜机构买入，要求≥2个机构买入席位、评分≥70，单仓20%，持仓≤10天，止损-7%/止盈+15%"
 
     DEFAULT_PARAMS = {
         **LhbHotMoneyStrategy.DEFAULT_PARAMS,
