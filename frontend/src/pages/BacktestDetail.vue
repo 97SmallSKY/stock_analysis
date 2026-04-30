@@ -77,16 +77,20 @@
         </div>
 
         <div class="chart-section">
-          <h3>买卖点(无未来函数视图)</h3>
-          <a-alert
-            type="info"
-            show-icon
-            message="K 线买卖点架子"
-            description="后端 result 当前不存 trades 详情,此处为截断架子(数据暂空);后端补齐 trades_sample 后可直接接入 echarts markPoint。AC(e) 截断函数见 utils/backtest_truncate.ts 已覆盖单测。"
+          <h3>买卖点 (nav + markPoint)</h3>
+          <VChart
+            v-if="tradeMarkOption"
+            :option="tradeMarkOption"
+            class="chart"
+            autoresize
           />
+          <a-empty v-else description="暂无 trades_sample 数据(仅新跑任务有)" />
           <div class="trade-stats">
             <a-typography-text type="secondary">
-              任务交易总数 (后端 result.trade_count):{{ detail.result?.trade_count ?? '-' }}
+              任务交易总数:{{ detail.result?.trade_count ?? '-' }}
+              <template v-if="detail.result?.trades_sample?.length">
+                · 显示前 {{ detail.result.trades_sample.length }} 笔
+              </template>
             </a-typography-text>
           </div>
         </div>
@@ -106,7 +110,7 @@ import {
   GridComponent, TooltipComponent, LegendComponent, TitleComponent,
   DataZoomComponent, MarkPointComponent,
 } from 'echarts/components'
-import { fetchBacktestTask, type BacktestTaskDetail } from '@/api/backtest'
+import { fetchBacktestTask, type BacktestTaskDetail, type TradeSample } from '@/api/backtest'
 import { computeDrawdown } from '@/utils/backtest_drawdown'
 
 use([
@@ -170,6 +174,38 @@ const ddOption = computed(() => {
       showSymbol: false,
       data: dd.map((p) => p.drawdown),
       lineStyle: { color: '#389e0d', width: 2 },
+    }],
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+  }
+})
+
+const tradeMarkOption = computed(() => {
+  const nav = detail.value?.result?.nav_series
+  const trades = detail.value?.result?.trades_sample
+  if (!nav || nav.length === 0 || !trades || trades.length === 0) return null
+  const navByDate = new Map(nav.map((p) => [p.date, p.nav]))
+  const markData = trades
+    .filter((t: TradeSample) => navByDate.has(t.date))
+    .map((t: TradeSample) => ({
+      coord: [t.date, navByDate.get(t.date)!],
+      value: t.direction === 'BUY' ? '▲' : '▼',
+      itemStyle: { color: t.direction === 'BUY' ? '#d4380d' : '#389e0d' },
+    }))
+  return {
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: nav.map((p) => p.date) },
+    yAxis: { type: 'value', scale: true },
+    series: [{
+      name: 'nav',
+      type: 'line',
+      showSymbol: false,
+      data: nav.map((p) => p.nav),
+      lineStyle: { color: '#d4380d', width: 2 },
+      markPoint: {
+        symbolSize: 24,
+        label: { fontSize: 10, color: '#fff' },
+        data: markData,
+      },
     }],
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
   }

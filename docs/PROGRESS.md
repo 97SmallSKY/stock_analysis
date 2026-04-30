@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-04-30 STO-110**:回测详情页买卖点 markPoint 实现。`backend/api/backtest.py` 在 SUCCESS 时把 `result.trades[:50]` 作为 `trades_sample` 存入内存 store;`frontend/src/api/backtest.ts` 新增 `TradeSample` 接口;`BacktestDetail.vue` 替换占位 alert 为含 markPoint 的 nav 折线图(▲买/▼卖,无未来函数)。无额外单测(纯展示逻辑,引用已有 `tradeMarkOption` computed)。
 - **2026-04-28 STO-106**:/backtest-history 空态 CTA 跳错路由修复(Low type:bug)。STO-36 Playwright 验证发现空态按钮「跑第一个回测」跳到 `/backtest`(策略对比页)与文案不符,应跳 `/backtest-run`(提交表单页)。改 `frontend/src/pages/BacktestHistory.vue` line 73 的 `router.push('/backtest')` → `router.push('/backtest-run')`。一行修正,无单测(BacktestHistory.vue 无组件测试 harness)。
 - **2026-04-28 STO-104**:/signals + /lhb-pnl 表头挂 TermTooltip(Medium type:bug)。STO-83 TermTooltip 组件存在但这 2 页漏挂。改 3 处:(1) 两页 a-table 加 `#headerCell` slot 绑 `TermTooltip v-if=column.termKey`;(2) columns 数组可识别术语的列补 `termKey` 字段(Signals: reason/net_amount/score/t1-t10; LhbPnl reason 表: reason/avg_score/avg_t1/avg_t5/t5_win_rate; LhbPnl Top 表: buy_sum/sell_sum/net_sum/avg_net/avg_score);(3) glossary.ts +3 条 t3/t7/t10 收益释义。glossary.test.ts +1 case 断言 t1/t3/t5/t7/t10 术语齐全。vitest 197 passed(+1)/typecheck 绿/pytest 862/79.26%。
 - **2026-04-28 STO-103**:/signals 表格补 T+3/T+7/T+10 三列(Medium type:bug)。STO-98 抽查发现:STO-81 把 /lhb 加了 T+3/7/10 但 /signals 漏改。Signals.vue columns 数组在 t1/t5 之间插入 t3/t7/t10 三列(field 复用 LhbRow 已有 t3_pnl_pct/t7_pnl_pct/t10_pnl_pct,后端 with_tn=true 已支持);bodyCell 的颜色样式 v-else-if 扩到 5 个 key。列宽从 90 调到 80(留 t10 单独 90 防换行)。无新单测(纯 columns 配置变更,Signals.vue 无既有测试 harness)。vitest 196 / typecheck 绿 / pytest 862 / 79.26%。

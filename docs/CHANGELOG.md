@@ -8,6 +8,12 @@
 
 ---
 
+### 2026-04-30 · feat · 回测详情页买卖点 markPoint 实现 (STO-110)
+
+回测详情页 `/backtest-history/:taskId` 「买卖点」区域从占位 alert 升级为真实 ECharts 折线图 + markPoint:▲红色=买入、▼绿色=卖出,标注在 nav 曲线对应日期。后端新增 `trades_sample`(前 50 笔)随任务结果存入内存 store,仅新跑任务有数据,历史任务显示空态提示。
+
+---
+
 ### 2026-04-28 · fix · /backtest-history 空态「跑第一个回测」按钮跳到提交表单 (STO-106)
 
 之前空态 CTA 按钮跳到 `/backtest`(策略对比页),与按钮文案不一致。现在跳到 `/backtest-run`(回测任务提交表单页),用户点了立刻能填参数提交。

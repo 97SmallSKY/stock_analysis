@@ -236,6 +236,7 @@ def _default_runner(task: BacktestTask, store: TaskStore) -> None:
                 'total_return': result.total_return,
                 'trade_count': len(result.trades),
                 'nav_series': result.nav_series[-100:],  # 仅保留尾部
+                'trades_sample': result.trades[:50],
             },
             metrics=asdict(metrics),
         )

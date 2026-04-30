@@ -142,6 +142,15 @@ export interface NavPoint {
   sell_amount: number
 }
 
+export interface TradeSample {
+  date: string        // YYYY-MM-DD
+  ts_code: string
+  direction: string   // BUY / SELL
+  price: number
+  shares: number
+  amount: number
+}
+
 export interface BacktestTaskDetail {
   task_id: string
   strategy_name: string
@@ -160,6 +169,7 @@ export interface BacktestTaskDetail {
     total_return?: number
     trade_count?: number
     nav_series?: NavPoint[]
+    trades_sample?: TradeSample[]
   } | null
   metrics: {
     total_return?: number
