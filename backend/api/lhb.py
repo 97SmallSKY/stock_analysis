@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.db.session import pg_conn
 from backend.utils.response_cache import ResponseCache
+from backend.api.schemas.lhb import LhbListResp, LhbSeatsResp, LhbStatResp
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -41,7 +42,7 @@ def _to_iso(date_str: Optional[str]) -> Optional[str]:
     return f"{s[:4]}-{s[4:6]}-{s[6:]}"
 
 
-@router.get("")
+@router.get("", response_model=LhbListResp)
 def list_lhb(
     date_from: Optional[str] = Query(None, description="YYYYMMDD"),
     date_to: Optional[str] = Query(None, description="YYYYMMDD"),
@@ -186,7 +187,7 @@ def list_lhb(
         raise HTTPException(500, f"查询失败: {e}")
 
 
-@router.get("/seats")
+@router.get("/seats", response_model=LhbSeatsResp)
 def list_seats(
     trade_date: str = Query(..., description="YYYYMMDD"),
     ts_code: Optional[str] = Query(None),
@@ -229,7 +230,7 @@ def list_seats(
         raise HTTPException(500, f"查询失败: {e}")
 
 
-@router.get("/stat/{stat_type}/{stat_key}")
+@router.get("/stat/{stat_type}/{stat_key}", response_model=LhbStatResp)
 def get_stat(stat_type: str, stat_key: str, stat_period: str = Query("all")):
     """聚合统计 lhb_agg_stats, 例: /stat/broker/国泰君安/all"""
     try:

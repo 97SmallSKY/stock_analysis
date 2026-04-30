@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-04-30 STO-121 Phase 1b**：lhb 端点 Pydantic schema 接入（`LhbListResp`/`LhbSeatsResp`/`LhbStatResp`，宽模式，3 端点加 `response_model=`），契约测试 `test_api_lhb_schema.py`。
 - **2026-04-30 STO-120**：策略对比历史任务区间列 `undefined` 修复。`backend/api/backtest.py` list_history DB 路径缺 `start_date`/`end_date` 顶层字段，补 `config.get('start_date')`/`config.get('end_date')`。
 - **2026-04-30 STO-115 fix**：K 线弹窗 MACD 副图容器高度修复。根因：`chart-box` 固定 `480px` + `overflow:hidden`，副图被裁剪不可见；改为 render 时动态设置高度（有 MACD 时 640px，否则 480px）。
 - **2026-04-30 STO-37 Phase 1a**：kline 端点 Pydantic schema 接入（`KlineDailyResp`/`KlineWeeklyResp`/`KlineDaterangeResp`，`extra='ignore'` 宽模式，3 个端点加 `response_model=`）。
