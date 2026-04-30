@@ -502,12 +502,16 @@ def list_history(
                             continue
                         seen_task_ids.add(task_id)
                         result = row[4] or {}
+                        config = row[3] or {}
                         metrics = result.get('metrics', {})
                         out.append({
                             'task_id': task_id,
                             'strategy_name': row[1],
                             'status': row[2],
-                            'config': row[3],
+                            'config': config,
+                            # STO-120: 顶层补 start_date/end_date 供前端直接取用
+                            'start_date': config.get('start_date'),
+                            'end_date': config.get('end_date'),
                             'result': result,
                             'error_message': row[5],
                             'created_at': row[6].isoformat() if row[6] else None,
