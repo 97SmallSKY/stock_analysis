@@ -140,3 +140,66 @@ def test_task_params_merged(app_with_bt):
     assert t.params['score_threshold'] == 85
     assert t.params['max_positions'] == 8
     assert t.params['per_position_pct'] == 0.1
+
+
+def test_compare_persists_to_db(app_with_bt, monkeypatch):
+    """STO-118: /compare 端点调用后应持久化到 backtest_runs."""
+    client, _ = app_with_bt
+    
+    # Mock run_compare 返回假报告
+    from backend.domain.backtest.compare import ComparisonReport, StrategyRun
+    fake_report = ComparisonReport(
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 12, 31),
+        initial_capital=1_000_000,
+        runs=[
+            StrategyRun(name='策略A', ok=True, total_return=0.15, annual_return=0.15,
+                        sharpe_ratio=1.2, max_drawdown=-0.08, win_rate=0.6,
+                        trade_count=10, final_assets=1_150_000, duration_ms=100),
+            StrategyRun(name='策略B', ok=True, total_return=0.12, annual_return=0.12,
+                        sharpe_ratio=1.0, max_drawdown=-0.10, win_rate=0.55,
+                        trade_count=8, final_assets=1_120_000, duration_ms=90),
+        ],
+    )
+    
+    def fake_run_compare(*args, **kwargs):
+        return fake_report
+    
+    # Mock _persist_run 记录调用
+    persist_calls = []
+    def fake_persist_run(**kwargs):
+        persist_calls.append(kwargs)
+    
+    monkeypatch.setattr('backend.domain.backtest.compare.run_compare', fake_run_compare)
+    monkeypatch.setattr(bt_mod, '_persist_run', fake_persist_run)
+    
+    # Mock provider factory
+    def fake_provider_factory():
+        return None
+    bt_mod.set_compare_provider_factory(fake_provider_factory)
+    
+    # 调用 /compare
+    payload = {
+        'start_date': '2024-01-01',
+        'end_date': '2024-12-31',
+        'initial_capital': 1_000_000,
+        'strategies': [
+            {'name': '策略A', 'strategy_name': 'lhb_hot_money', 'params': {}},
+            {'name': '策略B', 'strategy_name': 'lhb_institution', 'params': {}},
+        ],
+    }
+    r = client.post('/api/backtest/compare', json=payload)
+    assert r.status_code == 200
+    body = r.json()
+    assert body['start_date'] == '2024-01-01'
+    assert len(body['runs']) == 2
+    
+    # 验证 _persist_run 被调用
+    assert len(persist_calls) == 1
+    call = persist_calls[0]
+    assert call['task_id'].startswith('compare-')
+    assert call['strategy_name'] == '策略A,策略B'
+    assert call['status'] == 'SUCCESS'
+    assert call['finished'] is True
+    assert 'strategies' in call['config']
+    assert call['result_json'] == body

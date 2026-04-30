@@ -11,6 +11,14 @@
 
 ---
 
+### 2026-04-30 · fix · 策略对比持久化 + history 端点双源合并(STO-118)
+
+**根因**：`/compare` 端点未调用 `_persist_run`；`/history` 端点只查 in-memory TaskStore，重启后数据消失。
+
+**修复**：(1) `/compare` 返回后调用 `_persist_run(task_id=f'compare-{uuid}', strategy_name=逗号分隔, status='SUCCESS', finished=True)`；(2) `/history` 在 in-memory 结果不足 limit 时补查 `backtest_runs` 表，去重后合并返回。
+
+---
+
 ### 2026-04-30 · fix · daily_update.sh 补 T+N 收益回填步骤(STO-117)
 
 **根因**：`scripts/daily_update.sh` 只有 5 步（lhb/席位/情绪/kline/评分），缺少第 6 步 `lhb-tn-price` 回填。导致每日新增的 lhb_stock_daily 记录在 `lhb_tn_price` 表中永远缺行，前端 T+1/T+3/T+5/T+7/T+10 列全显示 `—`。

@@ -445,12 +445,16 @@ def list_history(
 ):
     """P7.1 历史任务摘要: 在 /api/backtest 基础上补 metrics 摘要 + 过滤.
 
+    STO-118: 合并 in-memory TaskStore + DB backtest_runs 两个来源。
+
     每行返回字段 = TaskResp + {
         total_return, sharpe, max_drawdown, n_trades, win_rate
     } (若任务未完成, 这些字段为 None).
     """
-    items = get_store().list(limit=limit * 4)  # 先宽取, 再过滤, 最后 slice
+    # 1. 从 in-memory TaskStore 读取（运行中 + 最近完成的）
+    items = get_store().list(limit=limit * 4)
     out: list[dict] = []
+    seen_task_ids = set()
     for t in items:
         if status and t.status != status:
             continue
@@ -464,8 +468,61 @@ def list_history(
         d['n_trades'] = m.get('n_trades') or m.get('trade_count')
         d['win_rate'] = m.get('win_rate')
         out.append(d)
+        seen_task_ids.add(t.task_id)
         if len(out) >= limit:
             break
+
+    # 2. 从 DB backtest_runs 补充历史记录（去重）
+    if len(out) < limit:
+        try:
+            from backend.db.session import pg_conn
+            with pg_conn() as conn:
+                with conn.cursor() as cur:
+                    where = ['1=1']
+                    params = []
+                    if status:
+                        where.append('status = %s')
+                        params.append(status)
+                    if strategy_name:
+                        where.append('strategy_name = %s')
+                        params.append(strategy_name)
+                    sql = f"""
+                        SELECT task_id, strategy_name, status, config, result_json,
+                               error_message, created_at, finished_at
+                        FROM backtest_runs
+                        WHERE {' AND '.join(where)}
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                    """
+                    params.append(limit * 2)
+                    cur.execute(sql, params)
+                    for row in cur.fetchall():
+                        task_id = row[0]
+                        if task_id in seen_task_ids:
+                            continue
+                        seen_task_ids.add(task_id)
+                        result = row[4] or {}
+                        metrics = result.get('metrics', {})
+                        out.append({
+                            'task_id': task_id,
+                            'strategy_name': row[1],
+                            'status': row[2],
+                            'config': row[3],
+                            'result': result,
+                            'error_message': row[5],
+                            'created_at': row[6].isoformat() if row[6] else None,
+                            'finished_at': row[7].isoformat() if row[7] else None,
+                            'total_return': metrics.get('total_return'),
+                            'sharpe': metrics.get('sharpe') or metrics.get('sharpe_ratio'),
+                            'max_drawdown': metrics.get('max_drawdown'),
+                            'n_trades': metrics.get('n_trades') or metrics.get('trade_count'),
+                            'win_rate': metrics.get('win_rate'),
+                        })
+                        if len(out) >= limit:
+                            break
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('[backtest] list_history DB query failed: %s', exc)
+
     return {'total': len(out), 'rows': out}
 
 
@@ -544,4 +601,25 @@ def compare_endpoint(req: CompareReq, request: Request):
         strategies, provider, req.start_date, req.end_date,
         config=cfg, max_workers=req.max_workers,
     )
+
+    # STO-118: 持久化对比任务到 backtest_runs
+    import uuid
+    task_id = f"compare-{uuid.uuid4().hex[:8]}"
+    strategy_names = ",".join(s.name for s in req.strategies)
+    _persist_run(
+        task_id=task_id,
+        strategy_name=strategy_names,
+        status='SUCCESS',
+        config={
+            'start_date': req.start_date.isoformat(),
+            'end_date': req.end_date.isoformat(),
+            'initial_capital': req.initial_capital,
+            'strategies': [{'name': s.name, 'strategy_name': s.strategy_name, 'params': s.params} for s in req.strategies],
+            'max_positions': req.max_positions,
+            'per_position_pct': req.per_position_pct,
+        },
+        result_json=rep.to_dict(),
+        finished=True,
+    )
+
     return rep.to_dict()

@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-04-30 STO-118**：策略对比历史任务记录持久化修复。`/compare` 端点补 `_persist_run` 调用写 `backtest_runs` 表；`/history` 端点同时从 in-memory + DB 两个来源读取，修复刷新后历史记录消失问题。
 - **2026-04-30 STO-117**：daily_update.sh 补 T+N 收益回填步骤。根因：脚本缺少 `lhb-tn-price` 步骤导致近期数据 T+1~T+10 列全显示 `—`。修复：step 6 加 `python -m backend.cli lhb-tn-price --from $TODAY --to $TODAY`；Ops 需手动补跑历史区间。
 - **2026-04-30 STO-116**:策略 description 字段补充逻辑说明。`builtins.py` 中 `lhb_hot_money.description` 改为「跟随龙虎榜游资买入，游资净额≥1000万、评分≥70，单仓20%，持仓≤10天，止损-7%/止盈+15%」；`lhb_institution.description` 改为「跟随龙虎榜机构买入，要求≥2个机构买入席位、评分≥70，单仓20%，持仓≤10天，止损-7%/止盈+15%」。前端无改动。
 - **2026-04-30 STO-114**:K 线弹窗 MA5/MA10 默认显示。STO-30 设 `legend.selected={MA5:false,MA10:false}` 隐藏均线,用户反馈看不到 MA 线。改为 `selected={MA5:true,MA10:true}`;MA 数据为前端 `ma()` 计算,无需后端改动。DMA/MACD 副图另建 issue。
