@@ -351,6 +351,9 @@ function render() {
   if (!chartRef.value) return
   if (chart) { chart.dispose(); chart = null }
   if (rows.value.length === 0) return
+  // STO-115 fix: 有 MACD 副图时动态扩高容器，否则恢复默认
+  const hasMacdData = !!(indicators.value?.macd?.diff?.length)
+  chartRef.value.style.height = hasMacdData ? '640px' : '480px'
   chart = echarts.init(chartRef.value)
 
   const dates = rows.value.map((r) => r.date)

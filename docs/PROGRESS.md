@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-04-30 STO-115 fix**：K 线弹窗 MACD 副图容器高度修复。根因：`chart-box` 固定 `480px` + `overflow:hidden`，副图被裁剪不可见；改为 render 时动态设置高度（有 MACD 时 640px，否则 480px）。
 - **2026-04-30 STO-37 Phase 1a**：kline 端点 Pydantic schema 接入（`KlineDailyResp`/`KlineWeeklyResp`/`KlineDaterangeResp`，`extra='ignore'` 宽模式，3 个端点加 `response_model=`）。
 - **2026-04-30 STO-115**：K 线弹窗新增 DMA/MACD 副图。后端 `indicators.py` 纯函数计算；`/api/kline/daily` 新增 `indicators` 参数；前端弹窗日 K 模式下有数据时动态添加 MACD 副图 grid。
 - **2026-04-30 STO-118**：策略对比历史任务记录持久化修复。`/compare` 端点补 `_persist_run` 调用写 `backtest_runs` 表；`/history` 端点同时从 in-memory + DB 两个来源读取，修复刷新后历史记录消失问题。
