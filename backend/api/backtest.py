@@ -534,12 +534,52 @@ def list_history(
 @default_limit
 def get_task(task_id: str, request: Request):
     t = get_store().get(task_id)
-    if t is None:
+    if t is not None:
+        d = t.to_dict()
+        d['result'] = t.result
+        d['metrics'] = t.metrics
+        return d
+
+    # STO-125: in-memory 找不到时回退查 DB（compare-* 等持久化但未重载到内存的任务）
+    try:
+        from backend.db.session import pg_conn
+        with pg_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT task_id, strategy_name, status, config, result_json,"
+                    " error_message, created_at, finished_at"
+                    " FROM backtest_runs WHERE task_id = %s",
+                    (task_id,),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail='task not found')
+        config = row[3] or {}
+        result = row[4] or {}
+        metrics = result.get('metrics', {})
+        return {
+            'task_id': row[0],
+            'strategy_name': row[1],
+            'status': row[2],
+            'config': config,
+            'start_date': config.get('start_date'),
+            'end_date': config.get('end_date'),
+            'result': result,
+            'error_message': row[5],
+            'created_at': row[6].isoformat() if row[6] else None,
+            'finished_at': row[7].isoformat() if row[7] else None,
+            'metrics': metrics,
+            'total_return': metrics.get('total_return'),
+            'sharpe': metrics.get('sharpe') or metrics.get('sharpe_ratio'),
+            'max_drawdown': metrics.get('max_drawdown'),
+            'n_trades': metrics.get('n_trades') or metrics.get('trade_count'),
+            'win_rate': metrics.get('win_rate'),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning('[backtest] get_task DB fallback failed task=%s err=%s', task_id, exc)
         raise HTTPException(status_code=404, detail='task not found')
-    d = t.to_dict()
-    d['result'] = t.result
-    d['metrics'] = t.metrics
-    return d
 
 
 # ====================================================================
