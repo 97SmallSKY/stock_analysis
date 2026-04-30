@@ -84,7 +84,7 @@ export function rankClass(r: number | null | undefined): string {
 
 // Circuit breaker 状态标签色
 export function cbColor(state: string | null | undefined): string {
-  switch (state) {
+  switch (state?.toLowerCase()) {
     case 'closed': return 'green'
     case 'half_open': return 'gold'
     case 'open': return 'red'

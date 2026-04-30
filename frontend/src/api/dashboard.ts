@@ -40,6 +40,7 @@ export interface DashboardResp {
 export async function fetchDashboard(topN = 10): Promise<DashboardResp> {
   const { data } = await http.get<DashboardResp>('/api/dashboard', {
     params: { top_n: topN },
+    timeout: 30_000,
   })
   return data
 }

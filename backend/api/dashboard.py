@@ -50,7 +50,6 @@ def _latest_sentiment() -> Optional[dict]:
                           lhb_stock_count, lhb_total_net, lhb_avg_score,
                           sentiment_score, sentiment_level, sentiment_change
                    FROM market_sentiment
-                   WHERE up_down_ratio IS NOT NULL
                    ORDER BY trade_date DESC LIMIT 1"""
             )
             row = cur.fetchone()

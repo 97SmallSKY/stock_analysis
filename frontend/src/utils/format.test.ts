@@ -78,12 +78,17 @@ describe('healthColor', () => {
 })
 
 describe('cbColor', () => {
-  it('closed=green half_open=gold open=red', () => {
+  it('lowercase: closed=green half_open=gold open=red', () => {
     expect(cbColor('closed')).toBe('green')
     expect(cbColor('half_open')).toBe('gold')
     expect(cbColor('open')).toBe('red')
     expect(cbColor(null)).toBe('default')
     expect(cbColor('foo')).toBe('default')
+  })
+  it('uppercase backend values: CLOSED=green HALF_OPEN=gold OPEN=red', () => {
+    expect(cbColor('CLOSED')).toBe('green')
+    expect(cbColor('HALF_OPEN')).toBe('gold')
+    expect(cbColor('OPEN')).toBe('red')
   })
 })
 

@@ -8,6 +8,12 @@
 
 ---
 
+### 2026-04-30 · fix · Dashboard 首页情绪超时 + 数据源 CLOSED 显示修正 (STO-113)
+
+修复 3 个问题：(1) 数据源状态标签全显示「CLOSED」灰色 → 根因是后端返回大写 `CLOSED` 但前端 `cbColor` 只匹配小写，加 `.toLowerCase()` 后正确显示绿色；(2) 首页加载 timeout 10s 不够 → Dashboard 请求超时延长至 30s；(3) 市场情绪日期停留在 2026-04-17 → 移除 `WHERE up_down_ratio IS NOT NULL` 限制，改为取最新一行。
+
+---
+
 ### 2026-04-30 · fix · 回测提交页「策略」下拉选项加策略描述 tooltip (STO-107)
 
 `/backtest-run` 提交表单策略选择器,每个选项 hover 时弹出含策略逻辑描述的 tooltip,选中后在选择框下方显示描述文字。描述来自后端 `/api/backtest/strategies` 的 `description` 字段。
