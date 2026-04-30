@@ -11,6 +11,12 @@
 
 ---
 
+### 2026-04-30 · chore · Pydantic 响应 schema Phase 1a: kline 端点(STO-37)
+
+新建 `backend/api/schemas/kline.py`（`KlineBarSchema`, `KlineDailyResp`, `KlineWeeklyResp`, `KlineDaterangeResp`，宽模式 `extra='ignore'`）；`/api/kline/daily` / `/weekly` / `/daterange` 三个端点加 `response_model=`。`tests/test_api_kline.py` 补 3 条契约测试。
+
+---
+
 ### 2026-04-30 · feature · K 线弹窗 DMA/MACD 副图实现(STO-115)
 
 **架构**：后端新增 `backend/utils/indicators.py` 纯函数（`calc_dma` / `calc_macd`，无外部库）；`/api/kline/daily` 新增 `indicators` 参数（白名单 `dma,macd`）；前端 `StockDrillModal.vue` 有 MACD 数据时动态添加第二个 echarts grid。

@@ -27,6 +27,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from backend.db.session import pg_conn
+from backend.api.schemas.kline import KlineDailyResp, KlineWeeklyResp, KlineDaterangeResp
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -54,7 +55,7 @@ def _norm_code(ts_code: str) -> str:
 _INDICATOR_WHITELIST = frozenset({"dma", "macd"})
 
 
-@router.get("/daily")
+@router.get("/daily", response_model=KlineDailyResp)
 def kline_daily(
     ts_code: str = Query(..., description="如 000001.SZ"),
     date_from: Optional[str] = Query(None, alias="from", description="YYYYMMDD"),
@@ -126,7 +127,7 @@ def kline_daily(
     return resp
 
 
-@router.get("/weekly")
+@router.get("/weekly", response_model=KlineWeeklyResp)
 def kline_weekly(
     ts_code: str = Query(..., description="如 000001.SZ"),
     date_from: Optional[str] = Query(None, alias="from"),
@@ -220,7 +221,7 @@ def kline_minute(
     }
 
 
-@router.get("/daterange")
+@router.get("/daterange", response_model=KlineDaterangeResp)
 def kline_daterange(
     ts_code: str = Query(..., description="如 000001.SZ"),
     freq: str = Query("daily", pattern="^(daily|weekly|minute)$"),
