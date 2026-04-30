@@ -11,6 +11,16 @@
 
 ---
 
+### 2026-04-30 · fix · daily_update.sh 补 T+N 收益回填步骤(STO-117)
+
+**根因**：`scripts/daily_update.sh` 只有 5 步（lhb/席位/情绪/kline/评分），缺少第 6 步 `lhb-tn-price` 回填。导致每日新增的 lhb_stock_daily 记录在 `lhb_tn_price` 表中永远缺行，前端 T+1/T+3/T+5/T+7/T+10 列全显示 `—`。
+
+**修复**：在 step 5（评分）之后加 `run_step 300 lhb_tn_price python -m backend.cli lhb-tn-price --from $TODAY --to $TODAY`。
+
+**注意**：历史数据（2026-04-29 附近）需 Ops 手动补跑一次 `python -m backend.cli lhb-tn-price --from 20260417 --to 20260430`。
+
+---
+
 ### 2026-04-27 · docs · Ops sub-agent 单 issue 单调用边界硬约束(STO-100)
 
 **根因**:sa-ops 主 session 把多 issue 打包给单次 `stock-ops-ui-verifier` 调用,sub-agent 跨 issue 多页截图 → token/上下文累积 → return message 截断丢报告(2026-04-27 STO-98 实测 10 行清单无产出)。

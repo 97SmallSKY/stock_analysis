@@ -7,6 +7,7 @@
 #   3. 市场情绪:market_sentiment 当日
 #   4. 日K线:kline_daily 当日增量(全市场)
 #   5. 评分:对当日新增龙虎榜行评分(--only-empty)
+#   6. T+N 收益回填:lhb_tn_price 当日上榜股票的 T+1/3/5/7/10 收益
 # 任一步骤失败不中断后续步骤,最终以是否有 ERROR 标记 exit code。
 # ============================================================
 set -u
@@ -68,6 +69,9 @@ run_step 5400 kline python -m backend.cli ingest kline --from "$TODAY" --to "$TO
 
 # 5) 评分(仅空缺行) — 轻量,10 分钟
 run_step 600 score python -m backend.cli score --from "$TODAY" --to "$TODAY" --only-empty
+
+# 6) T+N 收益回填 — 轻量,5 分钟
+run_step 300 lhb_tn_price python -m backend.cli lhb-tn-price --from "$TODAY" --to "$TODAY"
 
 ELAPSED=$(( $(date +%s) - START_TS ))
 log "################ daily_update END errors=$ERR_COUNT elapsed=${ELAPSED}s ################"
