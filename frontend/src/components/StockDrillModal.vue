@@ -110,7 +110,7 @@ import {
 import { useStockDrill } from '@/composables/useStockDrill'
 import {
   fetchKlineDaily, fetchKlineWeekly, fetchKlineMinute, fetchKlineDaterange,
-  type KlineBar, type KlineDaterange,
+  type KlineBar, type KlineDaterange, type KlineIndicators,
 } from '@/api/kline'
 import { addDays, addMonths, toYmd } from '@/utils/date_range'
 import { formatPrice } from '@/utils/format'
@@ -141,6 +141,7 @@ const drill = useStockDrill()
 const tab = ref<'daily' | 'weekly' | 'minute'>('daily')
 const loading = ref(false)
 const rows = ref<KlineBar[]>([])
+const indicators = ref<KlineIndicators | undefined>(undefined)
 const emptyReason = ref<string | null>(null)
 const pickedDate = ref<string | null>(null)
 
@@ -298,6 +299,7 @@ async function load() {
   if (!drill.state.tsCode) return
   loading.value = true
   rows.value = []
+  indicators.value = undefined
   emptyReason.value = null
   try {
     // 先确保 daterange 已拿(或已为本次股票+频率计算过)
@@ -309,7 +311,7 @@ async function load() {
       // P19.2: 带 from/to 参数,默认 6 个月区间
       const from = dateFrom.value ? toYmd(dateFrom.value) : undefined
       const to = dateTo.value ? toYmd(dateTo.value) : undefined
-      body = await fetchKlineDaily(drill.state.tsCode, from, to, 2000)
+      body = await fetchKlineDaily(drill.state.tsCode, from, to, 2000, 'dma,macd')
     } else if (tab.value === 'weekly') {
       const from = dateFrom.value ? toYmd(dateFrom.value) : undefined
       const to = dateTo.value ? toYmd(dateTo.value) : undefined
@@ -323,6 +325,7 @@ async function load() {
       body = await fetchKlineMinute(drill.state.tsCode, ymd)
     }
     rows.value = body.rows
+    indicators.value = body.indicators
     emptyReason.value = body.empty_reason
   } catch {
     emptyReason.value = 'fetch_failed'
@@ -434,6 +437,58 @@ function render() {
     })
   }
 
+  // STO-115: 是否有 MACD 副图数据
+  const macdData = indicators.value?.macd
+  const hasMacd = !!(macdData && macdData.diff.length > 0)
+
+  // STO-115: 有 MACD 时向主图 series 追加 DMA 均线，并建副图 series
+  if (hasMacd && indicators.value?.dma) {
+    const dma = indicators.value.dma
+    series.push({
+      name: 'DMA10', type: 'line', data: dma.ma10,
+      smooth: true, symbol: 'none', lineStyle: { width: 1, color: '#722ed1', type: 'dashed' },
+    })
+    series.push({
+      name: 'DMA50', type: 'line', data: dma.ma50,
+      smooth: true, symbol: 'none', lineStyle: { width: 1, color: '#eb2f96', type: 'dashed' },
+    })
+  }
+
+  // STO-115: 副图 grid / axis / series（仅 MACD）
+  const extraGrids: Record<string, unknown>[] = []
+  const extraXAxes: Record<string, unknown>[] = []
+  const extraYAxes: Record<string, unknown>[] = []
+  const extraSeries: Record<string, unknown>[] = []
+  if (hasMacd) {
+    extraGrids.push({ left: 50, right: 30, top: '62%', height: '20%' })
+    extraXAxes.push({
+      type: 'category', gridIndex: 1, data: dates,
+      boundaryGap: true, axisLine: { onZero: false }, axisLabel: { show: false },
+    })
+    extraYAxes.push({ scale: true, gridIndex: 1, splitNumber: 3, axisLabel: { fontSize: 9 } })
+    extraSeries.push(
+      {
+        name: 'MACD', type: 'bar', data: macdData!.bar,
+        xAxisIndex: 1, yAxisIndex: 1,
+        itemStyle: {
+          color: (p: { value?: number | null }) => (p.value ?? 0) >= 0 ? '#d4380d' : '#389e0d',
+        },
+      },
+      {
+        name: 'DIF', type: 'line', data: macdData!.diff,
+        xAxisIndex: 1, yAxisIndex: 1,
+        smooth: true, symbol: 'none', lineStyle: { width: 1, color: '#1677ff' },
+      },
+      {
+        name: 'DEA', type: 'line', data: macdData!.dea,
+        xAxisIndex: 1, yAxisIndex: 1,
+        smooth: true, symbol: 'none', lineStyle: { width: 1, color: '#fa8c16' },
+      },
+    )
+  }
+
+  const allSeries = [...series, ...extraSeries]
+
   chart.setOption({
     tooltip: {
       trigger: 'axis',
@@ -484,28 +539,38 @@ function render() {
     },
     // STO-114: MA5/MA10 默认展示(STO-30 隐藏是用户反馈的 bug,改回可见)
     legend: {
-      data: series.map((s) => s.name as string),
+      data: allSeries.map((s) => s.name as string),
       top: 0,
-      selected: { MA5: true, MA10: true },
+      selected: { MA5: true, MA10: true, DMA10: true, DMA50: true },
     },
-    grid: { left: 50, right: 30, top: 40, bottom: 60 },
-    xAxis: { type: 'category', data: dates, boundaryGap: true, axisLine: { onZero: false } },
-    yAxis: {
-      scale: true,
-      splitLine: { show: true },
-      // STO-30: 两端 5% padding + 按档位精度 round(避免 Y 轴刻度奇怪的 1.237 这种)
-      ...(yMin !== null && yMax !== null ? { min: yMin, max: yMax } : {}),
-      // STO-30: axisLabel 也用 formatPrice,Y 轴刻度和价格精度对齐
-      axisLabel: {
-        formatter: (v: number) => formatPrice(v, maxVal),
+    grid: [
+      { left: 50, right: 30, top: 40, bottom: hasMacd ? '42%' : 60 },
+      ...extraGrids,
+    ],
+    xAxis: [
+      { type: 'category', data: dates, boundaryGap: true, axisLine: { onZero: false }, gridIndex: 0 },
+      ...extraXAxes,
+    ],
+    yAxis: [
+      {
+        scale: true,
+        gridIndex: 0,
+        splitLine: { show: true },
+        // STO-30: 两端 5% padding + 按档位精度 round(避免 Y 轴刻度奇怪的 1.237 这种)
+        ...(yMin !== null && yMax !== null ? { min: yMin, max: yMax } : {}),
+        // STO-30: axisLabel 也用 formatPrice,Y 轴刻度和价格精度对齐
+        axisLabel: {
+          formatter: (v: number) => formatPrice(v, maxVal),
+        },
       },
-    },
+      ...extraYAxes,
+    ],
     // P19.3: 数据已经按快捷钮精确限定范围,dataZoom 全显一目了然
     dataZoom: [
-      { type: 'inside', start: 0, end: 100 },
-      { type: 'slider', bottom: 10, height: 18, start: 0, end: 100 },
+      { type: 'inside', start: 0, end: 100, xAxisIndex: hasMacd ? [0, 1] : [0] },
+      { type: 'slider', bottom: 10, height: 18, start: 0, end: 100, xAxisIndex: hasMacd ? [0, 1] : [0] },
     ],
-    series,
+    series: allSeries,
   })
 
   // 点击 K 线 bar -> 记录日期

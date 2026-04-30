@@ -51,6 +51,9 @@ def _norm_code(ts_code: str) -> str:
     return c
 
 
+_INDICATOR_WHITELIST = frozenset({"dma", "macd"})
+
+
 @router.get("/daily")
 def kline_daily(
     ts_code: str = Query(..., description="如 000001.SZ"),
@@ -59,6 +62,8 @@ def kline_daily(
     # P19.13 (2026-04-20): 上限从 1000 → 5000,支持前端传 [from, to] 跨年区间。
     # 1Y ~= 250 交易日, 5000 够 ~20 年,响应最大 ~200KB,不会压垮。
     limit: int = Query(250, ge=1, le=5000),
+    # STO-115: 逗号分隔的指标名称白名单(dma, macd)
+    indicators: Optional[str] = Query(None, description="指标,如 dma,macd"),
 ):
     code = _norm_code(ts_code)
     d_from = _parse_ymd(date_from, "from")
@@ -103,7 +108,22 @@ def kline_daily(
         for r in rows_raw
     ]
     empty_reason = None if rows else "out_of_range"
-    return {"ts_code": code, "freq": "daily", "rows": rows, "empty_reason": empty_reason}
+    resp: dict = {"ts_code": code, "freq": "daily", "rows": rows, "empty_reason": empty_reason}
+
+    # STO-115: 计算并追加技术指标
+    if indicators and rows:
+        requested = {s.strip().lower() for s in indicators.split(",") if s.strip()} & _INDICATOR_WHITELIST
+        if requested:
+            from backend.utils.indicators import calc_dma, calc_macd
+            closes = [r["close"] for r in rows]
+            ind: dict = {}
+            if "dma" in requested:
+                ind["dma"] = calc_dma(closes)
+            if "macd" in requested:
+                ind["macd"] = calc_macd(closes)
+            resp["indicators"] = ind
+
+    return resp
 
 
 @router.get("/weekly")

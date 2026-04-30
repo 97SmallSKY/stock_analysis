@@ -11,6 +11,14 @@
 
 ---
 
+### 2026-04-30 · feature · K 线弹窗 DMA/MACD 副图实现(STO-115)
+
+**架构**：后端新增 `backend/utils/indicators.py` 纯函数（`calc_dma` / `calc_macd`，无外部库）；`/api/kline/daily` 新增 `indicators` 参数（白名单 `dma,macd`）；前端 `StockDrillModal.vue` 有 MACD 数据时动态添加第二个 echarts grid。
+
+**布局变化**：主图 `bottom: 42%`（原 `60px`），MACD 副图 `top: 62%, height: 20%`，dataZoom 扩展到 `xAxisIndex: [0,1]`。
+
+---
+
 ### 2026-04-30 · fix · 策略对比持久化 + history 端点双源合并(STO-118)
 
 **根因**：`/compare` 端点未调用 `_persist_run`；`/history` 端点只查 in-memory TaskStore，重启后数据消失。

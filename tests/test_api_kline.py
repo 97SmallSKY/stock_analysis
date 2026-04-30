@@ -394,3 +394,40 @@ def test_kline_daily_ts_code_missing_returns_422():
     r = c.get("/api/kline/daily?limit=100")
     assert r.status_code == 422
     assert "ts_code" in r.text
+
+
+def test_kline_daily_with_indicators(monkeypatch):
+    """STO-115: indicators=dma,macd 时响应包含 indicators 字段."""
+    # 生成 60 天数据（跨 1-2 月）
+    base = dt.date(2026, 1, 1)
+    rows = [(base + dt.timedelta(days=i), 10.0 + i, 11.0 + i, 9.5 + i, 10.8 + i, 123456.0) for i in range(60)]
+    cols = ["trade_date", "open", "high", "low", "close", "vol"]
+    monkeypatch.setattr(
+        "backend.api.kline.pg_conn", _make_pg_conn([[(rows, cols)]])
+    )
+    c = _mount()
+    r = c.get("/api/kline/daily?ts_code=000001.SZ&from=20260101&indicators=dma,macd")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert "indicators" in body
+    assert "dma" in body["indicators"]
+    assert "macd" in body["indicators"]
+    dma = body["indicators"]["dma"]
+    assert "ma10" in dma and "ma50" in dma
+    assert len(dma["ma10"]) == 60
+    macd = body["indicators"]["macd"]
+    assert "diff" in macd and "dea" in macd and "bar" in macd
+    assert len(macd["diff"]) == 60
+
+
+def test_kline_daily_no_indicators_without_param(monkeypatch):
+    """STO-115: 不传 indicators 参数时响应不含 indicators 字段."""
+    rows = [(dt.date(2026, 1, i + 1), 10.0 + i, 11.0 + i, 9.5 + i, 10.8 + i, 123456.0) for i in range(10)]
+    cols = ["trade_date", "open", "high", "low", "close", "vol"]
+    monkeypatch.setattr(
+        "backend.api.kline.pg_conn", _make_pg_conn([[(rows, cols)]])
+    )
+    c = _mount()
+    r = c.get("/api/kline/daily?ts_code=000001.SZ&from=20260101")
+    assert r.status_code == 200
+    assert "indicators" not in r.json()

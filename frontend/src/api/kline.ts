@@ -10,21 +10,40 @@ export interface KlineBar {
   vol: number | null
 }
 
+export interface MacdData {
+  diff: (number | null)[]
+  dea: (number | null)[]
+  bar: (number | null)[]
+}
+
+export interface DmaData {
+  ma10: (number | null)[]
+  ma50: (number | null)[]
+}
+
+export interface KlineIndicators {
+  dma?: DmaData
+  macd?: MacdData
+}
+
 export interface KlineResp {
   ts_code: string
   freq: 'daily' | 'weekly' | 'minute'
   rows: KlineBar[]
   empty_reason: string | null
   trade_date?: string | null
+  indicators?: KlineIndicators
 }
 
 export async function fetchKlineDaily(
   ts_code: string, from?: string, to?: string, limit = 250,
+  indicators?: string,
 ): Promise<KlineResp> {
   assertLimit('fetchKlineDaily', limit, LIMIT_MAX_KLINE_DAILY)
   const params: Record<string, string | number> = { ts_code, limit }
   if (from) params.from = from
   if (to) params.to = to
+  if (indicators) params.indicators = indicators
   const { data } = await http.get<KlineResp>('/api/kline/daily', { params })
   return data
 }
