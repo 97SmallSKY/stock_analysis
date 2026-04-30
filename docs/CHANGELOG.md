@@ -8,6 +8,12 @@
 
 ---
 
+### 2026-04-30 · fix · K 线弹窗 MA5/MA10 均线默认显示 (STO-114)
+
+K 线弹窗 MA5/MA10 均线此前默认隐藏（STO-30 设计、后被 STO-65 保留），用户须手动点 legend 才能看到均线。现改为默认展示：打开弹窗即可看到 MA5 橙色线 + MA10 蓝色线叠在 K 线上。
+
+---
+
 ### 2026-04-30 · fix · Dashboard 首页情绪超时 + 数据源 CLOSED 显示修正 (STO-113)
 
 修复 3 个问题：(1) 数据源状态标签全显示「CLOSED」灰色 → 根因是后端返回大写 `CLOSED` 但前端 `cbColor` 只匹配小写，加 `.toLowerCase()` 后正确显示绿色；(2) 首页加载 timeout 10s 不够 → Dashboard 请求超时延长至 30s；(3) 市场情绪日期停留在 2026-04-17 → 移除 `WHERE up_down_ratio IS NOT NULL` 限制，改为取最新一行。

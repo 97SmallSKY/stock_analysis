@@ -482,11 +482,11 @@ function render() {
         return lines.join('')
       },
     },
-    // STO-30: MA5/MA10 默认不展示(满屏是线的问题),用户点 legend 才画
+    // STO-114: MA5/MA10 默认展示(STO-30 隐藏是用户反馈的 bug,改回可见)
     legend: {
       data: series.map((s) => s.name as string),
       top: 0,
-      selected: { MA5: false, MA10: false },
+      selected: { MA5: true, MA10: true },
     },
     grid: { left: 50, right: 30, top: 40, bottom: 60 },
     xAxis: { type: 'category', data: dates, boundaryGap: true, axisLine: { onZero: false } },

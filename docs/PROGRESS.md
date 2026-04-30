@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-04-30 STO-114**:K 线弹窗 MA5/MA10 默认显示。STO-30 设 `legend.selected={MA5:false,MA10:false}` 隐藏均线,用户反馈看不到 MA 线。改为 `selected={MA5:true,MA10:true}`;MA 数据为前端 `ma()` 计算,无需后端改动。DMA/MACD 副图另建 issue。
 - **2026-04-30 STO-113**:Dashboard 首页三合一修复。(1) `cbColor` 加 `.toLowerCase()` 修复大写 `CLOSED` 不显示绿色 bug + 新增 2 case 单测;(2) `fetchDashboard` timeout 10s → 30s;(3) `_latest_sentiment()` 移除 `WHERE up_down_ratio IS NOT NULL` 限制(该列长期 NULL 导致数据停留在 2026-04-17,现取最新行)。
 - **2026-04-30 STO-107**:回测提交页策略 tooltip 加策略描述。`BacktestRun.vue` 策略下拉改用自定义 option slot,每项 hover 弹 tooltip 显示 `strategies.description`;选中后在选择框下显示描述文字(`strategy-desc`)。新增 `strategies` ref 和 `selectedStrategy` computed。无新单测(纯 UI 展示改动)。
 - **2026-04-30 STO-110**:回测详情页买卖点 markPoint 实现。`backend/api/backtest.py` 在 SUCCESS 时把 `result.trades[:50]` 作为 `trades_sample` 存入内存 store;`frontend/src/api/backtest.ts` 新增 `TradeSample` 接口;`BacktestDetail.vue` 替换占位 alert 为含 markPoint 的 nav 折线图(▲买/▼卖,无未来函数)。无额外单测(纯展示逻辑,引用已有 `tradeMarkOption` computed)。
