@@ -8,6 +8,12 @@
 
 ---
 
+### 2026-04-30 · fix · 回测提交页「策略」下拉选项加策略描述 tooltip (STO-107)
+
+`/backtest-run` 提交表单策略选择器,每个选项 hover 时弹出含策略逻辑描述的 tooltip,选中后在选择框下方显示描述文字。描述来自后端 `/api/backtest/strategies` 的 `description` 字段。
+
+---
+
 ### 2026-04-30 · feat · 回测详情页买卖点 markPoint 实现 (STO-110)
 
 回测详情页 `/backtest-history/:taskId` 「买卖点」区域从占位 alert 升级为真实 ECharts 折线图 + markPoint:▲红色=买入、▼绿色=卖出,标注在 nav 曲线对应日期。后端新增 `trades_sample`(前 50 笔)随任务结果存入内存 store,仅新跑任务有数据,历史任务显示空态提示。

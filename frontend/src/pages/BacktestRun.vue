@@ -13,10 +13,23 @@
           <a-select
             v-model:value="form.strategy_name"
             placeholder="请选择已注册策略"
-            :options="strategyOptions"
             show-search
             :filter-option="(input: string, option: any) => option.label.toLowerCase().includes(input.toLowerCase())"
-          />
+          >
+            <a-select-option
+              v-for="s in strategies"
+              :key="s.name"
+              :value="s.name"
+              :label="s.description || s.name"
+            >
+              <a-tooltip :title="s.description || s.name" placement="right" :mouse-enter-delay="0.3">
+                <span style="display: block;">{{ s.description || s.name }}</span>
+              </a-tooltip>
+            </a-select-option>
+          </a-select>
+          <div v-if="selectedStrategy?.description" class="strategy-desc">
+            {{ selectedStrategy.description }}
+          </div>
         </a-form-item>
 
         <a-form-item label="起始日期" required>
@@ -90,11 +103,12 @@ import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import {
   listStrategies, submitBacktest,
-  type SubmitBacktestResp,
+  type SubmitBacktestResp, type StrategyInfo,
 } from '@/api/backtest'
 
 const router = useRouter()
 const strategyOptions = ref<{ value: string; label: string }[]>([])
+const strategies = ref<StrategyInfo[]>([])
 const submitting = ref(false)
 const lastSubmit = ref<SubmitBacktestResp | null>(null)
 
@@ -109,6 +123,10 @@ const form = reactive({
 
 // STO-89 (d): 表单校验规则
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+
+const selectedStrategy = computed(() =>
+  strategies.value.find((s) => s.name === form.strategy_name) ?? null
+)
 
 const canSubmit = computed(() =>
   !!form.strategy_name
@@ -152,7 +170,8 @@ async function onSubmit() {
 async function refreshStrategies() {
   try {
     const r = await listStrategies()
-    strategyOptions.value = (r.strategies || []).map((s) => ({
+    strategies.value = r.strategies || []
+    strategyOptions.value = strategies.value.map((s) => ({
       value: s.name,
       label: s.description || s.name,
     }))
@@ -162,10 +181,16 @@ async function refreshStrategies() {
 onMounted(refreshStrategies)
 
 // 测试导出
-defineExpose({ form, canSubmit, disabledReason, onSubmit, lastSubmit })
+defineExpose({ form, canSubmit, disabledReason, onSubmit, lastSubmit, strategies, selectedStrategy })
 </script>
 
 <style scoped>
 .backtest-run-page { padding: 12px; }
 .backtest-submit-form { max-width: 680px; }
+.strategy-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #8c8c8c;
+  line-height: 1.4;
+}
 </style>
