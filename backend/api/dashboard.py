@@ -66,19 +66,33 @@ def _latest_sentiment() -> Optional[dict]:
             # 单次 COUNT 查询带 trade_date 索引,+2ms 级别开销可忽略。
             if td is not None:
                 try:
+                    # STO-126: 若 sentiment td 当日 kline 无数据（节假日等），
+                    # 回退到 kline_daily 中最近有数据的交易日
                     cur.execute(
-                        """SELECT COUNT(*) AS total,
-                                  SUM(CASE WHEN pct_change > 0 THEN 1 ELSE 0 END) AS up_cnt,
-                                  SUM(CASE WHEN pct_change < 0 THEN 1 ELSE 0 END) AS down_cnt
-                           FROM kline_daily
-                           WHERE trade_date = %s AND pct_change IS NOT NULL""",
+                        """SELECT MAX(trade_date) FROM kline_daily
+                           WHERE trade_date <= %s AND pct_change IS NOT NULL""",
                         (td,),
                     )
-                    agg = cur.fetchone()
-                    if agg and agg[0]:
-                        out["total_stocks"] = int(agg[0])
-                        out["up_count"] = int(agg[1] or 0)
-                        out["down_count"] = int(agg[2] or 0)
+                    kline_td_row = cur.fetchone()
+                    kline_td = kline_td_row[0] if kline_td_row else None
+                    if kline_td is not None:
+                        cur.execute(
+                            """SELECT COUNT(*) AS total,
+                                      SUM(CASE WHEN pct_change > 0 THEN 1 ELSE 0 END) AS up_cnt,
+                                      SUM(CASE WHEN pct_change < 0 THEN 1 ELSE 0 END) AS down_cnt
+                               FROM kline_daily
+                               WHERE trade_date = %s AND pct_change IS NOT NULL""",
+                            (kline_td,),
+                        )
+                        agg = cur.fetchone()
+                        if agg and agg[0]:
+                            out["total_stocks"] = int(agg[0])
+                            out["up_count"] = int(agg[1] or 0)
+                            out["down_count"] = int(agg[2] or 0)
+                        else:
+                            out["total_stocks"] = None
+                            out["up_count"] = None
+                            out["down_count"] = None
                     else:
                         out["total_stocks"] = None
                         out["up_count"] = None
