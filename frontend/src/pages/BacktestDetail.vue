@@ -54,6 +54,18 @@
           </a-col>
         </a-row>
 
+        <!-- STO-131: 交易标的说明 -->
+        <div v-if="detail.result?.trades_sample?.length" style="margin-bottom:16px;">
+          <a-typography-text type="secondary" style="font-size:12px;">
+            交易标的：{{ tradeSymbolsSummary }}
+          </a-typography-text>
+        </div>
+        <div v-else style="margin-bottom:16px;">
+          <a-typography-text type="secondary" style="font-size:12px;">
+            交易标的：策略根据龙虎榜信号自动选股（全市场龙虎榜标的）
+          </a-typography-text>
+        </div>
+
         <div class="chart-section">
           <h3>收益曲线 (nav)</h3>
           <VChart
@@ -140,6 +152,15 @@ const tradeStocks = computed(() => {
   const trades = detail.value?.result?.trades_sample
   if (!trades) return []
   return [...new Set(trades.map((t: TradeSample) => t.ts_code))]
+})
+
+// STO-131: 交易标的摘要
+const tradeSymbolsSummary = computed(() => {
+  const stocks = tradeStocks.value
+  if (stocks.length === 0) return '无'
+  if (stocks.length === 1) return stocks[0]
+  if (stocks.length <= 3) return stocks.join(', ')
+  return `${stocks.slice(0, 3).join(', ')} 等 ${stocks.length} 只股票`
 })
 
 watch([tradeStocks, detail], async () => {

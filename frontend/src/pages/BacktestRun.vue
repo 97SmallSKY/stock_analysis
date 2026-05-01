@@ -20,6 +20,11 @@
           <div v-if="selectedStrategy" class="strategy-desc">
             {{ selectedStrategy.description || selectedStrategy.name }}
           </div>
+          <div class="strategy-stock-hint">
+            <a-typography-text type="secondary" style="font-size:12px;">
+              💡 龙虎榜策略通过信号自动选股（全市场龙虎榜标的），无需指定股票代码
+            </a-typography-text>
+          </div>
         </a-form-item>
 
         <a-form-item label="起始日期" required>
