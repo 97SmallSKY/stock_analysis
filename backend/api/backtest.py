@@ -464,26 +464,24 @@ def list_history(
         # STO-124: compare- 任务 t.result 是 ComparisonReport，t.metrics 为空
         # 从 result['runs'] 提取 winner metrics
         if t.task_id.startswith('compare-') and t.result and 'runs' in t.result:
-            runs = t.result.get('runs', [])
-            winner_name = t.result.get('winner')
-            best = next(
-                (r for r in runs if r.get('name') == winner_name and r.get('ok')),
-                next((r for r in runs if r.get('ok')), {}),
-            )
-            m = {
-                'total_return': best.get('total_return'),
-                'sharpe_ratio': best.get('sharpe_ratio'),
-                'max_drawdown': best.get('max_drawdown'),
-                'trade_count': best.get('trade_count'),
-                'win_rate': best.get('win_rate'),
-            }
+            # STO-124 fix: compare- 任务直接从 runs[] 最优 ok run 取字段名正确的指标
+            ok_runs = [r for r in t.result.get('runs', []) if r.get('ok')]
+            best = max(ok_runs, key=lambda r: r.get('total_return', -999), default=None)
+            if best:
+                d['total_return'] = best.get('total_return')
+                d['sharpe'] = best.get('sharpe_ratio')  # 字段名映射
+                d['max_drawdown'] = best.get('max_drawdown')
+                d['n_trades'] = best.get('trade_count')  # 字段名映射
+                d['win_rate'] = best.get('win_rate')
+            else:
+                d['total_return'] = d['sharpe'] = d['max_drawdown'] = d['n_trades'] = d['win_rate'] = None
         else:
             m = t.metrics or {}
-        d['total_return'] = m.get('total_return')
-        d['sharpe'] = m.get('sharpe') or m.get('sharpe_ratio')
-        d['max_drawdown'] = m.get('max_drawdown')
-        d['n_trades'] = m.get('n_trades') or m.get('trade_count')
-        d['win_rate'] = m.get('win_rate')
+            d['total_return'] = m.get('total_return')
+            d['sharpe'] = m.get('sharpe') or m.get('sharpe_ratio')
+            d['max_drawdown'] = m.get('max_drawdown')
+            d['n_trades'] = m.get('n_trades') or m.get('trade_count')
+            d['win_rate'] = m.get('win_rate')
         out.append(d)
         seen_task_ids.add(t.task_id)
         if len(out) >= limit:
@@ -522,40 +520,39 @@ def list_history(
                         config = row[3] or {}
                         # STO-124: compare- 任务 result_json 是 ComparisonReport.to_dict()
                         # 含 runs[] 而非 metrics{}，从 winner 或第一个 run 提取 metrics
-                        if task_id.startswith('compare-') and 'runs' in result:
-                            runs = result.get('runs', [])
-                            winner_name = result.get('winner')
-                            best = next(
-                                (r for r in runs if r.get('name') == winner_name and r.get('ok')),
-                                next((r for r in runs if r.get('ok')), {}),
-                            )
-                            metrics = {
-                                'total_return': best.get('total_return'),
-                                'sharpe_ratio': best.get('sharpe_ratio'),
-                                'max_drawdown': best.get('max_drawdown'),
-                                'trade_count': best.get('trade_count'),
-                                'win_rate': best.get('win_rate'),
-                            }
-                        else:
-                            metrics = result.get('metrics', {})
-                        out.append({
+                        base_row = {
                             'task_id': task_id,
                             'strategy_name': row[1],
                             'status': row[2],
                             'config': config,
-                            # STO-120: 顶层补 start_date/end_date 供前端直接取用
                             'start_date': config.get('start_date'),
                             'end_date': config.get('end_date'),
                             'result': result,
                             'error_message': row[5],
                             'created_at': row[6].isoformat() if row[6] else None,
                             'finished_at': row[7].isoformat() if row[7] else None,
-                            'total_return': metrics.get('total_return'),
-                            'sharpe': metrics.get('sharpe') or metrics.get('sharpe_ratio'),
-                            'max_drawdown': metrics.get('max_drawdown'),
-                            'n_trades': metrics.get('n_trades') or metrics.get('trade_count'),
-                            'win_rate': metrics.get('win_rate'),
-                        })
+                        }
+                        if task_id.startswith('compare-') and 'runs' in result:
+                            # STO-124 fix: compare- 任务从 runs[] 中直接取最优 ok run
+                            ok_runs = [r for r in result.get('runs', []) if r.get('ok')]
+                            best = max(ok_runs, key=lambda r: r.get('total_return', -999), default=None)
+                            if best:
+                                base_row['total_return'] = best.get('total_return')
+                                base_row['sharpe'] = best.get('sharpe_ratio')  # 字段名映射
+                                base_row['max_drawdown'] = best.get('max_drawdown')
+                                base_row['n_trades'] = best.get('trade_count')  # 字段名映射
+                                base_row['win_rate'] = best.get('win_rate')
+                            else:
+                                base_row.update({'total_return': None, 'sharpe': None,
+                                                 'max_drawdown': None, 'n_trades': None, 'win_rate': None})
+                        else:
+                            metrics = result.get('metrics', {})
+                            base_row['total_return'] = metrics.get('total_return')
+                            base_row['sharpe'] = metrics.get('sharpe') or metrics.get('sharpe_ratio')
+                            base_row['max_drawdown'] = metrics.get('max_drawdown')
+                            base_row['n_trades'] = metrics.get('n_trades') or metrics.get('trade_count')
+                            base_row['win_rate'] = metrics.get('win_rate')
+                        out.append(base_row)
                         if len(out) >= limit:
                             break
         except Exception as exc:  # noqa: BLE001
