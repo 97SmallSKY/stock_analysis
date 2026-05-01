@@ -60,6 +60,26 @@ def _latest_sentiment() -> Optional[dict]:
             td = out.get("trade_date")
             if td is not None:
                 out["trade_date"] = td.isoformat()
+            # STO-134: 节假日时 market_sentiment 最新行的 avg_pct_change 可能为 null
+            # (没有 kline 数据可以计算)，回退到最近有完整数据的行
+            if out.get("avg_pct_change") is None and td is not None:
+                try:
+                    cur.execute(
+                        """SELECT avg_pct_change, median_pct_change, up_down_ratio, trade_date
+                           FROM market_sentiment
+                           WHERE trade_date < %s AND avg_pct_change IS NOT NULL
+                           ORDER BY trade_date DESC LIMIT 1""",
+                        (td,),
+                    )
+                    prev_complete = cur.fetchone()
+                    if prev_complete and prev_complete[0] is not None:
+                        out["avg_pct_change"] = float(prev_complete[0])
+                        if out.get("median_pct_change") is None and prev_complete[1] is not None:
+                            out["median_pct_change"] = float(prev_complete[1])
+                        if out.get("up_down_ratio") is None and prev_complete[2] is not None:
+                            out["up_down_ratio"] = float(prev_complete[2])
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"[dashboard] avg_change fallback failed: {e}")
             # P18.13 (2026-04-20): market_sentiment 表里**没有**
             # total_stocks/up_count/down_count 列(v2 设计稿里假设过,实际
             # 未建)。这里从 kline_daily 实时聚合这 3 个字段,填进响应。

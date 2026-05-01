@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-05-01 STO-134**：Dashboard `avg_pct_change` 节假日回退。主查询后若 `avg_pct_change` 为 null，查最近有完整数据的 market_sentiment 行填充。
 - **2026-05-01 STO-132**：Dashboard 四大指数实时行情卡片。代码已存在（STO-82/87），只需部署，无代码改动。
 - **2026-05-01 STO-131**：回测提交说明交易标的（修复 AC2）。后端 `get_task` 端点新增 `trade_targets` 字段（从 trades_sample 提取唯一 ts_code），前端优先读该字段。
 - **2026-05-01 STO-131**：回测提交说明交易标的（初版）。表单策略选中后加灰色提示「龙虎榜策略通过信号自动选股」；详情页 KPI 区下方加交易标的摘要（trades_sample 有数据时列出股票代码，否则说明自动选股）。
