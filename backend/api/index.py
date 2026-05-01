@@ -107,6 +107,8 @@ def _fetch_with_retry() -> dict:
     raise last_err
 
 
+
+
 @router.get("/snapshot")
 def get_index_snapshot():
     """GET /api/index/snapshot —— 四大指数实时行情快照。
