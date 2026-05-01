@@ -149,6 +149,9 @@ const klineRows = ref<{ date: string; open: number; high: number; low: number; c
 const selectedStock = ref<string>('')
 
 const tradeStocks = computed(() => {
+  // STO-131: 优先读后端返回的 trade_targets，回退到 trades_sample 推导
+  const targets = detail.value?.trade_targets
+  if (targets && targets.length > 0) return targets
   const trades = detail.value?.result?.trades_sample
   if (!trades) return []
   return [...new Set(trades.map((t: TradeSample) => t.ts_code))]

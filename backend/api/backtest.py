@@ -569,6 +569,9 @@ def get_task(task_id: str, request: Request):
         d = t.to_dict()
         d['result'] = t.result
         d['metrics'] = t.metrics
+        # STO-131: 提取交易标的
+        trades_sample = (t.result or {}).get('trades_sample', [])
+        d['trade_targets'] = list({tr.get('ts_code') for tr in trades_sample if tr.get('ts_code')})
         return d
 
     # STO-125: in-memory 找不到时回退查 DB（compare-* 等持久化但未重载到内存的任务）
@@ -588,6 +591,9 @@ def get_task(task_id: str, request: Request):
         config = row[3] or {}
         result = row[4] or {}
         metrics = result.get('metrics', {})
+        # STO-131: 提取交易标的
+        trades_sample = result.get('trades_sample', [])
+        trade_targets = list({tr.get('ts_code') for tr in trades_sample if isinstance(tr, dict) and tr.get('ts_code')})
         return {
             'task_id': row[0],
             'strategy_name': row[1],
@@ -605,6 +611,7 @@ def get_task(task_id: str, request: Request):
             'max_drawdown': metrics.get('max_drawdown'),
             'n_trades': metrics.get('n_trades') or metrics.get('trade_count'),
             'win_rate': metrics.get('win_rate'),
+            'trade_targets': trade_targets,
         }
     except HTTPException:
         raise

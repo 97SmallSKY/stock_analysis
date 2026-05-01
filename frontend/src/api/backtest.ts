@@ -164,6 +164,7 @@ export interface BacktestTaskDetail {
   finished_at: string | null
   elapsed_seconds: number | null
   params: Record<string, unknown>
+  trade_targets?: string[]  // STO-131: 后端返回的交易标的列表
   result: {
     final_assets?: number
     total_return?: number
