@@ -23,11 +23,25 @@
         </a-form-item>
 
         <a-form-item label="起始日期" required>
-          <a-input v-model:value="form.start_date" placeholder="YYYY-MM-DD" />
+          <a-date-picker
+            :value="startDateDayjs"
+            @change="(_: unknown, s: string) => { form.start_date = s }"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            style="width: 240px;"
+            :disabled-date="isWeekend"
+          />
         </a-form-item>
 
         <a-form-item label="结束日期" required>
-          <a-input v-model:value="form.end_date" placeholder="YYYY-MM-DD" />
+          <a-date-picker
+            :value="endDateDayjs"
+            @change="(_: unknown, s: string) => { form.end_date = s }"
+            format="YYYY-MM-DD"
+            value-format="YYYY-MM-DD"
+            style="width: 240px;"
+            :disabled-date="isWeekend"
+          />
         </a-form-item>
 
         <a-form-item label="初始资金(元)">
@@ -91,6 +105,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
+import dayjs, { type Dayjs } from 'dayjs'
 import {
   listStrategies, submitBacktest,
   type SubmitBacktestResp, type StrategyInfo,
@@ -102,14 +117,34 @@ const strategies = ref<StrategyInfo[]>([])
 const submitting = ref(false)
 const lastSubmit = ref<SubmitBacktestResp | null>(null)
 
+// STO-128: 最近交易日（跳过周末，不处理节假日）
+function latestTradingDay(d: Dayjs = dayjs()): Dayjs {
+  const dow = d.day() // 0=Sun, 6=Sat
+  if (dow === 0) return d.subtract(2, 'day')
+  if (dow === 6) return d.subtract(1, 'day')
+  return d
+}
+
+// STO-128: 禁用周末
+function isWeekend(d: Dayjs): boolean {
+  return d.day() === 0 || d.day() === 6
+}
+
+const _end = latestTradingDay()
+const _start = latestTradingDay(_end.subtract(1, 'year'))
+
 const form = reactive({
   strategy_name: '' as string,
-  start_date: '' as string,
-  end_date: '' as string,
+  start_date: _start.format('YYYY-MM-DD') as string,
+  end_date: _end.format('YYYY-MM-DD') as string,
   initial_capital: 1_000_000,
   max_positions: 5,
   per_position_pct: 0.2,
 })
+
+// DatePicker 绑定需要 dayjs 对象
+const startDateDayjs = computed(() => form.start_date ? dayjs(form.start_date) : null)
+const endDateDayjs = computed(() => form.end_date ? dayjs(form.end_date) : null)
 
 // STO-89 (d): 表单校验规则
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
