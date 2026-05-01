@@ -77,14 +77,20 @@
         </div>
 
         <div class="chart-section">
-          <h3>买卖点 (nav + markPoint)</h3>
+          <h3>买卖点 (K线 + 买卖箭头)</h3>
+          <div v-if="tradeStocks.length > 1" style="margin-bottom:8px;">
+            <a-select v-model:value="selectedStock" style="width:160px;" size="small">
+              <a-select-option v-for="s in tradeStocks" :key="s" :value="s">{{ s }}</a-select-option>
+            </a-select>
+          </div>
           <VChart
-            v-if="tradeMarkOption"
-            :option="tradeMarkOption"
-            class="chart"
+            v-if="tradeKlineOption"
+            :option="tradeKlineOption"
+            class="chart chart-tall"
             autoresize
           />
-          <a-empty v-else description="暂无 trades_sample 数据(仅新跑任务有)" />
+          <a-empty v-else description="暂无 trades_sample 数据或 K 线加载中(仅新跑任务有)"
+            style="padding:32px 0" />
           <div class="trade-stats">
             <a-typography-text type="secondary">
               任务交易总数:{{ detail.result?.trade_count ?? '-' }}
@@ -100,21 +106,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import VChart from 'vue-echarts'
 import { use } from 'echarts/core'
 import { CanvasRenderer } from 'echarts/renderers'
-import { LineChart } from 'echarts/charts'
+import { LineChart, CandlestickChart } from 'echarts/charts'
 import {
   GridComponent, TooltipComponent, LegendComponent, TitleComponent,
   DataZoomComponent, MarkPointComponent,
 } from 'echarts/components'
 import { fetchBacktestTask, type BacktestTaskDetail, type TradeSample } from '@/api/backtest'
+import { fetchKlineDaily } from '@/api/kline'
 import { computeDrawdown } from '@/utils/backtest_drawdown'
 
 use([
-  CanvasRenderer, LineChart,
+  CanvasRenderer, LineChart, CandlestickChart,
   GridComponent, TooltipComponent, LegendComponent, TitleComponent,
   DataZoomComponent, MarkPointComponent,
 ])
@@ -124,6 +131,84 @@ const router = useRouter()
 const detail = ref<BacktestTaskDetail | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
+
+// STO-130: K线 + 买卖箭头
+const klineRows = ref<{ date: string; open: number; high: number; low: number; close: number }[]>([])
+const selectedStock = ref<string>('')
+
+const tradeStocks = computed(() => {
+  const trades = detail.value?.result?.trades_sample
+  if (!trades) return []
+  return [...new Set(trades.map((t: TradeSample) => t.ts_code))]
+})
+
+watch([tradeStocks, detail], async () => {
+  if (!tradeStocks.value.length || !detail.value) return
+  if (!selectedStock.value || !tradeStocks.value.includes(selectedStock.value)) {
+    selectedStock.value = tradeStocks.value[0]
+  }
+  // 拉取选中股票的 K 线
+  const fromDate = detail.value.start_date?.replace(/-/g, '') ?? ''
+  const toDate = detail.value.end_date?.replace(/-/g, '') ?? ''
+  if (!fromDate || !toDate) return
+  try {
+    const resp = await fetchKlineDaily(selectedStock.value, fromDate, toDate, 2000)
+    klineRows.value = resp.rows as { date: string; open: number; high: number; low: number; close: number }[]
+  } catch {
+    klineRows.value = []
+  }
+}, { immediate: false })
+
+watch(selectedStock, async (stock) => {
+  if (!stock || !detail.value) return
+  const fromDate = detail.value.start_date?.replace(/-/g, '') ?? ''
+  const toDate = detail.value.end_date?.replace(/-/g, '') ?? ''
+  if (!fromDate || !toDate) return
+  try {
+    const resp = await fetchKlineDaily(stock, fromDate, toDate, 2000)
+    klineRows.value = resp.rows as { date: string; open: number; high: number; low: number; close: number }[]
+  } catch {
+    klineRows.value = []
+  }
+})
+
+const tradeKlineOption = computed(() => {
+  const trades = detail.value?.result?.trades_sample
+  if (!trades || trades.length === 0 || klineRows.value.length === 0) return null
+  const stockTrades = trades.filter((t: TradeSample) => t.ts_code === selectedStock.value)
+  const dates = klineRows.value.map((r) => r.date)
+  const kdata = klineRows.value.map((r) => [r.open, r.close, r.low, r.high])
+  const markData = stockTrades.map((t: TradeSample) => ({
+    coord: [t.date, t.price],
+    name: t.direction,
+    value: t.direction === 'BUY' ? '买' : '卖',
+    itemStyle: { color: t.direction === 'BUY' ? '#389e0d' : '#d4380d' },
+    label: {
+      show: true,
+      position: t.direction === 'BUY' ? 'bottom' : 'top',
+      color: t.direction === 'BUY' ? '#389e0d' : '#d4380d',
+      fontSize: 11,
+      formatter: t.direction === 'BUY' ? '↑买' : '↓卖',
+    },
+    symbol: 'none',
+  }))
+  return {
+    tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+    xAxis: { type: 'category', data: dates, boundaryGap: true },
+    yAxis: { scale: true, splitLine: { show: true } },
+    series: [{
+      name: selectedStock.value,
+      type: 'candlestick',
+      data: kdata,
+      itemStyle: {
+        color: '#d4380d', color0: '#389e0d',
+        borderColor: '#d4380d', borderColor0: '#389e0d',
+      },
+      markPoint: { symbol: 'none', symbolSize: 20, data: markData },
+    }],
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
+  }
+})
 
 function pctOr(v: number | undefined | null): number {
   return v == null ? 0 : v * 100
@@ -239,5 +324,6 @@ defineExpose({ detail, loading, error, navOption, ddOption })
 .chart-section { margin-bottom: 32px; }
 .chart-section h3 { margin-bottom: 12px; }
 .chart { height: 320px; }
+.chart-tall { height: 420px; }
 .trade-stats { margin-top: 12px; }
 </style>

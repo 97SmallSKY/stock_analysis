@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-05-01 STO-130**：回测详情买卖点图改为 K 线蜡烛图 + 买卖箭头。新增 `tradeKlineOption` computed，`fetchKlineDaily` 拉数据，`CandlestickChart` 渲染，多股票时有下拉选择。
 - **2026-05-01 STO-128**：回测提交表单日期 DatePicker + 默认值。`start_date`/`end_date` 改用 `a-date-picker`（禁用周末），初始值为最近交易日（结束）和一年前最近交易日（起始）。
 - **2026-05-01 STO-127**：K线弹窗 MACD 副图空白修复。`hasMacd` 改为检查 diff 中是否有非 null 值；数据不足时显示灰色提示文字「数据不足，无法计算 MACD（需 ≥ 26 个交易日数据）」。最高/最低价标注已有（STO-65）。
 - **2026-05-01 STO-124 v2**：compare- 任务 sharpe/n_trades 字段名映射修复。直接取 `best.get('sharpe_ratio')` → `sharpe`，`best.get('trade_count')` → `n_trades`。
