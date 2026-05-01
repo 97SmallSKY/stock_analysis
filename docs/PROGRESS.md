@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-05-01 STO-127**：K线弹窗 MACD 副图空白修复。`hasMacd` 改为检查 diff 中是否有非 null 值；数据不足时显示灰色提示文字「数据不足，无法计算 MACD（需 ≥ 26 个交易日数据）」。最高/最低价标注已有（STO-65）。
 - **2026-05-01 STO-124 v2**：compare- 任务 sharpe/n_trades 字段名映射修复。直接取 `best.get('sharpe_ratio')` → `sharpe`，`best.get('trade_count')` → `n_trades`。
 - **2026-05-01 STO-124**：compare- 任务历史列表 metrics 为空修复。`list_history` DB 路径的 metrics 提取改为：若 task_id 以 `compare-` 开头且 result 含 `runs[]`，从 winner run 提取指标。
 - **2026-05-01 STO-126**：Dashboard 节假日涨跌为空修复。kline 聚合查询改为先找 `kline_daily` 中最近有数据的交易日（`MAX(trade_date) <= sentiment_td`），解决节假日当日无 kline 数据导致 `up_count`/`down_count` 为 null。

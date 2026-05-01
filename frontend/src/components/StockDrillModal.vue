@@ -351,9 +351,9 @@ function render() {
   if (!chartRef.value) return
   if (chart) { chart.dispose(); chart = null }
   if (rows.value.length === 0) return
-  // STO-115 fix: 有 MACD 副图时动态扩高容器，否则恢复默认
-  const hasMacdData = !!(indicators.value?.macd?.diff?.length)
-  chartRef.value.style.height = hasMacdData ? '640px' : '480px'
+  // STO-115 fix / STO-127: 有 MACD 副图或「数据不足」提示时扩高容器
+  const hasMacdOrEmpty = !!(indicators.value?.macd?.diff?.length)
+  chartRef.value.style.height = hasMacdOrEmpty ? '640px' : '480px'
   chart = echarts.init(chartRef.value)
 
   const dates = rows.value.map((r) => r.date)
@@ -441,8 +441,12 @@ function render() {
   }
 
   // STO-115: 是否有 MACD 副图数据
+  // STO-127: 区分「有数据」vs「有字段但全 null（数据不足）」
   const macdData = indicators.value?.macd
-  const hasMacd = !!(macdData && macdData.diff.length > 0)
+  const macdHasValues = !!(macdData && macdData.diff.some((v: number | null) => v !== null))
+  const hasMacd = macdHasValues
+  // 是否显示「数据不足」提示（后端返回了 indicators 但 diff 全为 null）
+  const showMacdEmpty = !!(macdData && macdData.diff.length > 0 && !macdHasValues)
 
   // STO-115: 有 MACD 时向主图 series 追加 DMA 均线，并建副图 series
   if (hasMacd && indicators.value?.dma) {
@@ -547,8 +551,8 @@ function render() {
       selected: { MA5: true, MA10: true, DMA10: true, DMA50: true },
     },
     grid: [
-      { left: 50, right: 30, top: 40, bottom: hasMacd ? '42%' : 60 },
-      ...extraGrids,
+      { left: 50, right: 30, top: 40, bottom: (hasMacd || showMacdEmpty) ? '42%' : 60 },
+      ...(hasMacd ? extraGrids : showMacdEmpty ? [{ left: 50, right: 30, top: '62%', height: '20%' }] : []),
     ],
     xAxis: [
       { type: 'category', data: dates, boundaryGap: true, axisLine: { onZero: false }, gridIndex: 0 },
@@ -574,6 +578,19 @@ function render() {
       { type: 'slider', bottom: 10, height: 18, start: 0, end: 100, xAxisIndex: hasMacd ? [0, 1] : [0] },
     ],
     series: allSeries,
+    // STO-127: 数据不足时在副图区域显示提示文字
+    graphic: showMacdEmpty ? [
+      {
+        type: 'text',
+        left: 'center',
+        top: '67%',
+        style: {
+          text: '数据不足，无法计算 MACD（需 ≥ 26 个交易日数据）',
+          fill: '#8c8c8c',
+          fontSize: 12,
+        },
+      },
+    ] : [],
   })
 
   // 点击 K 线 bar -> 记录日期
