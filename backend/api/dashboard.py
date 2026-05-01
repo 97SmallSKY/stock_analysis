@@ -16,6 +16,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Query, Request
 
+from backend.api.schemas.dashboard import DashboardResp
 from backend.cache import cached
 from backend.db.session import pg_conn
 
@@ -218,7 +219,7 @@ def _adapter_overview(request: Request) -> list[dict]:
     return out
 
 
-@router.get("")
+@router.get("", response_model=DashboardResp)
 def dashboard(
     request: Request,
     top_n: int = Query(10, ge=1, le=50),

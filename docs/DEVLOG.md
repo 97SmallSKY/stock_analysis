@@ -11,6 +11,14 @@
 
 ---
 
+### 2026-05-02 · chore · Pydantic 响应 schema Phase 1c: dashboard API(STO-123)
+
+新建 `backend/api/schemas/dashboard.py`（`SentimentSchema` 20 字段、`TopLhbItemSchema` 10 字段、`AdapterStatusSchema` 5 字段、`DashboardResp` 根结构，宽模式 `extra='ignore'`）；`/api/dashboard` 加 `response_model=DashboardResp`。`tests/test_api_dashboard_schema.py` 补 3 条契约测试（正常响应、类型不匹配、extra 字段忽略）。
+
+**意义**：Phase 1c 完成后，STO-37 umbrella 全部 3 个 Phase（kline/lhb/dashboard）完成，防止 API-vs-DB 字段不一致事故（P18.13b 根因）。
+
+---
+
 ### 2026-04-30 · chore · Pydantic 响应 schema Phase 1a: kline 端点(STO-37)
 
 新建 `backend/api/schemas/kline.py`（`KlineBarSchema`, `KlineDailyResp`, `KlineWeeklyResp`, `KlineDaterangeResp`，宽模式 `extra='ignore'`）；`/api/kline/daily` / `/weekly` / `/daterange` 三个端点加 `response_model=`。`tests/test_api_kline.py` 补 3 条契约测试。
