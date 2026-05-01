@@ -461,7 +461,24 @@ def list_history(
         if strategy_name and t.strategy_name != strategy_name:
             continue
         d = t.to_dict()
-        m = t.metrics or {}
+        # STO-124: compare- 任务 t.result 是 ComparisonReport，t.metrics 为空
+        # 从 result['runs'] 提取 winner metrics
+        if t.task_id.startswith('compare-') and t.result and 'runs' in t.result:
+            runs = t.result.get('runs', [])
+            winner_name = t.result.get('winner')
+            best = next(
+                (r for r in runs if r.get('name') == winner_name and r.get('ok')),
+                next((r for r in runs if r.get('ok')), {}),
+            )
+            m = {
+                'total_return': best.get('total_return'),
+                'sharpe_ratio': best.get('sharpe_ratio'),
+                'max_drawdown': best.get('max_drawdown'),
+                'trade_count': best.get('trade_count'),
+                'win_rate': best.get('win_rate'),
+            }
+        else:
+            m = t.metrics or {}
         d['total_return'] = m.get('total_return')
         d['sharpe'] = m.get('sharpe') or m.get('sharpe_ratio')
         d['max_drawdown'] = m.get('max_drawdown')
@@ -503,7 +520,24 @@ def list_history(
                         seen_task_ids.add(task_id)
                         result = row[4] or {}
                         config = row[3] or {}
-                        metrics = result.get('metrics', {})
+                        # STO-124: compare- 任务 result_json 是 ComparisonReport.to_dict()
+                        # 含 runs[] 而非 metrics{}，从 winner 或第一个 run 提取 metrics
+                        if task_id.startswith('compare-') and 'runs' in result:
+                            runs = result.get('runs', [])
+                            winner_name = result.get('winner')
+                            best = next(
+                                (r for r in runs if r.get('name') == winner_name and r.get('ok')),
+                                next((r for r in runs if r.get('ok')), {}),
+                            )
+                            metrics = {
+                                'total_return': best.get('total_return'),
+                                'sharpe_ratio': best.get('sharpe_ratio'),
+                                'max_drawdown': best.get('max_drawdown'),
+                                'trade_count': best.get('trade_count'),
+                                'win_rate': best.get('win_rate'),
+                            }
+                        else:
+                            metrics = result.get('metrics', {})
                         out.append({
                             'task_id': task_id,
                             'strategy_name': row[1],

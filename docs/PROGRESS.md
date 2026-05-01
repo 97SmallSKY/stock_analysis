@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-05-01 STO-124**：compare- 任务历史列表 metrics 为空修复。`list_history` DB 路径的 metrics 提取改为：若 task_id 以 `compare-` 开头且 result 含 `runs[]`，从 winner run 提取指标。
 - **2026-05-01 STO-126**：Dashboard 节假日涨跌为空修复。kline 聚合查询改为先找 `kline_daily` 中最近有数据的交易日（`MAX(trade_date) <= sentiment_td`），解决节假日当日无 kline 数据导致 `up_count`/`down_count` 为 null。
 - **2026-05-01 STO-125**：回测详情 404 修复。`GET /api/backtest/{task_id}` in-memory 找不到时回退查 `backtest_runs` DB（`compare-*` 任务仅在 DB 中）。
 - **2026-04-30 STO-121 Phase 1b**：lhb 端点 Pydantic schema 接入（`LhbListResp`/`LhbSeatsResp`/`LhbStatResp`，宽模式，3 端点加 `response_model=`），契约测试 `test_api_lhb_schema.py`。
