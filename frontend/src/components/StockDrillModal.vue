@@ -376,13 +376,14 @@ function render() {
   // STO-65 (2026-04-25): markPoint 从「pin 圆圈 + 白字」改为「纯文字」
   //   - symbol: 'none' 移除圆圈底纹
   //   - label.color 换成高饱和红/绿直接显示在 K 线旁
-  const markPoints: { name: string; coord: [number, number]; value: string; symbol: string; label: Record<string, unknown> }[] = []
+  const markPoints: { name: string; coord: [number, number]; value: string; symbol: string; symbolSize: number; label: Record<string, unknown> }[] = []
   if (maxIdx >= 0) {
     markPoints.push({
       name: '区间最高',
       coord: [maxIdx, maxVal],
       value: String(maxVal),
-      symbol: 'none',
+      symbol: 'circle',
+      symbolSize: 1,
       label: {
         show: true, position: 'top', color: '#d4380d',
         fontSize: 12, fontWeight: 'bold',
@@ -395,7 +396,8 @@ function render() {
       name: '区间最低',
       coord: [minIdx, minVal],
       value: String(minVal),
-      symbol: 'none',
+      symbol: 'circle',
+      symbolSize: 1,
       label: {
         show: true, position: 'bottom', color: '#389e0d',
         fontSize: 12, fontWeight: 'bold',
