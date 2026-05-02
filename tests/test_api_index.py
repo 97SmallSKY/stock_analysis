@@ -124,3 +124,8 @@ def test_snapshot_returns_empty_with_warning_when_cache_miss(client_with_cache):
     assert body["items"] == []
     assert "warning" in body
     assert "不可用" in body["warning"]
+
+
+def test_fetch_timeout_is_within_5s():
+    """单次超时 ≤ 4s，确保总响应时间在 AC 要求的 5s 内。"""
+    assert index_api._FETCH_TIMEOUT <= 4.0

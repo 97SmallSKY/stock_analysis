@@ -200,8 +200,8 @@ async function loadIndex() {
   try {
     const resp = await fetchIndexSnapshot()
     indexItems.value = resp.items ?? []
-    if (!indexItems.value.length && resp.error) {
-      indexError.value = resp.error
+    if (!indexItems.value.length && (resp.warning || resp.error)) {
+      indexError.value = resp.warning ?? resp.error ?? null
     }
   } catch (e) {
     indexError.value = String((e as Error)?.message ?? e)

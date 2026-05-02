@@ -11,10 +11,11 @@ export interface IndexSnapshotItem {
 
 export interface IndexSnapshotResp {
   items: IndexSnapshotItem[]
+  warning?: string
   error?: string
 }
 
 export async function fetchIndexSnapshot(): Promise<IndexSnapshotResp> {
-  const { data } = await http.get<IndexSnapshotResp>('/api/index/snapshot', { timeout: 20_000 })
+  const { data } = await http.get<IndexSnapshotResp>('/api/index/snapshot', { timeout: 6_000 })
   return data
 }

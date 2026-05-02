@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-05-02 STO-146**：Dashboard 指数卡片超时降级修复。`_FETCH_TIMEOUT` 从 10s 降到 4s，前端 `indexError` 改为读 `warning || error`，`fetchIndexSnapshot` timeout 从 20s 降到 6s。节假日 AkShare 挂起时 5s 内返回降级响应。
 - **2026-05-02 STO-143**：回测买卖点买卖箭头修复 + 限制单股。`BacktestDetail.vue` markPoint `symbol: 'none'` 改为 `circle/size:1`；`BacktestRun.vue` `max_positions` 默认值和上限均改为 1（单股回测）。
 - **2026-05-02 STO-142**：K 线图最高/最低价格标注修复。`StockDrillModal.vue` markPoint `symbol: 'none'` 改为 `symbol: 'circle', symbolSize: 1`，修复 ECharts 5 中 `symbol: 'none'` 时 label 不渲染的问题。
 - **2026-05-02 STO-133**：回测详情 K 线买卖箭头持久化修复。`_persist_run` 的 `result_json` 补加 `trades_sample`（兼容 dict/TradeRecord 两种类型，`hasattr(t, 'to_dict')` 判断），DB 重启后历史任务详情页 K 线图可正常渲染。commit 90edf7e 初版 + e089fc8 兼容性修复。

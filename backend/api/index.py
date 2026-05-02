@@ -28,6 +28,7 @@ router = APIRouter()
 _CACHE_KEY = "index:snapshot:em"
 _CACHE_TTL = 30
 _RETRY_DELAY = 1.0
+_FETCH_TIMEOUT = 4.0  # 节假日/周末 AkShare 会持续挂起，4s 快速失败让前端在 5s 内得到降级响应
 
 _TARGET: dict[str, dict[str, Any]] = {
     "sh000001": {"code": "sh000001", "name": "上证指数"},
@@ -61,7 +62,7 @@ def _fetch_index_spot_once() -> dict:
     """单次调 akshare,失败抛异常。"""
     import akshare as ak
 
-    df = _run_with_timeout(ak.stock_zh_index_spot_em, timeout=10.0)
+    df = _run_with_timeout(ak.stock_zh_index_spot_em, timeout=_FETCH_TIMEOUT)
     if df is None or df.empty:
         return {"items": []}
 
