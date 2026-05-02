@@ -255,7 +255,7 @@ def _default_runner(task: BacktestTask, store: TaskStore) -> None:
                 'total_return': result.total_return,
                 'trade_count': len(result.trades),
                 'metrics': asdict(metrics),
-                'trades_sample': [t.to_dict() for t in result.trades[:50]],
+                'trades_sample': [t.to_dict() if hasattr(t, 'to_dict') else t for t in result.trades[:50]],
             },
             finished=True,
         )
