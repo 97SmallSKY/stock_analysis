@@ -42,7 +42,7 @@
             <span class="divider">/</span>
             <span class="down">{{ s?.down_count ?? '-' }}</span>
           </div>
-          <div class="kpi-sub">均幅 {{ fmtPct(s?.avg_pct_change) }}</div>
+          <div class="kpi-sub">均幅 {{ fmtFractionPct(s?.avg_pct_change) }}</div>
         </a-card>
       </a-col>
       <a-col :xs="12" :md="6">
@@ -176,7 +176,7 @@ import { useDashboardStore } from '@/stores/dashboard'
 import { fetchIndexSnapshot, type IndexSnapshotItem } from '@/api/index'
 import type { TopLhbRow } from '@/api/dashboard'
 import {
-  fmtAmountWan, fmtPct, fmtDate, healthColor, cbColor,
+  fmtAmountWan, fmtPct, fmtFractionPct, fmtDate, healthColor, cbColor,
 } from '@/utils/format'
 import StockLink from '@/components/StockLink.vue'
 
