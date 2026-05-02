@@ -47,6 +47,7 @@
 
 ## 近期变更日志
 
+- **2026-05-02 STO-143**：回测买卖点买卖箭头修复 + 限制单股。`BacktestDetail.vue` markPoint `symbol: 'none'` 改为 `circle/size:1`；`BacktestRun.vue` `max_positions` 默认值和上限均改为 1（单股回测）。
 - **2026-05-02 STO-142**：K 线图最高/最低价格标注修复。`StockDrillModal.vue` markPoint `symbol: 'none'` 改为 `symbol: 'circle', symbolSize: 1`，修复 ECharts 5 中 `symbol: 'none'` 时 label 不渲染的问题。
 - **2026-05-02 STO-133**：回测详情 K 线买卖箭头持久化修复。`_persist_run` 的 `result_json` 补加 `trades_sample`（兼容 dict/TradeRecord 两种类型，`hasattr(t, 'to_dict')` 判断），DB 重启后历史任务详情页 K 线图可正常渲染。commit 90edf7e 初版 + e089fc8 兼容性修复。
 - **2026-05-02 STO-123**：Pydantic 响应 schema Phase 1c (dashboard API)。新建 `backend/api/schemas/dashboard.py`（3 个子 schema + 根 `DashboardResp`），`/api/dashboard` 加 `response_model=`，补 3 条契约测试。STO-37 umbrella 全部 3 个 Phase 完成。

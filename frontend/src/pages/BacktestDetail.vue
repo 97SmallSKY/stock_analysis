@@ -214,7 +214,8 @@ const tradeKlineOption = computed(() => {
       fontSize: 11,
       formatter: t.direction === 'BUY' ? '↑买' : '↓卖',
     },
-    symbol: 'none',
+    symbol: 'circle',
+    symbolSize: 1,
   }))
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
@@ -228,7 +229,7 @@ const tradeKlineOption = computed(() => {
         color: '#d4380d', color0: '#389e0d',
         borderColor: '#d4380d', borderColor0: '#389e0d',
       },
-      markPoint: { symbol: 'none', symbolSize: 20, data: markData },
+      markPoint: { data: markData },
     }],
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 20 }],
   }

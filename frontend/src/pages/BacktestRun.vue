@@ -59,7 +59,7 @@
         </a-form-item>
 
         <a-form-item label="最大持仓数">
-          <a-input-number v-model:value="form.max_positions" :min="1" :max="50" style="width: 120px;" />
+          <a-input-number v-model:value="form.max_positions" :min="1" :max="1" :disabled="true" style="width: 120px;" />
         </a-form-item>
 
         <a-form-item label="单仓比例">
@@ -143,7 +143,7 @@ const form = reactive({
   start_date: _start.format('YYYY-MM-DD') as string,
   end_date: _end.format('YYYY-MM-DD') as string,
   initial_capital: 1_000_000,
-  max_positions: 5,
+  max_positions: 1,
   per_position_pct: 0.2,
 })
 
