@@ -15,6 +15,7 @@
 | Intake | `Backlog` | `560205f1-351a-4938-a0bc-bf549d3e88ae` | backlog | 人工 → PM |
 | Ready for Dev | `Todo` | `16364983-96de-469e-91d5-dcfe6ba8f514` | unstarted | PM → Dev |
 | In Progress | `In Progress` | `cd68c20f-f6b7-4dde-aeac-cf171503e5f6` | started | Dev |
+| Ready to Verify | `In Verification` | `d120cb8e-036b-4f0b-8cce-5595f6f34a13` | started | Dev → Ops |
 | Ready to Deploy | `In Review` | `4bb1e0c1-5f34-4ee7-bbb3-a98b1fc94943` | started | Dev → Ops |
 | Done | `Done` | `84365c14-55a8-49c4-8c98-12ee4c03764f` | completed | Ops |
 
