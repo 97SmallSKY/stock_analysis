@@ -1,0 +1,48 @@
+# ============================================================
+# 龙虎榜策略分析系统 — Crontab 配置
+# ============================================================
+# 安装: crontab scripts/crontab.txt
+# 查看: crontab -l
+# 编辑: crontab -e
+# ============================================================
+
+# ── 保活与自启 ──
+
+# 每5分钟检查 Streamlit 是否在线
+*/5 * * * *  /root/stock_analysis/scripts/agent_status.sh >> /root/stock_analysis/logs/keepalive.log 2>&1
+
+# 服务器重启后 2 分钟自动拉起 Streamlit
+@reboot sleep 120 && cd /root/stock_analysis && STREAMLIT_PORT=8051 ./start.sh
+
+# ── 数据管线 ──
+
+# 盘后主同步（AKShare 全量 + opencli 补充 + ETL 桥接）
+40 18 * * 1-5  /root/stock_analysis/scripts/daily_sync.sh >> /root/stock_analysis/logs/daily_sync.log 2>&1
+
+# 开盘前补全 T+N 价格（step 3 = 补 NULL 价格, step 11 = 刷新 LHB 收益）
+5  9  * * 1-5  /root/stock_analysis/scripts/daily_sync.sh --akshare --steps 3,11 >> /root/stock_analysis/logs/daily_sync.log 2>&1
+
+# 盘中情绪快照（轻量，仅涨跌停/大盘/北向）
+55 14 * * 1-5  /root/stock_analysis/scripts/daily_sync.sh --sentiment >> /root/stock_analysis/logs/daily_sync.log 2>&1
+
+# 每小时刷新 LHB 上榜后 N 日收益（T+1/T+2/T+5/T+10 逐步填充）
+0  10-15 * * 1-5 /root/stock_analysis/scripts/daily_sync.sh --akshare --steps 11,9 >> /root/stock_analysis/logs/daily_sync.log 2>&1
+
+# 每日 K 线 + 复权因子增量（push2 东财批量快照，19:00 收盘后）
+0  19 * * 1-5  cd /root/stock_analysis && /root/miniconda3/bin/python scripts/daily_kline_sync.py >> /root/stock_analysis/logs/daily_kline.log 2>&1
+
+# ── 回测机器人（如有启用） ──
+
+# 每日选股 — 18:45
+# 45 18 * * 1-5  cd /root/stock_analysis && python scripts/daily_cron.py phase_a >> logs/daily_cron.log 2>&1
+
+# 次日买入 — 09:35
+# 35 9  * * 1-5  cd /root/stock_analysis && python scripts/daily_cron.py phase_b >> logs/daily_cron.log 2>&1
+
+# ── 维护 ──
+
+# 每日 DB 备份 — 02:00
+0  2  * * *    /root/stock_analysis/scripts/daily_cron.py backup >> /root/stock_analysis/logs/daily_cron.log 2>&1
+
+# 每周日数据清理 — 03:00
+0  3  * * 0    /root/stock_analysis/scripts/daily_cron.py cleanup >> /root/stock_analysis/logs/daily_cron.log 2>&1

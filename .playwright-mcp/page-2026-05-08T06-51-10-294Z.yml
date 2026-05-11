@@ -1,0 +1,227 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - generic [ref=e9]:
+      - list [ref=e10]:
+        - listitem [ref=e11]:
+          - link "总览 Dashboard" [ref=e13] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/
+            - generic [ref=e16]: 🏠
+            - paragraph [ref=e19]: 总览 Dashboard
+        - listitem [ref=e20]:
+          - link "主板精选策略" [ref=e22] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/mainboard
+            - generic [ref=e25]: 🏆
+            - paragraph [ref=e28]: 主板精选策略
+        - listitem [ref=e29]:
+          - link "实时监控" [ref=e31] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/realtime
+            - generic [ref=e34]: 📡
+            - paragraph [ref=e37]: 实时监控
+        - listitem [ref=e38]:
+          - link "决策辅助信号" [ref=e40] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/signal
+            - generic [ref=e43]: 🎯
+            - paragraph [ref=e46]: 决策辅助信号
+        - listitem [ref=e47]:
+          - link "龙虎榜盈亏分析" [ref=e49] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/returns
+            - generic [ref=e52]: 📈
+            - paragraph [ref=e55]: 龙虎榜盈亏分析
+        - listitem [ref=e56]:
+          - link "模拟炒股" [ref=e58] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/sim_trading
+            - generic [ref=e61]: 🤖
+            - paragraph [ref=e64]: 模拟炒股
+        - listitem [ref=e65]:
+          - link "每日选股" [ref=e67] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/daily_select
+            - generic [ref=e70]: 🔍
+            - paragraph [ref=e73]: 每日选股
+        - listitem [ref=e74]:
+          - link "市场情绪" [ref=e76] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/sentiment
+            - generic [ref=e79]: 📊
+            - paragraph [ref=e82]: 市场情绪
+        - listitem [ref=e83]:
+          - link "策略回测" [ref=e85] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/backtest
+            - generic [ref=e88]: 🔬
+            - paragraph [ref=e91]: 策略回测
+        - listitem [ref=e92]:
+          - link "回测分析" [ref=e94] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/backtest_analysis
+            - generic [ref=e97]: 📉
+            - paragraph [ref=e100]: 回测分析
+      - button "View 3 more" [ref=e101] [cursor=pointer]
+    - generic [ref=e105]:
+      - separator [ref=e110]
+      - paragraph [ref=e115]: v1.0.0
+      - paragraph [ref=e120]: "数据来源: AKShare / 东方财富"
+  - generic [ref=e3]:
+    - banner [ref=e123]:
+      - button "Main menu" [ref=e128] [cursor=pointer]:
+        - img [ref=e129]
+    - generic [ref=e132]:
+      - heading "🔬 策略回测" [level=1] [ref=e137]:
+        - text: 🔬 策略回测
+        - generic [ref=e138]:
+          - link "Link to heading":
+            - /url: "#31b5687e"
+            - img
+      - alert [ref=e141]:
+        - paragraph [ref=e146]:
+          - text: 📌
+          - strong [ref=e147]: 单股逐笔信号回测
+          - text: ，不考虑资金占用和持仓重叠限制。T+1 开盘买入，一字涨停自动过滤，高开超阈值放弃。
+      - generic [ref=e149]:
+        - generic [ref=e151]:
+          - generic [ref=e153]:
+            - generic [ref=e154]:
+              - paragraph [ref=e157]: 股票代码
+              - button "Help for 股票代码" [ref=e161] [cursor=pointer]:
+                - img [ref=e162]
+            - textbox "股票代码" [ref=e167]:
+              - /placeholder: ""
+              - text: "000001"
+          - paragraph [ref=e172]: → 000001.SZ
+        - generic [ref=e176]:
+          - paragraph [ref=e180]: 选择策略
+          - generic [ref=e182]:
+            - generic [ref=e183]:
+              - generic [ref=e184]: lhb_high_score — 龙虎榜高分策略：综合席位质量、技术面、净买入额评分，每日选 Top N
+              - combobox "Selected lhb_high_score — 龙虎榜高分策略：综合席位质量、技术面、净买入额评分，每日选 Top N. 选择策略" [ref=e186]
+            - img "open" [ref=e188]
+        - generic [ref=e191]:
+          - generic [ref=e193]:
+            - paragraph [ref=e197]: 开始日期
+            - textbox "Select a date." [ref=e201]:
+              - /placeholder: YYYY/MM/DD
+              - text: 2024/01/01
+            - paragraph: Press the down arrow key to interact with the calendar and select a date. Press the escape button to close the calendar.
+            - paragraph: Selected date is 2024/01/01. Select the second date.
+          - generic [ref=e203]:
+            - paragraph [ref=e207]: 结束日期
+            - textbox "Select a date." [ref=e211]:
+              - /placeholder: YYYY/MM/DD
+              - text: 2026/05/08
+            - paragraph: Press the down arrow key to interact with the calendar and select a date. Press the escape button to close the calendar.
+            - paragraph: Selected date is 2026/05/08. Select the second date.
+      - paragraph [ref=e216]:
+        - text: "模式:"
+        - strong [ref=e217]: event
+        - text: "| 数据需求: K线=✓ LHB=✗ 情绪=✗"
+      - group [ref=e220]:
+        - generic "keyboard_arrow_down ⚙️ 策略参数" [ref=e221] [cursor=pointer]:
+          - generic [ref=e222]:
+            - generic [ref=e224]: keyboard_arrow_down
+            - paragraph [ref=e227]: ⚙️ 策略参数
+        - generic [ref=e229]:
+          - generic [ref=e231]:
+            - paragraph [ref=e235]: 每日最多买入数量
+            - generic [ref=e236]:
+              - spinbutton "每日最多买入数量" [ref=e239]: "1"
+              - generic [ref=e240]:
+                - button [ref=e241] [cursor=pointer]:
+                  - img [ref=e242]
+                - button [ref=e244] [cursor=pointer]:
+                  - img [ref=e245]
+          - generic [ref=e248]:
+            - paragraph [ref=e252]: 最低净买入额（万元）
+            - generic [ref=e253]:
+              - spinbutton "最低净买入额（万元）" [ref=e256]: "5000.00"
+              - generic [ref=e257]:
+                - button [ref=e258] [cursor=pointer]:
+                  - img [ref=e259]
+                - button [ref=e261] [cursor=pointer]:
+                  - img [ref=e262]
+          - generic [ref=e265]:
+            - paragraph [ref=e269]: 最低技术评分
+            - generic [ref=e270]:
+              - spinbutton "最低技术评分" [ref=e273]: "50"
+              - generic [ref=e274]:
+                - button [ref=e275] [cursor=pointer]:
+                  - img [ref=e276]
+                - button [ref=e278] [cursor=pointer]:
+                  - img [ref=e279]
+          - generic [ref=e283]:
+            - paragraph [ref=e287]: 最大20日涨幅
+            - generic [ref=e288]:
+              - slider "最大20日涨幅" [ref=e292]:
+                - generic:
+                  - generic:
+                    - paragraph: "0.30"
+              - generic:
+                - generic:
+                  - paragraph: "0.00"
+                - generic:
+                  - paragraph: "1.00"
+          - generic [ref=e296]:
+            - paragraph [ref=e300]: 止损比例
+            - generic [ref=e301]:
+              - slider "止损比例" [ref=e305]:
+                - generic:
+                  - generic:
+                    - paragraph: "-5"
+              - generic:
+                - generic:
+                  - paragraph: "-30"
+                - generic:
+                  - paragraph: "0"
+          - generic [ref=e309]:
+            - paragraph [ref=e313]: 止盈比例
+            - generic [ref=e314]:
+              - slider "止盈比例" [ref=e318]:
+                - generic:
+                  - generic:
+                    - paragraph: "8"
+              - generic:
+                - generic:
+                  - paragraph: "1"
+                - generic:
+                  - paragraph: "50"
+          - generic [ref=e321]:
+            - paragraph [ref=e325]: 最大持有天数
+            - generic [ref=e326]:
+              - spinbutton "最大持有天数" [ref=e329]: "3"
+              - generic [ref=e330]:
+                - button [ref=e331] [cursor=pointer]:
+                  - img [ref=e332]
+                - button [ref=e334] [cursor=pointer]:
+                  - img [ref=e335]
+          - generic [ref=e339] [cursor=pointer]:
+            - checkbox "过滤T+1一字涨停" [checked]
+            - paragraph [ref=e344]: 过滤T+1一字涨停
+          - generic [ref=e347]:
+            - paragraph [ref=e351]: T+1最大高开%
+            - generic [ref=e352]:
+              - slider "T+1最大高开%" [ref=e356]:
+                - generic:
+                  - generic:
+                    - paragraph: "9"
+              - generic:
+                - generic:
+                  - paragraph: "0"
+                - generic:
+                  - paragraph: "15"
+          - generic [ref=e360] [cursor=pointer]:
+            - checkbox "允许重叠持仓"
+            - paragraph [ref=e365]: 允许重叠持仓
+      - group [ref=e368]:
+        - generic "keyboard_arrow_right 📊 基准 & 高级选项" [ref=e369] [cursor=pointer]:
+          - generic [ref=e370]:
+            - generic [ref=e372]: keyboard_arrow_right
+            - paragraph [ref=e375]: 📊 基准 & 高级选项
+      - button "🚀 开始回测" [ref=e382] [cursor=pointer]:
+        - paragraph [ref=e386]: 🚀 开始回测
+      - separator [ref=e393]
+      - group [ref=e396]:
+        - generic "keyboard_arrow_right 📊 批量自动选股回测（LHB 策略专用）" [ref=e397] [cursor=pointer]:
+          - generic [ref=e398]:
+            - generic [ref=e400]: keyboard_arrow_right
+            - paragraph [ref=e403]: 📊 批量自动选股回测（LHB 策略专用）
+      - separator [ref=e408]
+      - alert [ref=e411]:
+        - paragraph [ref=e416]:
+          - text: ⚠️
+          - strong [ref=e417]: 风险提示
+          - text: ：本系统仅供研究学习，不构成投资建议。股市有风险，投资需谨慎。历史数据回测不代表未来表现。

@@ -1,0 +1,123 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - generic [ref=e9]:
+      - list [ref=e10]:
+        - listitem [ref=e11]:
+          - link "总览 Dashboard" [ref=e13] [cursor=pointer]:
+            - /url: http://localhost:8051/
+            - generic [ref=e16]: 🏠
+            - paragraph [ref=e19]: 总览 Dashboard
+        - listitem [ref=e20]:
+          - link "主板精选策略" [ref=e22] [cursor=pointer]:
+            - /url: http://localhost:8051/mainboard
+            - generic [ref=e25]: 🏆
+            - paragraph [ref=e28]: 主板精选策略
+        - listitem [ref=e29]:
+          - link "实时监控" [ref=e31] [cursor=pointer]:
+            - /url: http://localhost:8051/realtime
+            - generic [ref=e34]: 📡
+            - paragraph [ref=e37]: 实时监控
+        - listitem [ref=e38]:
+          - link "决策辅助信号" [ref=e40] [cursor=pointer]:
+            - /url: http://localhost:8051/signal
+            - generic [ref=e43]: 🎯
+            - paragraph [ref=e46]: 决策辅助信号
+        - listitem [ref=e47]:
+          - link "龙虎榜盈亏分析" [ref=e49] [cursor=pointer]:
+            - /url: http://localhost:8051/returns
+            - generic [ref=e52]: 📈
+            - paragraph [ref=e55]: 龙虎榜盈亏分析
+        - listitem [ref=e56]:
+          - link "模拟炒股" [ref=e58] [cursor=pointer]:
+            - /url: http://localhost:8051/sim_trading
+            - generic [ref=e61]: 🤖
+            - paragraph [ref=e64]: 模拟炒股
+        - listitem [ref=e65]:
+          - link "每日选股" [ref=e67] [cursor=pointer]:
+            - /url: http://localhost:8051/daily_select
+            - generic [ref=e70]: 🔍
+            - paragraph [ref=e73]: 每日选股
+        - listitem [ref=e74]:
+          - link "市场情绪" [ref=e76] [cursor=pointer]:
+            - /url: http://localhost:8051/sentiment
+            - generic [ref=e79]: 📊
+            - paragraph [ref=e82]: 市场情绪
+        - listitem [ref=e83]:
+          - link "策略回测" [ref=e85] [cursor=pointer]:
+            - /url: http://localhost:8051/backtest
+            - generic [ref=e88]: 🔬
+            - paragraph [ref=e91]: 策略回测
+        - listitem [ref=e92]:
+          - link "回测分析" [ref=e94] [cursor=pointer]:
+            - /url: http://localhost:8051/backtest_analysis
+            - generic [ref=e97]: 📉
+            - paragraph [ref=e100]: 回测分析
+      - button "View 3 more" [ref=e101] [cursor=pointer]
+    - generic [ref=e105]:
+      - separator [ref=e110]
+      - paragraph [ref=e115]: v1.0.0
+      - paragraph [ref=e120]: "数据来源: AKShare / 东方财富"
+      - paragraph [ref=e125]: ⚠️ 本系统仅供研究学习，不构成投资建议
+  - generic [ref=e3]:
+    - banner [ref=e128]:
+      - generic [ref=e131]:
+        - generic [ref=e133]:
+          - img "Running..." [ref=e134]:
+            - img [ref=e135]
+          - button "Stop" [ref=e139] [cursor=pointer]
+        - button "Deploy" [ref=e141] [cursor=pointer]:
+          - generic [ref=e143]: Deploy
+        - button "Main menu" [ref=e145] [cursor=pointer]:
+          - img [ref=e146]
+    - generic [ref=e149]:
+      - heading "🏠 龙虎榜策略 - 总览 Dashboard" [level=1] [ref=e154]:
+        - text: 🏠 龙虎榜策略 - 总览 Dashboard
+        - generic [ref=e155]:
+          - link "Link to heading":
+            - /url: "#dashboard"
+            - img
+      - paragraph [ref=e160]: "最后更新: 2026-05-07 13:11"
+      - generic [ref=e165]:
+        - heading "🎯 今日操作建议：✅ 满仓操作" [level=2] [ref=e167]:
+          - text: 🎯 今日操作建议：✅ 满仓操作
+          - generic [ref=e168]:
+            - link "Link to heading":
+              - /url: "#7fdefcbc"
+              - img
+        - generic [ref=e169]:
+          - generic [ref=e170]: 📈 涨停：78 家
+          - generic [ref=e171]: 📉 跌停：3 家
+          - generic [ref=e172]: 🔥 连板：472 家
+          - generic [ref=e173]: 📊 上证指数：4160.17 (1.17%)
+        - generic [ref=e174]: 💡 情绪解读：市场温度强势(88)，仓位系数1.0
+      - heading "🚀 快速跳转" [level=4] [ref=e180]:
+        - text: 🚀 快速跳转
+        - generic [ref=e181]:
+          - link "Link to heading":
+            - /url: "#a513aaf6"
+            - img
+      - generic [ref=e183]:
+        - button "🤖 模拟炒股" [ref=e188] [cursor=pointer]:
+          - paragraph [ref=e192]: 🤖 模拟炒股
+        - button "🏆 主板精选策略" [ref=e197] [cursor=pointer]:
+          - paragraph [ref=e201]: 🏆 主板精选策略
+        - button "🎯 决策辅助信号" [ref=e206] [cursor=pointer]:
+          - paragraph [ref=e210]: 🎯 决策辅助信号
+        - button "📈 龙虎榜盈亏分析" [ref=e215] [cursor=pointer]:
+          - paragraph [ref=e219]: 📈 龙虎榜盈亏分析
+      - separator [ref=e224]
+      - generic [ref=e226]:
+        - tablist [ref=e228]:
+          - tab "📊 市场与龙虎榜概览" [selected] [ref=e229] [cursor=pointer]:
+            - paragraph [ref=e231]: 📊 市场与龙虎榜概览
+          - tab "💰 龙虎榜盈亏统计" [ref=e232] [cursor=pointer]:
+            - paragraph [ref=e234]: 💰 龙虎榜盈亏统计
+          - tab "🔬 策略回测表现" [ref=e235] [cursor=pointer]:
+            - paragraph [ref=e237]: 🔬 策略回测表现
+        - tabpanel "📊 市场与龙虎榜概览" [ref=e240]:
+          - heading "📋 近期龙虎榜数据" [level=4] [ref=e251]:
+            - text: 📋 近期龙虎榜数据
+            - generic [ref=e252]:
+              - link "Link to heading":
+                - /url: "#2738af27"
+                - img

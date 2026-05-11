@@ -288,7 +288,13 @@ def fetch_lhb_netbuy_by_date(trade_date: str, top_n: int = 50) -> pd.DataFrame:
         storage.write(df, "lhb_top10", mode="append")
         logger.info(f"✅ {trade_date} 龙虎榜 Top10 已存入 DB 缓存")
     except Exception as e:
-        logger.warning(f"存 DB 缓存失败（不影响返回）: {e}")
+        # 不 re-raise:接口仍返回 df,业务页面不受影响。
+        # 但必须 ERROR 级 + 异常类型,因为之前 WARNING 被淹没,
+        # 导致 schema drift(UndefinedColumn)整整一天无人发现。
+        logger.opt(exception=True).error(
+            f"❌ {trade_date} 龙虎榜 Top10 写库失败 ({type(e).__name__}): {e} | "
+            f"df.columns={list(df.columns)}"
+        )
 
     logger.info(f"{trade_date} 净买额 Top{top_n} 获取完成，{len(df)} 条")
     return df
@@ -381,22 +387,27 @@ def load_lhb_detail(
 ) -> pd.DataFrame:
     """
     从本地加载龙虎榜数据
-    
+
     Args:
-        start_date: 可选，按日期过滤
+        start_date: 可选，按日期过滤（支持 'YYYYMMDD' 或 'YYYY-MM-DD' 两种格式）
         end_date: 可选，按日期过滤
     """
     df = storage.read("lhb_detail")
     if df.empty:
         return df
-    
+
     if "trade_date" in df.columns:
-        df["trade_date"] = df["trade_date"].astype(str)
+        # 把 trade_date 列归一化为 YYYYMMDD（无 dash）字符串，避免与入参格式比较错位
+        # 历史 bug：'2026-01-12' >= '20260101' 因 '-' (ASCII 45) < '0' (ASCII 48) 而 False
+        td_norm = df["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
+        df = df.assign(trade_date=td_norm)
         if start_date:
-            df = df[df["trade_date"] >= start_date]
+            sd = str(start_date).replace("-", "")[:8]
+            df = df[df["trade_date"] >= sd]
         if end_date:
-            df = df[df["trade_date"] <= end_date]
-    
+            ed = str(end_date).replace("-", "")[:8]
+            df = df[df["trade_date"] <= ed]
+
     return df
 
 
@@ -875,7 +886,7 @@ def fetch_market_sentiment(trade_date: str = None, save: bool = True) -> dict:
         sentiment["signal_reason"] = f"市场温度偏低({temp_score:.0f})：涨停{limit_up}家，跌停{limit_down}家"
     elif temp_score >= 70:
         sentiment["trade_signal"]  = "full_position"
-        sentiment["signal_reason"] = f"市场温度强势({temp_score:.0f})，仓位系数{pos_coef}"
+        sentiment["signal_reason"] = f"市场温度较高({temp_score:.0f})，可积极关注，控制仓位"
     elif temp_score >= 50:
         sentiment["trade_signal"]  = "normal"
         sentiment["signal_reason"] = f"市场温度正常({temp_score:.0f})，仓位系数{pos_coef}"

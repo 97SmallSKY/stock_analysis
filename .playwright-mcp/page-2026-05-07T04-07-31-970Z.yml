@@ -1,0 +1,70 @@
+- generic [ref=e2]:
+  - list [ref=e10]:
+    - listitem [ref=e11]:
+      - link "app" [ref=e13] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/
+        - paragraph [ref=e16]: app
+    - listitem [ref=e17]:
+      - link "backtest" [ref=e19] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/backtest
+        - paragraph [ref=e22]: backtest
+    - listitem [ref=e23]:
+      - link "backtest analysis" [ref=e25] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/backtest_analysis
+        - paragraph [ref=e28]: backtest analysis
+    - listitem [ref=e29]:
+      - link "daily select" [ref=e31] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/daily_select
+        - paragraph [ref=e34]: daily select
+    - listitem [ref=e35]:
+      - link "dashboard" [ref=e37] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/dashboard
+        - paragraph [ref=e40]: dashboard
+    - listitem [ref=e41]:
+      - link "data manager" [ref=e43] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/data_manager
+        - paragraph [ref=e46]: data manager
+    - listitem [ref=e47]:
+      - link "lhb returns" [ref=e49] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/lhb_returns
+        - paragraph [ref=e52]: lhb returns
+    - listitem [ref=e53]:
+      - link "lhb signal" [ref=e55] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/lhb_signal
+        - paragraph [ref=e58]: lhb signal
+    - listitem [ref=e59]:
+      - link "mainboard strategy" [ref=e61] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/mainboard_strategy
+        - paragraph [ref=e64]: mainboard strategy
+    - listitem [ref=e65]:
+      - link "market sentiment" [ref=e67] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/market_sentiment
+        - paragraph [ref=e70]: market sentiment
+    - listitem [ref=e71]:
+      - link "realtime monitor" [ref=e73] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/realtime_monitor
+        - paragraph [ref=e76]: realtime monitor
+    - listitem [ref=e77]:
+      - link "sim trading" [ref=e79] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/sim_trading
+        - paragraph [ref=e82]: sim trading
+    - listitem [ref=e83]:
+      - link "strategy comparison" [ref=e85] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/strategy_comparison
+        - paragraph [ref=e88]: strategy comparison
+    - listitem [ref=e89]:
+      - link "trade comparison" [ref=e91] [cursor=pointer]:
+        - /url: http://117.72.184.8:8051/trade_comparison
+        - paragraph [ref=e94]: trade comparison
+  - generic [ref=e3]:
+    - banner [ref=e98]:
+      - button "Main menu" [ref=e103] [cursor=pointer]:
+        - img [ref=e104]
+    - alert [ref=e110]:
+      - generic [ref=e113]:
+        - generic [ref=e114]: "ModuleNotFoundError: No module named 'data.fetcher'"
+        - generic [ref=e115]:
+          - generic [ref=e116]: "Traceback:"
+          - code [ref=e119]:
+            - generic [ref=e120]: File "/root/stock_analysis/pages/dashboard.py", line 11, in <module> from modules.data_fetcher import fetch_market_sentiment, load_market_sentiment_history
+            - generic [ref=e121]: File "/root/stock_analysis/modules/__init__.py", line 5, in <module> from data.fetcher.akshare_fetcher import *

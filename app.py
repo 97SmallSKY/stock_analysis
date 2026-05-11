@@ -100,15 +100,63 @@ _pages = [
 _pg = st.navigation(_pages, position="sidebar")
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 全局样式注入（侧边栏、移动适配、日期选择器）
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* 侧边栏：当前选中页左侧色条 */
+[data-testid="stSidebar"] a[aria-current="page"] {
+    border-left: 3px solid #FF4B4B !important;
+    padding-left: 10px !important;
+    background: rgba(255, 75, 75, 0.08);
+    border-radius: 0 4px 4px 0;
+}
+
+/* 侧边栏：View more → 查看更多 */
+[data-testid="stSidebar"] button[kind="secondary"] p {
+    font-size: 0;
+}
+[data-testid="stSidebar"] button[kind="secondary"] p::after {
+    content: "展开更多 ▼";
+    font-size: 14px;
+}
+
+/* 表格横向滚动（移动适配） */
+[data-testid="stDataFrame"] > div,
+[data-testid="stTable"] > div {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* 按钮自动换行（移动适配） */
+div[data-testid="stHorizontalBlock"] {
+    flex-wrap: wrap !important;
+    gap: 4px;
+}
+div[data-testid="stHorizontalBlock"] > div {
+    flex: 0 1 auto !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 全局侧边栏扩展（所有页面共享）
 # ─────────────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.divider()
     st.caption(f"v{APP_VERSION}")
     st.caption("数据来源: AKShare / 东方财富")
-    st.caption("⚠️ 本系统仅供研究学习，不构成投资建议")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 运行当前选中页面
 # ─────────────────────────────────────────────────────────────────────────────
 _pg.run()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 全局底部风险提示（所有页面可见）
+# ─────────────────────────────────────────────────────────────────────────────
+st.divider()
+st.warning(
+    "⚠️ **风险提示**：本系统仅供研究学习，不构成投资建议。"
+    "股市有风险，投资需谨慎。历史数据回测不代表未来表现。"
+)

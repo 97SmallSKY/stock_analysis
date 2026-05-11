@@ -17,19 +17,31 @@ import akshare as ak
 
 from config.settings import FAMOUS_TRADERS, STRATEGY_CONFIG
 from utils.storage import storage
+from modules.strategies.base import SellSignal
 
 # ============================================================
-# 进程级 K 线缓存（回测时避免重复拉 API）
+# 进程级 K 线缓存（回测时避免重复查 DB）
 # ============================================================
-# 结构: { stock_code: DataFrame(日期, 开盘, 最高, 最低, 收盘, 成交量) }
+# 结构: { ts_code: DataFrame(日期, 开盘, 最高, 最低, 收盘, 成交量) }
+# key 为 ts_code (如 "000001.SZ")，value 为该股最宽日期范围的 K 线
 # 每次 run_backtest 调用 _kline_cache_clear() 重置
 _KLINE_CACHE: dict = {}
+
+
+def _normalize_ts_code(stock_code: str) -> str:
+    """将任意股票代码格式统一为 'XXXXXX.SZ/SH/BJ'"""
+    code_clean = str(stock_code).replace(".SZ", "").replace(".SH", "").replace(".BJ", "").zfill(6)
+    if code_clean.startswith(("6", "9")):
+        return f"{code_clean}.SH"
+    elif code_clean.startswith(("0", "3")):
+        return f"{code_clean}.SZ"
+    else:
+        return f"{code_clean}.BJ"
 
 
 def _kline_cache_clear():
     """清空进程级 K 线缓存（每次回测前调用）"""
     _KLINE_CACHE.clear()
-    # 同步清空 market_data 缓存（两处缓存共用进程内存）
     try:
         from modules.market_data import kline_cache_clear
         kline_cache_clear()
@@ -40,45 +52,66 @@ def _kline_cache_clear():
 
 def _kline_get(stock_code: str, start_dt: str, end_dt: str) -> pd.DataFrame:
     """
-    K 线获取 — 委托给 modules/market_data.get_kline（统一数据层）
-    保留函数签名向后兼容，参数 start_dt/end_dt 用于计算 lookback。
+    K 线获取 — 从数据库 kline_daily 直读，进程级缓存（按 ts_code）
     """
+    ts_code = _normalize_ts_code(stock_code)
+    sd = str(start_dt)[:10]
+    ed = str(end_dt)[:10]
+
+    # 命中缓存 → 切片返回（统一日期格式 YYYYMMDD 再比较）
+    sd_norm = sd.replace("-", "")
+    ed_norm = ed.replace("-", "")
+    if ts_code in _KLINE_CACHE:
+        cached = _KLINE_CACHE[ts_code]
+        if "日期" in cached.columns and not cached.empty:
+            cached_dates_norm = cached["日期"].astype(str).str.replace("-", "").str[:8]
+            cached_min, cached_max = cached_dates_norm.min(), cached_dates_norm.max()
+            if sd_norm >= cached_min and ed_norm <= cached_max:
+                mask = (cached_dates_norm >= sd_norm) & (cached_dates_norm <= ed_norm)
+                return cached[mask].copy()
+
+    # 未命中或范围不够 → 查 DB
     try:
-        from modules.market_data import get_kline
-        # 估算 lookback：(end_dt - start_dt) / 1.4 + 20 保留余量
-        try:
-            td = pd.Timestamp(end_dt) - pd.Timestamp(start_dt)
-            lookback = int(td.days / 1.4) + 20
-        except Exception:
-            lookback = 120
-        df = get_kline(stock_code, end_dt, lookback=lookback, adjust="qfq")
-        if not df.empty:
-            return df
-    except Exception as e:
-        logger.warning(f"_kline_get via market_data failed ({stock_code}): {e}, 降级旧路径")
+        from utils.storage import storage as _st
+        from sqlalchemy import text
+        engine = _st._get_engine()
 
-    # 旧路径 fallback（保留以防 market_data 初始化失败）
-    if stock_code in _KLINE_CACHE:
-        df = _KLINE_CACHE[stock_code]
+        with engine.connect() as conn:
+            df = pd.read_sql_query(
+                text("""
+                    SELECT trade_date AS "日期", open AS "开盘", high AS "最高",
+                           low AS "最低", close AS "收盘", vol AS "成交量"
+                    FROM kline_daily
+                    WHERE ts_code = :ts AND trade_date BETWEEN :sd AND :ed
+                    ORDER BY trade_date ASC
+                """),
+                conn, params={"ts": ts_code, "sd": sd, "ed": ed}
+            )
+
+        if df.empty:
+            if ts_code in _KLINE_CACHE:
+                cached = _KLINE_CACHE[ts_code]
+                if "日期" in cached.columns:
+                    mask = cached["日期"].astype(str).str.replace("-", "").str[:8] <= ed_norm
+                    return cached[mask].copy()
+            return pd.DataFrame()
+
+        # 合并到缓存（保持最宽范围）
+        if ts_code in _KLINE_CACHE:
+            existing = _KLINE_CACHE[ts_code]
+            merged = pd.concat([existing, df]).drop_duplicates(subset=["日期"]).sort_values("日期").reset_index(drop=True)
+            _KLINE_CACHE[ts_code] = merged
+        else:
+            _KLINE_CACHE[ts_code] = df.copy()
+
+        # 按请求范围切片返回（统一格式 YYYYMMDD）
         if "日期" in df.columns:
-            df = df[df["日期"].astype(str) <= end_dt]
+            dnorm = df["日期"].astype(str).str.replace("-", "").str[:8]
+            return df[(dnorm >= sd_norm) & (dnorm <= ed_norm)]
         return df
+    except Exception as e:
+        logger.debug(f"_kline_get from DB failed ({stock_code}): {e}")
 
-    from utils.retry import safe_akshare_call
-    raw = safe_akshare_call(
-        ak.stock_zh_a_hist,
-        symbol=stock_code, period="daily",
-        start_date=start_dt, end_date=end_dt,
-        adjust="qfq",
-        max_retries=3, base_delay=2.0, fallback=None,
-    )
-    if raw is not None and len(raw) > 5:
-        raw = raw.rename(columns={"date": "日期", "open": "开盘", "high": "最高",
-                                   "low": "最低", "close": "收盘", "volume": "成交量"})
-        if "日期" not in raw.columns and raw.index.name == "日期":
-            raw = raw.reset_index()
-        _KLINE_CACHE[stock_code] = raw.copy()
-        return raw
     return pd.DataFrame()
 
 # 尝试导入 TA-Lib，若未安装则使用 pandas_ta 替代
@@ -99,39 +132,7 @@ except ImportError:
 # 技术面评分
 # ============================================================
 
-def _sma(series: np.ndarray, period: int) -> np.ndarray:
-    """简单移动平均"""
-    if HAS_TALIB:
-        return talib.SMA(series, period)
-    result = np.full_like(series, np.nan)
-    for i in range(period - 1, len(series)):
-        result[i] = series[i - period + 1: i + 1].mean()
-    return result
-
-
-def _macd(close: np.ndarray, fast=12, slow=26, signal=9):
-    """MACD 计算"""
-    if HAS_TALIB:
-        return talib.MACD(close, fast, slow, signal)
-    
-    def ema(arr, n):
-        result = np.full_like(arr, np.nan)
-        k = 2 / (n + 1)
-        for i in range(len(arr)):
-            if np.isnan(arr[i]):
-                continue
-            if np.isnan(result[i - 1]) if i > 0 else True:
-                result[i] = arr[i]
-            else:
-                result[i] = arr[i] * k + result[i - 1] * (1 - k)
-        return result
-    
-    ema_fast = ema(close, fast)
-    ema_slow = ema(close, slow)
-    macd_line = ema_fast - ema_slow
-    signal_line = ema(macd_line, signal)
-    hist = macd_line - signal_line
-    return macd_line, signal_line, hist
+from modules.indicators import sma as _sma  # noqa: E402
 
 
 def _rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -267,9 +268,10 @@ def calculate_seat_score(stock_detail: pd.DataFrame, jigou_df: pd.DataFrame = No
         "inst_selling": False,
         "famous_count": 0,
         "famous_names": [],
+        "seat_available": False,  # 是否有真正的营业部级别席位明细
     }
 
-    # 方式1：东方财富格式（含营业郥列）
+    # 方式1：东方财富格式（含营业部列）
     buy_col = None
     sell_col = None
     for c in stock_detail.columns:
@@ -277,6 +279,9 @@ def calculate_seat_score(stock_detail: pd.DataFrame, jigou_df: pd.DataFrame = No
             buy_col = c
         if "卖" in c and "营业部" in c:
             sell_col = c
+
+    if buy_col:
+        result["seat_available"] = True
 
     if buy_col:
         result["has_institution"] = stock_detail[buy_col].str.contains(
@@ -399,10 +404,19 @@ def select_stocks_daily(
     agg_dict = {}
     if name_col in day_df.columns:
         agg_dict[name_col] = "first"
-    if "买入额" in day_df.columns:
-        agg_dict["买入额"] = "sum"
-    if "卖出额" in day_df.columns:
-        agg_dict["卖出额"] = "sum"
+    # 字段名兼容：新表用"龙虎榜买入额/卖出额/净买额"，老表用"买入额/卖出额"
+    buy_col = "买入额" if "买入额" in day_df.columns else (
+              "龙虎榜买入额" if "龙虎榜买入额" in day_df.columns else None)
+    sell_col = "卖出额" if "卖出额" in day_df.columns else (
+               "龙虎榜卖出额" if "龙虎榜卖出额" in day_df.columns else None)
+    net_col = "净买入额" if "净买入额" in day_df.columns else (
+              "龙虎榜净买额" if "龙虎榜净买额" in day_df.columns else None)
+    if buy_col:
+        agg_dict[buy_col] = "sum"
+    if sell_col:
+        agg_dict[sell_col] = "sum"
+    if net_col:
+        agg_dict[net_col] = "sum"
     # 新浪格式：成交额(万元)列
     if "成交额(万元)" in day_df.columns:
         agg_dict["成交额(万元)"] = "sum"
@@ -412,8 +426,11 @@ def select_stocks_daily(
 
     stock_agg = day_df.groupby(code_col).agg(agg_dict).reset_index()
 
-    if "买入额" in stock_agg.columns and "卖出额" in stock_agg.columns:
-        stock_agg["净买入额"] = stock_agg["买入额"] - stock_agg["卖出额"]
+    # 统一净买入额列：优先用 net_col 直接给的，再用 buy-sell，再退化
+    if net_col and net_col in stock_agg.columns:
+        stock_agg["净买入额"] = stock_agg[net_col]
+    elif buy_col and sell_col and buy_col in stock_agg.columns and sell_col in stock_agg.columns:
+        stock_agg["净买入额"] = stock_agg[buy_col] - stock_agg[sell_col]
     elif "净买入额" not in stock_agg.columns:
         # 新浪格式：用 jigou_df 的净额，或用成交额作为近似排序
         if jigou_df is not None and not jigou_df.empty and "净额" in jigou_df.columns:
@@ -426,8 +443,8 @@ def select_stocks_daily(
             # 完全无法计算净买入额，放宽过滤条件
             stock_agg["净买入额"] = 0
 
-    # 净买入额过滤（新浪格式无净买入时跳过此过滤）
-    effective_min_net_buy = min_net_buy if "买入额" in day_df.columns else 0
+    # 净买入额过滤（无净买入数据时跳过此过滤）
+    effective_min_net_buy = min_net_buy if (buy_col or net_col) else 0
     stock_agg = stock_agg[stock_agg["净买入额"] >= effective_min_net_buy]
     
     if stock_agg.empty:
@@ -482,35 +499,97 @@ def select_stocks_daily(
             "gain_20d": gain_20d,
             **seat_info,
         })
-        
-        time.sleep(0.3)
-    
+        # DB 直读不再需要 AKShare 限流等待
+
     if not qualified_stocks:
         return []
     
-    # 综合评分
+    # 综合评分（席位缺失时动态调整权重）
     max_net = max(s["net_buy"] for s in qualified_stocks)
     min_net = min(s["net_buy"] for s in qualified_stocks)
-    
+    # 检查是否有任何股票的席位数据可用
+    any_seat_available = any(s.get("seat_available", False) for s in qualified_stocks)
+
     for stock in qualified_stocks:
         net_score = (
             (stock["net_buy"] - min_net) / (max_net - min_net) * 100
             if max_net > min_net else 50
         )
-        stock["final_score"] = (
-            net_score * 0.25
-            + stock["seat_score"] * 0.35
-            + stock["tech_score"] * 0.30
-            + (30 - stock["gain_20d"] * 100) * 0.10
-        )
-    
+        seat_ok = stock.get("seat_available", False) and any_seat_available
+        if seat_ok:
+            # 完整三维评分：净买入25% + 席位35% + 技术面30% + 涨幅10%
+            stock["final_score"] = (
+                net_score * 0.25
+                + stock["seat_score"] * 0.35
+                + stock["tech_score"] * 0.30
+                + max(0, 30 - stock["gain_20d"] * 100) * 0.10
+            )
+        else:
+            # 席位缺失：净买入40% + 技术面50% + 涨幅10%（动态重分配35%席位权重）
+            stock["final_score"] = (
+                net_score * 0.40
+                + stock.get("inst_bonus", 0) * 0.10
+                + stock["tech_score"] * 0.40
+                + max(0, 30 - stock["gain_20d"] * 100) * 0.10
+            )
+            stock["seat_score_note"] = "席位明细缺失，权重已动态调整"
+
     qualified_stocks.sort(key=lambda x: x["final_score"], reverse=True)
     return qualified_stocks[:top_n]
 
 
 # ============================================================
+# 涨跌停判断
+# ============================================================
+
+def _get_limit_pct(code: str, name: str = "") -> float:
+    """返回涨停幅度（小数），覆盖主板/双创/ST/北交所"""
+    c = str(code).lstrip("'").strip()
+    n = str(name).upper()
+    if "ST" in n:
+        return 0.05
+    if c.startswith(("300", "301")):
+        return 0.20
+    if c.startswith("688"):
+        return 0.20
+    if c.startswith(("8", "4")):
+        return 0.30
+    return 0.10
+
+
+def _is_one_word_limit_up(row, prev_close: float, limit_pct: float, eps: float = 0.001) -> bool:
+    """判断是否为 T+1 一字涨停（开盘=最高=最低≈涨停价），实际无法买入"""
+    limit_price = prev_close * (1 + limit_pct)
+    op = float(row["开盘"])
+    hi = float(row["最高"])
+    lo = float(row["最低"])
+    at_limit = op >= limit_price * (1 - eps)
+    flat_line = abs(op - hi) < 1e-4 and abs(op - lo) < 1e-4
+    return at_limit and flat_line
+
+
+def _make_skip(reason: str) -> dict:
+    return {"return_rate": None, "hold_days": 0, "exit_reason": reason, "skipped": True}
+
+
+# ============================================================
 # 止盈止损模拟
 # ============================================================
+
+def _default_sell_check(position: dict, stop_loss: float, stop_profit: float, max_hold_days: int) -> dict | None:
+    """回退止盈止损判断（无 strategy 时使用），保持原有优先级"""
+    if position["hold_days"] > 1 and position["open_return"] <= stop_loss:
+        return {"reason": "开盘止损", "price_type": "open"}
+    if position["open_return"] >= stop_profit:
+        return {"reason": "开盘止盈", "price_type": "open"}
+    if position["min_return"] <= stop_loss:
+        return {"reason": "盘中止损", "price_type": "close"}
+    if position["max_return"] >= stop_profit:
+        return {"reason": "盘中止盈", "price_type": "close"}
+    if position["hold_days"] >= max_hold_days:
+        return {"reason": "到期卖出", "price_type": "close"}
+    return None
+
 
 def simulate_with_stoploss(
     stock_code: str,
@@ -519,106 +598,44 @@ def simulate_with_stoploss(
     stop_profit: float = 0.08,
     max_hold_days: int = 3,
     roundtrip_cost: float = 0.0025,
+    max_buy_gap: float = 0.095,
+    filter_one_word: bool = True,
+    strategy=None,
 ) -> Optional[dict]:
     """
-    模拟带止盈止损的交易
-    
+    模拟带止盈止损的交易（委托给 modules.backtest.executor.Executor）
+
+    Args:
+        stop_loss / stop_profit / max_hold_days: 回退模式参数（strategy=None 时使用）
+        max_buy_gap: T+1 开盘最大允许高开幅度
+        filter_one_word: 是否过滤 T+1 一字涨停
+        strategy: BaseStrategy 实例，提供 should_sell() 判断
+
     Returns:
-        包含交易结果的字典
+        包含交易结果的字典（skipped=True 表示未实际成交）
     """
-    try:
-        end_dt = pd.to_datetime(trade_date) + timedelta(days=max_hold_days + 15)
-        # ── 优先走缓存，回测时完全不触发接口 ──
-        raw = _kline_get(stock_code, trade_date, end_dt.strftime("%Y%m%d"))
-        if raw.empty:
-            return None
-        # 截取 trade_date 当日及之后的数据
-        if "日期" in raw.columns:
-            df = raw[raw["日期"].astype(str) >= trade_date].reset_index(drop=True)
-        else:
-            df = raw.reset_index(drop=True)
+    from modules.backtest.executor import Executor, BacktestContext
+    from modules.backtest.data_feed import DataFeed
 
-        if len(df) < 2:
-            return None
+    # 若传入 strategy，从 strategy.params 提取参数
+    if strategy is not None:
+        stop_loss = strategy.params.get("stop_loss", stop_loss)
+        stop_profit = strategy.params.get("stop_profit", stop_profit)
+        max_hold_days = strategy.params.get("max_hold_days", max_hold_days)
+        max_buy_gap = strategy.params.get("max_buy_gap", max_buy_gap)
+        filter_one_word = strategy.params.get("filter_one_word", filter_one_word)
 
-        # 语义统一：trade_date=T日（上榜日），T+1（下一根交易日）开盘买入
-        buy_idx = 1
-        buy_price = float(df.iloc[buy_idx]["开盘"])
-
-        for day_idx in range(buy_idx, min(len(df), buy_idx + max_hold_days + 1)):
-            held_days = day_idx - buy_idx + 1
-            if held_days > max_hold_days:
-                sell_price = float(df.iloc[day_idx]["收盘"])
-                gross_ret = (sell_price - buy_price) / buy_price
-                net_ret = gross_ret - roundtrip_cost
-                return {
-                    "buy_price": buy_price, "sell_price": sell_price,
-                    "return_rate": net_ret,
-                    "return_rate_gross": gross_ret,
-                    "hold_days": held_days, "exit_reason": "到期卖出",
-                    "cost_rate": roundtrip_cost,
-                }
-            
-            day_open = float(df.iloc[day_idx]["开盘"])
-            day_high = float(df.iloc[day_idx]["最高"])
-            day_low = float(df.iloc[day_idx]["最低"])
-            day_close = float(df.iloc[day_idx]["收盘"])
-            
-            max_return = (day_high - buy_price) / buy_price
-            min_return = (day_low - buy_price) / buy_price
-            open_return = (day_open - buy_price) / buy_price
-            
-            if held_days > 1 and open_return <= stop_loss:
-                gross_ret = open_return
-                net_ret = gross_ret - roundtrip_cost
-                return {"buy_price": buy_price, "sell_price": day_open,
-                        "return_rate": net_ret,
-                        "return_rate_gross": gross_ret,
-                        "hold_days": held_days,
-                        "exit_reason": "开盘止损",
-                        "cost_rate": roundtrip_cost}
-            if open_return >= stop_profit:
-                gross_ret = open_return
-                net_ret = gross_ret - roundtrip_cost
-                return {"buy_price": buy_price, "sell_price": day_open,
-                        "return_rate": net_ret,
-                        "return_rate_gross": gross_ret,
-                        "hold_days": held_days,
-                        "exit_reason": "开盘止盈",
-                        "cost_rate": roundtrip_cost}
-            if min_return <= stop_loss:
-                gross_ret = stop_loss
-                net_ret = gross_ret - roundtrip_cost
-                return {"buy_price": buy_price,
-                        "sell_price": buy_price * (1 + stop_loss),
-                        "return_rate": net_ret,
-                        "return_rate_gross": gross_ret,
-                        "hold_days": held_days,
-                        "exit_reason": "盘中止损",
-                        "cost_rate": roundtrip_cost}
-            if max_return >= stop_profit:
-                gross_ret = stop_profit
-                net_ret = gross_ret - roundtrip_cost
-                return {"buy_price": buy_price,
-                        "sell_price": buy_price * (1 + stop_profit),
-                        "return_rate": net_ret,
-                        "return_rate_gross": gross_ret,
-                        "hold_days": held_days,
-                        "exit_reason": "盘中止盈",
-                        "cost_rate": roundtrip_cost}
-        
-        sell_price = float(df.iloc[-1]["收盘"])
-        gross_ret = (sell_price - buy_price) / buy_price
-        net_ret = gross_ret - roundtrip_cost
-        return {"buy_price": buy_price, "sell_price": sell_price,
-                "return_rate": net_ret,
-                "return_rate_gross": gross_ret,
-                "hold_days": max(1, len(df) - buy_idx), "exit_reason": "数据截止",
-                "cost_rate": roundtrip_cost}
-    
-    except Exception as e:
-        logger.debug(f"止盈止损模拟失败 {stock_code}: {e}")
-        return None
+    feed = DataFeed()
+    executor = Executor(feed, roundtrip_cost=roundtrip_cost)
+    ctx = BacktestContext(
+        data_feed=feed, code=stock_code,
+        strategy_params={
+            "stop_loss": stop_loss, "stop_profit": stop_profit,
+            "max_hold_days": max_hold_days, "max_buy_gap": max_buy_gap,
+            "filter_one_word": filter_one_word,
+        }
+    )
+    return executor.execute_trade(stock_code, trade_date, ctx, strategy=strategy)
 
 
 # ============================================================
@@ -638,6 +655,9 @@ def run_backtest(
     min_tech_score: int = 50,
     save: bool = True,
     roundtrip_cost: float = 0.0025,
+    filter_one_word: bool = True,
+    max_buy_gap: float = 0.095,
+    strategy=None,  # BaseStrategy 实例（可选）
 ) -> pd.DataFrame:
     """
     完整策略回测（已优化：进程级 K 线缓存，同一只股只拉一次 API）
@@ -684,33 +704,78 @@ def run_backtest(
     date_col = "trade_date" if "trade_date" in lhb_df.columns else "上榜日期"
     trade_dates = sorted(lhb_df[date_col].astype(str).unique())
     
-    # ── 预拉 K 线缓存（prefetch）────────────────────────────────
-    # 提前批量拉取所有出现过的股票 K 线，避免回测内逐只实时拉取
-    date_col2 = "trade_date" if "trade_date" in lhb_df.columns else "上榜日期"
+    # ── 预拉 K 线缓存（prefetch batch）────────────────────────
+    # 1 次 SQL 拉取所有候选股 K 线 → 按 ts_code 分组写入进程缓存
     all_codes = lhb_df["代码"].astype(str).unique().tolist() if "代码" in lhb_df.columns else []
+    all_ts_codes = [_normalize_ts_code(c) for c in all_codes]
     prefetch_start = (pd.to_datetime(start_date) - timedelta(days=130)).strftime("%Y%m%d")
     prefetch_end   = (pd.to_datetime(end_date)   + timedelta(days=20)).strftime("%Y%m%d")
-    logger.info(f"预拉 K 线缓存：{len(all_codes)} 只股票，范围 {prefetch_start}~{prefetch_end}")
-    for ci, code in enumerate(all_codes):
-        if code not in _KLINE_CACHE:
-            _kline_get(code, prefetch_start, prefetch_end)
-            if ci % 10 == 0:
-                logger.info(f"  prefetch [{ci+1}/{len(all_codes)}] {code}")
-    logger.info(f"K 线预拉完成，共缓存 {len(_KLINE_CACHE)} 只")
+    logger.info(f"预拉 K 线缓存：{len(all_ts_codes)} 只股票，范围 {prefetch_start}~{prefetch_end}")
+
+    if all_ts_codes:
+        try:
+            from utils.storage import storage as _st
+            from sqlalchemy import text
+            engine = _st._get_engine()
+            # 分批查询避免 IN 列表过长（每批 500 只）
+            batch_size = 500
+            total_fetched = 0
+            for batch_start in range(0, len(all_ts_codes), batch_size):
+                batch_codes = all_ts_codes[batch_start:batch_start + batch_size]
+                with engine.connect() as conn:
+                    df_batch = pd.read_sql_query(
+                        text("""
+                            SELECT ts_code, trade_date AS "日期", open AS "开盘", high AS "最高",
+                                   low AS "最低", close AS "收盘", vol AS "成交量"
+                            FROM kline_daily
+                            WHERE ts_code = ANY(:codes) AND trade_date BETWEEN :sd AND :ed
+                            ORDER BY ts_code, trade_date ASC
+                        """),
+                        conn, params={
+                            "codes": batch_codes,
+                            "sd": prefetch_start,
+                            "ed": prefetch_end,
+                        }
+                    )
+                for ts_code, grp in df_batch.groupby("ts_code"):
+                    grip_sorted = grp.sort_values("日期").reset_index(drop=True)
+                    if ts_code in _KLINE_CACHE:
+                        merged = pd.concat([_KLINE_CACHE[ts_code], grip_sorted]).drop_duplicates(subset=["日期"]).sort_values("日期").reset_index(drop=True)
+                        _KLINE_CACHE[ts_code] = merged
+                    else:
+                        _KLINE_CACHE[ts_code] = grip_sorted
+                total_fetched += len(df_batch)
+                logger.info(f"  prefetch batch [{batch_start//batch_size + 1}/{(len(all_ts_codes)-1)//batch_size + 1}]: {len(batch_codes)} 只 → {len(df_batch)} 行")
+            logger.info(f"K 线预拉完成，共缓存 {len(_KLINE_CACHE)} 只，{total_fetched} 行")
+        except Exception as e:
+            logger.warning(f"批量预拉 K 线失败，回退到逐只查询: {e}")
+            for ci, code in enumerate(all_codes):
+                ts_code = _normalize_ts_code(code)
+                if ts_code not in _KLINE_CACHE:
+                    _kline_get(code, prefetch_start, prefetch_end)
+                if ci % 20 == 0:
+                    logger.info(f"  prefetch [{ci+1}/{len(all_codes)}] {code}")
+            logger.info(f"K 线预拉完成（fallback），共缓存 {len(_KLINE_CACHE)} 只")
 
     results = []
+    skip_stats = {}  # 统计跳过原因
     total_dates = len(trade_dates)
 
     for i, date_str in enumerate(trade_dates):
         logger.info(f"[{i+1}/{total_dates}] 回测日期: {date_str}")
 
-        # 选股（此时 K 线已在缓存，不再触发 API）
-        selected = select_stocks_daily(
-            lhb_df, date_str,
-            top_n=top_n,
-            min_net_buy=min_net_buy,
-            min_tech_score=min_tech_score,
-        )
+        # 选股：优先使用策略，回退到旧路径
+        if strategy is not None:
+            buy_orders = strategy.select(date_str, lhb_df, _KLINE_CACHE)
+            selected = [{"code": o.code, **(o.meta if hasattr(o, 'meta') else {})} for o in buy_orders]
+        else:
+            stocks = select_stocks_daily(
+                lhb_df, date_str,
+                top_n=top_n,
+                min_net_buy=min_net_buy,
+                min_tech_score=min_tech_score,
+            )
+            selected = [{"code": s["code"], **s} for s in stocks]
 
         if not selected:
             continue
@@ -723,32 +788,69 @@ def run_backtest(
                     stop_profit=stop_profit,
                     max_hold_days=max_hold_days,
                     roundtrip_cost=roundtrip_cost,
+                    filter_one_word=filter_one_word,
+                    max_buy_gap=max_buy_gap,
+                    strategy=strategy,
                 )
             else:
                 from modules.data_fetcher import get_next_day_return
                 ret = get_next_day_return(stock["code"], date_str, hold_days)
 
-            if ret:
-                results.append({
-                    "trade_date": date_str,
-                    "code": stock["code"],
-                    "name": stock.get("name", ""),
-                    "net_buy": stock.get("net_buy", 0),
-                    "seat_score": stock.get("seat_score", 0),
-                    "tech_score": stock.get("tech_score", 0),
-                    "final_score": stock.get("final_score", 0),
-                    "has_institution": stock.get("has_institution", False),
-                    "famous_count": stock.get("famous_count", 0),
-                    "gain_20d": stock.get("gain_20d", 0),
-                    **ret,
-                })
+            if ret is None:
+                continue
+            if ret.get("skipped"):
+                reason = ret.get("exit_reason", "未知")
+                skip_stats[reason] = skip_stats.get(reason, 0) + 1
+                continue
+
+            results.append({
+                "trade_date": date_str,
+                "code": stock["code"],
+                "name": stock.get("name", ""),
+                "net_buy": stock.get("net_buy", 0),
+                "seat_score": stock.get("seat_score", 0),
+                "tech_score": stock.get("tech_score", 0),
+                "final_score": stock.get("final_score", 0),
+                "has_institution": stock.get("has_institution", False),
+                "famous_count": stock.get("famous_count", 0),
+                "gain_20d": stock.get("gain_20d", 0),
+                **ret,
+            })
+
+    if skip_stats:
+        logger.info(f"跳过交易统计: {skip_stats}")
+        print(f"\n📊 成交约束过滤统计:")
+        for reason, cnt in sorted(skip_stats.items(), key=lambda x: -x[1]):
+            print(f"  {reason}: {cnt} 笔")
     
     results_df = pd.DataFrame(results)
-    
+
     if not results_df.empty and save:
-        storage.write(results_df, "backtest_results", mode="replace")
-        logger.info(f"回测结果保存完成，共 {len(results_df)} 条记录")
-    
+        import uuid as _uuid
+        from datetime import datetime as _dt
+        run_id = _uuid.uuid4().hex[:12]
+        strategy_name = strategy.name if strategy else "legacy"
+        run_type = "signal_backtest"
+        now = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        results_df["run_id"] = run_id
+        results_df["run_type"] = run_type
+        results_df["strategy_name"] = strategy_name
+        results_df["created_at"] = now
+
+        storage.write(results_df, "backtest_results", mode="append")
+
+        # 记录 run 元信息
+        run_meta = pd.DataFrame([{
+            "run_id": run_id, "run_type": run_type,
+            "strategy_name": strategy_name,
+            "start_date": start_date, "end_date": end_date,
+            "trade_count": len(results_df),
+            "created_at": now,
+        }])
+        storage.write(run_meta, "backtest_runs", mode="append")
+        logger.info(f"回测结果保存完成 run={run_id} 共 {len(results_df)} 条")
+
     return results_df
 
 
@@ -758,75 +860,7 @@ def run_backtest(
 
 def analyze_backtest(df: pd.DataFrame) -> dict:
     """
-    对回测结果进行统计分析
-    
-    Returns:
-        包含各统计指标的字典
+    对回测结果进行统计分析（委托给 modules.backtest.metrics.analyze）
     """
-    if df.empty:
-        return {}
-    
-    total = len(df)
-    win_mask = df["return_rate"] > 0
-    win_count = win_mask.sum()
-    loss_count = total - win_count
-    
-    win_rate = win_count / total
-    avg_return = df["return_rate"].mean()
-    median_return = df["return_rate"].median()
-    max_return = df["return_rate"].max()
-    min_return = df["return_rate"].min()
-    
-    avg_win = df.loc[win_mask, "return_rate"].mean() if win_count > 0 else 0
-    avg_loss = df.loc[~win_mask, "return_rate"].mean() if loss_count > 0 else 0
-    pl_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else float("inf")
-    
-    std = df["return_rate"].std()
-    sharpe = avg_return / std if std > 0 else 0
-    
-    # 最大连续亏损
-    max_consec_loss = 0
-    cur = 0
-    for v in df["return_rate"]:
-        if v <= 0:
-            cur += 1
-            max_consec_loss = max(max_consec_loss, cur)
-        else:
-            cur = 0
-    
-    # 累计收益曲线（等权）
-    df_sorted = df.sort_values("trade_date").copy()
-    df_sorted["cumulative_return"] = (1 + df_sorted["return_rate"]).cumprod() - 1
-    
-    # 按月统计
-    df_sorted["month"] = pd.to_datetime(df_sorted["trade_date"]).dt.to_period("M")
-    monthly = df_sorted.groupby("month").agg(
-        trades=("return_rate", "count"),
-        avg_return=("return_rate", "mean"),
-        win_rate=("return_rate", lambda x: (x > 0).mean()),
-        total_return=("return_rate", "sum"),
-    ).reset_index()
-    monthly["month"] = monthly["month"].astype(str)
-    
-    # 按席位分组
-    inst_df = df[df.get("has_institution", False) == True] if "has_institution" in df.columns else pd.DataFrame()
-    
-    return {
-        "total_trades": total,
-        "win_count": int(win_count),
-        "loss_count": int(loss_count),
-        "win_rate": float(win_rate),
-        "avg_return": float(avg_return),
-        "median_return": float(median_return),
-        "max_return": float(max_return),
-        "min_return": float(min_return),
-        "avg_win": float(avg_win),
-        "avg_loss": float(avg_loss),
-        "pl_ratio": float(pl_ratio),
-        "sharpe": float(sharpe),
-        "max_consecutive_loss": int(max_consec_loss),
-        "cumulative_curve": df_sorted[["trade_date", "cumulative_return"]].to_dict("records"),
-        "monthly_stats": monthly.to_dict("records"),
-        "inst_win_rate": float((inst_df["return_rate"] > 0).mean()) if not inst_df.empty else None,
-        "inst_avg_return": float(inst_df["return_rate"].mean()) if not inst_df.empty else None,
-    }
+    from modules.backtest.metrics import analyze as _analyze
+    return _analyze(df)

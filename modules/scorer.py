@@ -31,26 +31,8 @@ except ImportError:
     FAMOUS_TRADERS = {}
 
 
-# ── 技术指标辅助（模块内私有，避免重复引入） ──────────────────────────────
-
-def _sma(arr: np.ndarray, n: int) -> np.ndarray:
-    result = np.full_like(arr, np.nan, dtype=float)
-    for i in range(n - 1, len(arr)):
-        result[i] = arr[i - n + 1: i + 1].mean()
-    return result
-
-
-def _ema(arr: np.ndarray, n: int) -> np.ndarray:
-    result = np.full_like(arr, np.nan, dtype=float)
-    k = 2.0 / (n + 1)
-    for i in range(len(arr)):
-        if np.isnan(arr[i]):
-            continue
-        if i == 0 or np.isnan(result[i - 1]):
-            result[i] = arr[i]
-        else:
-            result[i] = arr[i] * k + result[i - 1] * (1 - k)
-    return result
+# 技术指标统一引用 modules.indicators，不在此重复实现
+from modules.indicators import sma as _sma, ema as _ema
 
 
 # ── 技术面评分 ─────────────────────────────────────────────────────────────

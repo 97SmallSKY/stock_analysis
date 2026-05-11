@@ -259,6 +259,46 @@ class PostgreSQLStorage:
             logger.error(f"query_by_date 失败 [{pg_table}]: {e}")
             return pd.DataFrame()
 
+    def query_by_code(self, table: str, code: str, code_col: str = '"代码"') -> pd.DataFrame:
+        """按股票代码查询，返回该股全部历史记录（只传输匹配行）"""
+        pg_table = _pg_table(table)
+        try:
+            engine = self._get_engine()
+            from sqlalchemy import inspect as sa_inspect, text
+            insp = sa_inspect(engine)
+            if not insp.has_table(pg_table):
+                return pd.DataFrame()
+            sql = text(f'SELECT * FROM "{pg_table}" WHERE {code_col} = :code ORDER BY trade_date DESC')
+            df = pd.read_sql(sql, engine, params={"code": code})
+            return df
+        except Exception as e:
+            logger.error(f"query_by_code 失败 [{pg_table}]: {e}")
+            return pd.DataFrame()
+
+    def read_recent(self, table: str, days: int = 90) -> pd.DataFrame:
+        """读取最近 N 天的数据（自动过滤，大幅减少传输量）"""
+        pg_table = _pg_table(table)
+        try:
+            engine = self._get_engine()
+            from sqlalchemy import inspect as sa_inspect, text
+            insp = sa_inspect(engine)
+            if not insp.has_table(pg_table):
+                logger.debug(f"PostgreSQL 表不存在: {pg_table}")
+                return pd.DataFrame()
+            sql = text(f"""
+                SELECT t.* FROM "{pg_table}" t
+                WHERE trade_date::date >= (
+                    SELECT MAX(trade_date::date) FROM "{pg_table}"
+                ) - (:days || ' days')::interval
+                ORDER BY trade_date DESC
+            """)
+            df = pd.read_sql(sql, engine, params={"days": days})
+            logger.debug(f"从 PostgreSQL 读取 {pg_table} (最近{days}天): {len(df)} 行")
+            return df
+        except Exception as e:
+            logger.error(f"read_recent 失败 [{pg_table}]: {e}")
+            return pd.DataFrame()
+
     def get_table_stats(self) -> pd.DataFrame:
         """查看所有 stock_ 表的数据量（运维用）"""
         try:

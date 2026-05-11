@@ -8,6 +8,7 @@ import plotly.express as px
 from datetime import datetime, timedelta
 
 from utils.storage import storage
+from utils.chart_utils import plotly_dark
 from modules.data_fetcher import fetch_market_sentiment, load_market_sentiment_history
 import akshare as ak
 
@@ -79,16 +80,14 @@ def render():
             yaxis="y",
         ))
     
-    fig.update_layout(
+    fig.update_layout(**plotly_dark(
         title="市场涨跌停家数与大盘走势",
         yaxis=dict(title="涨跌停家数"),
         yaxis2=dict(title="上证指数", overlaying="y", side="right"),
         height=450,
         hovermode="x unified",
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
-    )
+    ))
     st.plotly_chart(fig, use_container_width=True)
     
     # ============================================================
@@ -117,11 +116,7 @@ def render():
         fig2.add_hline(y=1, line_dash="dash", line_color="#f59e0b",
                        annotation_text="均衡线(1x)")
         
-        fig2.update_layout(
-            height=350,
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-        )
+        fig2.update_layout(**plotly_dark(height=350))
         st.plotly_chart(fig2, use_container_width=True)
     
     # ============================================================
@@ -150,12 +145,7 @@ def render():
             line=dict(color="#6366f1", width=2, dash="dot"),
         ))
         
-        fig3.update_layout(
-            height=300,
-            hovermode="x unified",
-            plot_bgcolor="rgba(0,0,0,0)",
-            paper_bgcolor="rgba(0,0,0,0)",
-        )
+        fig3.update_layout(**plotly_dark(height=300, hovermode="x unified"))
         st.plotly_chart(fig3, use_container_width=True)
     
     # ============================================================

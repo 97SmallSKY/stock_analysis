@@ -1,0 +1,356 @@
+- generic [active]:
+  - generic [ref=e2]:
+    - generic [ref=e7]:
+      - generic [ref=e9]:
+        - list [ref=e10]:
+          - listitem [ref=e11]:
+            - link "总览 Dashboard" [ref=e13] [cursor=pointer]:
+              - /url: http://localhost:8051/
+              - generic [ref=e16]: 🏠
+              - paragraph [ref=e19]: 总览 Dashboard
+          - listitem [ref=e20]:
+            - link "主板精选策略" [ref=e22] [cursor=pointer]:
+              - /url: http://localhost:8051/mainboard
+              - generic [ref=e25]: 🏆
+              - paragraph [ref=e28]: 主板精选策略
+          - listitem [ref=e29]:
+            - link "实时监控" [ref=e31] [cursor=pointer]:
+              - /url: http://localhost:8051/realtime
+              - generic [ref=e34]: 📡
+              - paragraph [ref=e37]: 实时监控
+          - listitem [ref=e38]:
+            - link "决策辅助信号" [ref=e40] [cursor=pointer]:
+              - /url: http://localhost:8051/signal
+              - generic [ref=e43]: 🎯
+              - paragraph [ref=e46]: 决策辅助信号
+          - listitem [ref=e47]:
+            - link "龙虎榜盈亏分析" [ref=e49] [cursor=pointer]:
+              - /url: http://localhost:8051/returns
+              - generic [ref=e52]: 📈
+              - paragraph [ref=e55]: 龙虎榜盈亏分析
+          - listitem [ref=e56]:
+            - link "模拟炒股" [ref=e58] [cursor=pointer]:
+              - /url: http://localhost:8051/sim_trading
+              - generic [ref=e61]: 🤖
+              - paragraph [ref=e64]: 模拟炒股
+          - listitem [ref=e65]:
+            - link "每日选股" [ref=e67] [cursor=pointer]:
+              - /url: http://localhost:8051/daily_select
+              - generic [ref=e70]: 🔍
+              - paragraph [ref=e73]: 每日选股
+          - listitem [ref=e74]:
+            - link "市场情绪" [ref=e76] [cursor=pointer]:
+              - /url: http://localhost:8051/sentiment
+              - generic [ref=e79]: 📊
+              - paragraph [ref=e82]: 市场情绪
+          - listitem [ref=e83]:
+            - link "策略回测" [ref=e85] [cursor=pointer]:
+              - /url: http://localhost:8051/backtest
+              - generic [ref=e88]: 🔬
+              - paragraph [ref=e91]: 策略回测
+          - listitem [ref=e92]:
+            - link "回测分析" [ref=e94] [cursor=pointer]:
+              - /url: http://localhost:8051/backtest_analysis
+              - generic [ref=e97]: 📉
+              - paragraph [ref=e100]: 回测分析
+        - button "View 3 more" [ref=e101] [cursor=pointer]
+      - generic [ref=e105]:
+        - separator [ref=e110]
+        - paragraph [ref=e115]: v1.0.0
+        - paragraph [ref=e120]: "数据来源: AKShare / 东方财富"
+        - separator [ref=e125]
+        - heading "🔧 策略筛选参数" [level=3] [ref=e129]
+        - generic [ref=e132]:
+          - generic [ref=e133]:
+            - paragraph [ref=e136]: 选股池宽度（Top N）
+            - button "Help for 选股池宽度（Top N）" [ref=e140] [cursor=pointer]:
+              - img [ref=e141]
+          - generic [ref=e144]:
+            - slider "选股池宽度（Top N）" [ref=e148]:
+              - generic:
+                - generic:
+                  - paragraph: "10"
+            - generic:
+              - generic:
+                - paragraph: "10"
+              - generic:
+                - paragraph: "50"
+        - paragraph [ref=e154]:
+          - strong [ref=e155]: 市值筛选
+        - radiogroup "流通市值" [ref=e158] [cursor=pointer]:
+          - generic [ref=e159]:
+            - radio "全部" [checked]
+            - paragraph [ref=e164]: 全部
+          - generic [ref=e165]:
+            - radio "小盘 (<100亿)"
+            - paragraph [ref=e170]: 小盘 (<100亿)
+          - generic [ref=e171]:
+            - radio "中盘 (100~300亿)"
+            - paragraph [ref=e176]: 中盘 (100~300亿)
+          - generic [ref=e177]:
+            - radio "大盘 (300~1000亿)"
+            - paragraph [ref=e182]: 大盘 (300~1000亿)
+          - generic [ref=e183]:
+            - radio "超大盘 (>1000亿)"
+            - paragraph [ref=e188]: 超大盘 (>1000亿)
+        - paragraph [ref=e193]:
+          - strong [ref=e194]: 换手率档位
+          - text: （量比替代指标）
+        - radiogroup "换手率" [ref=e197] [cursor=pointer]:
+          - generic [ref=e198]:
+            - radio "全部" [checked]
+            - paragraph [ref=e203]: 全部
+          - generic [ref=e204]:
+            - radio "低换手 (<1%)"
+            - paragraph [ref=e209]: 低换手 (<1%)
+          - generic [ref=e210]:
+            - radio "正常 (1~3%)"
+            - paragraph [ref=e215]: 正常 (1~3%)
+          - generic [ref=e216]:
+            - radio "活跃 (3~7%)"
+            - paragraph [ref=e221]: 活跃 (3~7%)
+          - generic [ref=e222]:
+            - radio "高换手 (>7%)"
+            - paragraph [ref=e227]: 高换手 (>7%)
+        - paragraph [ref=e232]:
+          - strong [ref=e233]: 排序依据
+          - text: （决定每日选哪只）
+        - radiogroup "排序" [ref=e236] [cursor=pointer]:
+          - generic [ref=e237]:
+            - radio "净买入额（主力意志）" [checked]
+            - paragraph [ref=e242]: 净买入额（主力意志）
+          - generic [ref=e243]:
+            - radio "综合评分（推荐）★"
+            - paragraph [ref=e248]: 综合评分（推荐）★
+          - generic [ref=e249]:
+            - radio "净买额占比%（主力密度↓）"
+            - paragraph [ref=e254]: 净买额占比%（主力密度↓）
+          - generic [ref=e255]:
+            - radio "换手率（活跃度↓）"
+            - paragraph [ref=e260]: 换手率（活跃度↓）
+          - generic [ref=e261]:
+            - radio "流通市值（从小到大）"
+            - paragraph [ref=e266]: 流通市值（从小到大）
+          - generic [ref=e267]:
+            - radio "流通市值（从大到小）"
+            - paragraph [ref=e272]: 流通市值（从大到小）
+          - generic [ref=e273]:
+            - radio "涨跌幅（强势度↓）"
+            - paragraph [ref=e278]: 涨跌幅（强势度↓）
+        - paragraph [ref=e283]: 当前：Top10 | 全部 | 全部 | 净买入额（主力意志）
+    - generic [ref=e3]:
+      - banner [ref=e286]:
+        - generic [ref=e289]:
+          - button "Deploy" [ref=e291] [cursor=pointer]:
+            - generic [ref=e293]: Deploy
+          - button "Main menu" [ref=e295] [cursor=pointer]:
+            - img [ref=e296]
+      - generic [ref=e299]:
+        - heading "🏆 主板精选策略" [level=1] [ref=e304]:
+          - text: 🏆 主板精选策略
+          - generic [ref=e305]:
+            - link "Link to heading":
+              - /url: "#5966c8"
+              - img
+        - paragraph [ref=e310]:
+          - text: 龙虎榜净买入 Top N（主板）→ 多维筛选 →
+          - strong [ref=e311]: T+1 开盘买入 → T+2 冲高走人
+          - text: "|"
+          - strong [ref=e312]: T 日
+          - text: =上榜当日 ·
+          - strong [ref=e313]: T+1
+          - text: =次日集合竞价买入 ·
+          - strong [ref=e314]: T+2
+          - text: =上榜后第2交易日卖出
+        - generic [ref=e319]:
+          - heading "🏆 2026-05-06 首选主板标的：潍柴动力（000338.SZ）" [level=2] [ref=e321]:
+            - text: 🏆 2026-05-06 首选主板标的：潍柴动力（000338.SZ）
+            - generic [ref=e322]:
+              - link "Link to heading":
+                - /url: "#2026-05-06-000338-sz"
+                - img
+          - generic [ref=e323]: ⭐ 综合评分 33.3 | 净买额占比 0.66%
+          - generic [ref=e324]: 深主板 ✅ | 净买入 11.31 亿 | 流通市值 1717 亿 | 换手率 64.89%
+          - generic [ref=e325]: 📌 操作计划：T+1 开盘集合竞价买入，T+2 盘中涨达 3~5% 分批止盈卖出。
+        - group [ref=e328]:
+          - generic "keyboard_arrow_right 👀 查看今日其他备选标的" [ref=e329] [cursor=pointer]:
+            - generic [ref=e330]:
+              - generic [ref=e332]: keyboard_arrow_right
+              - paragraph [ref=e335]: 👀 查看今日其他备选标的
+        - separator [ref=e340]
+        - generic [ref=e342]:
+          - generic [ref=e347]:
+            - paragraph [ref=e350]: 历史数据
+            - paragraph [ref=e353]: 2026/-0 ~ 2026/-0
+            - generic [ref=e355]:
+              - img [ref=e356]
+              - paragraph [ref=e360]: 58 个交易日
+          - generic [ref=e365]:
+            - paragraph [ref=e368]: 当前筛选池
+            - paragraph [ref=e371]: Top10 × 主板
+            - generic [ref=e373]:
+              - img [ref=e374]
+              - paragraph [ref=e378]: 380 只次 / 55 天
+          - generic [ref=e383]:
+            - paragraph [ref=e386]: 筛选后候选
+            - paragraph [ref=e389]: 55 天有信号
+            - generic [ref=e391]:
+              - img [ref=e392]
+              - paragraph [ref=e396]: 有效信号天
+          - generic [ref=e401]:
+            - paragraph [ref=e404]: 有效回测
+            - paragraph [ref=e407]: 52 笔
+            - generic [ref=e409]:
+              - img [ref=e410]
+              - paragraph [ref=e414]: 含完整T+N价格
+        - separator [ref=e419]
+        - heading "📊 策略统计（52 笔 | Top10 | 全部 | 全部）" [level=3] [ref=e424]:
+          - text: 📊 策略统计（52 笔 | Top10 | 全部 | 全部）
+          - generic [ref=e425]:
+            - link "Link to heading":
+              - /url: "#52-top10"
+              - img
+        - generic [ref=e427]:
+          - generic [ref=e432]:
+            - paragraph [ref=e435]: 交易笔数
+            - paragraph [ref=e438]: 52 笔
+          - generic [ref=e443]:
+            - paragraph [ref=e446]: 冲高胜率(>0%)
+            - paragraph [ref=e449]: 94%
+            - generic [ref=e451]:
+              - img [ref=e452]
+              - paragraph [ref=e456]: 49/52
+          - generic [ref=e461]:
+            - paragraph [ref=e464]: 均冲高收益
+            - paragraph [ref=e467]: 6.76%
+            - generic [ref=e469]:
+              - img [ref=e470]
+              - paragraph [ref=e474]: 中位 5.98%
+          - generic [ref=e479]:
+            - paragraph [ref=e482]: 收盘胜率
+            - paragraph [ref=e485]: 44%
+            - generic [ref=e487]:
+              - img [ref=e488]
+              - paragraph [ref=e492]: 拿到收盘
+          - generic [ref=e497]:
+            - paragraph [ref=e500]: 累计复利
+            - paragraph [ref=e503]: 2731%
+        - separator [ref=e508]
+        - heading "🎯 冲高达标概率分析（T+2日内最高收益）" [level=3] [ref=e513]:
+          - text: 🎯 冲高达标概率分析（T+2日内最高收益）
+          - generic [ref=e514]:
+            - link "Link to heading":
+              - /url: "#t-2"
+              - img
+        - paragraph [ref=e519]:
+          - text: 说明：
+          - strong [ref=e520]: T+1 买入价
+          - text: = 上榜次日开盘集合竞价价格；
+          - strong [ref=e521]: T+2 最高价
+          - text: = 上榜后第2个交易日盘中最高价（理论最优卖点）。实际执行时，挂单卖点建议比阈值低 0.5~1%。
+        - generic [ref=e523]:
+          - generic [ref=e528]:
+            - generic [ref=e529]:
+              - paragraph [ref=e531]: 🟢 ≥0%
+              - button "Help for 🟢 ≥0%" [ref=e535] [cursor=pointer]:
+                - img [ref=e536]
+            - paragraph [ref=e541]: 100.0%
+            - generic [ref=e543]:
+              - img [ref=e544]
+              - paragraph [ref=e548]: 52/52 笔
+          - generic [ref=e553]:
+            - generic [ref=e554]:
+              - paragraph [ref=e556]: 🟡 ≥1%
+              - button "Help for 🟡 ≥1%" [ref=e560] [cursor=pointer]:
+                - img [ref=e561]
+            - paragraph [ref=e566]: 88.5%
+            - generic [ref=e568]:
+              - img [ref=e569]
+              - paragraph [ref=e573]: 46/52 笔
+          - generic [ref=e578]:
+            - generic [ref=e579]:
+              - paragraph [ref=e581]: 🟠 ≥2%
+              - button "Help for 🟠 ≥2%" [ref=e585] [cursor=pointer]:
+                - img [ref=e586]
+            - paragraph [ref=e591]: 76.9%
+            - generic [ref=e593]:
+              - img [ref=e594]
+              - paragraph [ref=e598]: 40/52 笔
+          - generic [ref=e603]:
+            - generic [ref=e604]:
+              - paragraph [ref=e606]: 🔴 ≥3%
+              - button "Help for 🔴 ≥3%" [ref=e610] [cursor=pointer]:
+                - img [ref=e611]
+            - paragraph [ref=e616]: 69.2%
+            - generic [ref=e618]:
+              - img [ref=e619]
+              - paragraph [ref=e623]: 36/52 笔
+          - generic [ref=e628]:
+            - generic [ref=e629]:
+              - paragraph [ref=e631]: 🔴 ≥4%
+              - button "Help for 🔴 ≥4%" [ref=e635] [cursor=pointer]:
+                - img [ref=e636]
+            - paragraph [ref=e641]: 61.5%
+            - generic [ref=e643]:
+              - img [ref=e644]
+              - paragraph [ref=e648]: 32/52 笔
+          - generic [ref=e653]:
+            - generic [ref=e654]:
+              - paragraph [ref=e656]: 🔴 ≥5%
+              - button "Help for 🔴 ≥5%" [ref=e660] [cursor=pointer]:
+                - img [ref=e661]
+            - paragraph [ref=e666]: 55.8%
+            - generic [ref=e668]:
+              - img [ref=e669]
+              - paragraph [ref=e673]: 29/52 笔
+        - separator [ref=e678]
+        - heading "📈 策略历史表现与多维分析" [level=3] [ref=e683]:
+          - text: 📈 策略历史表现与多维分析
+          - generic [ref=e684]:
+            - link "Link to heading":
+              - /url: "#3c3cf9fb"
+              - img
+        - generic [ref=e686]:
+          - tablist [ref=e688]:
+            - tab "📋 回测逐笔明细" [selected] [ref=e689] [cursor=pointer]:
+              - paragraph [ref=e691]: 📋 回测逐笔明细
+            - tab "📊 分档概率" [ref=e692] [cursor=pointer]:
+              - paragraph [ref=e694]: 📊 分档概率
+            - tab "📅 月度统计" [ref=e695] [cursor=pointer]:
+              - paragraph [ref=e697]: 📅 月度统计
+            - tab "📈 累计净值" [ref=e698] [cursor=pointer]:
+              - paragraph [ref=e700]: 📈 累计净值
+            - tab "🏗 市值分组" [ref=e701] [cursor=pointer]:
+              - paragraph [ref=e703]: 🏗 市值分组
+            - tab "🔄 换手率分组" [ref=e704] [cursor=pointer]:
+              - paragraph [ref=e706]: 🔄 换手率分组
+          - tabpanel "📋 回测逐笔明细" [ref=e709]:
+            - generic [ref=e710]:
+              - paragraph [ref=e715]: 综合评分 = 净买额占比×30% + 换手率×25% + 涨跌幅×20% + 市值×15% + 振幅×10%（全基于T日本地字段）
+              - group [ref=e718]:
+                - generic "keyboard_arrow_right 🔍 表格筛选 / 搜索" [ref=e719] [cursor=pointer]:
+                  - generic [ref=e720]:
+                    - generic [ref=e722]: keyboard_arrow_right
+                    - paragraph [ref=e725]: 🔍 表格筛选 / 搜索
+              - generic [ref=e730]:
+                - button "Show/hide columns" [ref=e734] [cursor=pointer]:
+                  - img [ref=e735]
+                - button "Download as CSV" [ref=e740] [cursor=pointer]:
+                  - img [ref=e741]
+                - button "Search" [ref=e746] [cursor=pointer]:
+                  - img [ref=e747]
+                - button "Fullscreen" [ref=e752] [cursor=pointer]:
+                  - img [ref=e753]
+        - separator [ref=e768]
+        - group [ref=e771]:
+          - generic "keyboard_arrow_right 📖 筛选参数说明 & 操作指南" [ref=e772] [cursor=pointer]:
+            - generic [ref=e773]:
+              - generic [ref=e775]: keyboard_arrow_right
+              - paragraph [ref=e778]: 📖 筛选参数说明 & 操作指南
+        - separator [ref=e783]
+        - alert [ref=e786]:
+          - paragraph [ref=e791]:
+            - text: ⚠️
+            - strong [ref=e792]: 风险提示
+            - text: ：本系统仅供研究学习，不构成投资建议。股市有风险，投资需谨慎。历史数据回测不代表未来表现。
+  - img [ref=e793]

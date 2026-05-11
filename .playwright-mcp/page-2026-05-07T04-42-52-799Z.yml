@@ -1,0 +1,106 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - generic [ref=e9]:
+      - list [ref=e10]:
+        - listitem [ref=e11]:
+          - link "总览 Dashboard" [ref=e13] [cursor=pointer]:
+            - /url: http://localhost:8051/
+            - generic [ref=e16]: 🏠
+            - paragraph [ref=e19]: 总览 Dashboard
+        - listitem [ref=e20]:
+          - link "主板精选策略" [ref=e22] [cursor=pointer]:
+            - /url: http://localhost:8051/mainboard
+            - generic [ref=e25]: 🏆
+            - paragraph [ref=e28]: 主板精选策略
+        - listitem [ref=e29]:
+          - link "实时监控" [ref=e31] [cursor=pointer]:
+            - /url: http://localhost:8051/realtime
+            - generic [ref=e34]: 📡
+            - paragraph [ref=e37]: 实时监控
+        - listitem [ref=e38]:
+          - link "决策辅助信号" [ref=e40] [cursor=pointer]:
+            - /url: http://localhost:8051/signal
+            - generic [ref=e43]: 🎯
+            - paragraph [ref=e46]: 决策辅助信号
+        - listitem [ref=e47]:
+          - link "龙虎榜盈亏分析" [ref=e49] [cursor=pointer]:
+            - /url: http://localhost:8051/returns
+            - generic [ref=e52]: 📈
+            - paragraph [ref=e55]: 龙虎榜盈亏分析
+        - listitem [ref=e56]:
+          - link "模拟炒股" [ref=e58] [cursor=pointer]:
+            - /url: http://localhost:8051/sim_trading
+            - generic [ref=e61]: 🤖
+            - paragraph [ref=e64]: 模拟炒股
+        - listitem [ref=e65]:
+          - link "每日选股" [ref=e67] [cursor=pointer]:
+            - /url: http://localhost:8051/daily_select
+            - generic [ref=e70]: 🔍
+            - paragraph [ref=e73]: 每日选股
+        - listitem [ref=e74]:
+          - link "市场情绪" [ref=e76] [cursor=pointer]:
+            - /url: http://localhost:8051/sentiment
+            - generic [ref=e79]: 📊
+            - paragraph [ref=e82]: 市场情绪
+        - listitem [ref=e83]:
+          - link "策略回测" [ref=e85] [cursor=pointer]:
+            - /url: http://localhost:8051/backtest
+            - generic [ref=e88]: 🔬
+            - paragraph [ref=e91]: 策略回测
+        - listitem [ref=e92]:
+          - link "回测分析" [ref=e94] [cursor=pointer]:
+            - /url: http://localhost:8051/backtest_analysis
+            - generic [ref=e97]: 📉
+            - paragraph [ref=e100]: 回测分析
+      - button "View 3 more" [ref=e101] [cursor=pointer]
+    - generic [ref=e105]:
+      - separator [ref=e110]
+      - paragraph [ref=e115]: v1.0.0
+      - paragraph [ref=e120]: "数据来源: AKShare / 东方财富"
+      - paragraph [ref=e125]: ⚠️ 本系统仅供研究学习，不构成投资建议
+  - generic [ref=e3]:
+    - banner [ref=e128]:
+      - generic [ref=e131]:
+        - button "Deploy" [ref=e133] [cursor=pointer]:
+          - generic [ref=e135]: Deploy
+        - button "Main menu" [ref=e137] [cursor=pointer]:
+          - img [ref=e138]
+    - generic [ref=e141]:
+      - heading "🎯 龙虎榜决策辅助信号" [level=1] [ref=e146]:
+        - text: 🎯 龙虎榜决策辅助信号
+        - generic [ref=e147]:
+          - link "Link to heading":
+            - /url: "#c860c7ad"
+            - img
+      - paragraph [ref=e152]:
+        - strong [ref=e153]: 技术面(40) + 资金面(35) + 历史胜率(25)
+        - text: 三维评分 | 自动识别机构/知名游资席位 | 市场情绪联动仓位建议 | 评分仅供参考，不构成投资建议
+      - group [ref=e156]:
+        - generic "keyboard_arrow_right 📖 评分体系说明（点击展开）" [ref=e157] [cursor=pointer]:
+          - generic [ref=e158]:
+            - generic [ref=e160]: keyboard_arrow_right
+            - paragraph [ref=e163]: 📖 评分体系说明（点击展开）
+      - heading "① 选择交易日" [level=3] [ref=e168]:
+        - text: ① 选择交易日
+        - generic [ref=e169]:
+          - link "Link to heading":
+            - /url: "#1"
+            - img
+      - generic [ref=e171]:
+        - generic [ref=e175]:
+          - paragraph [ref=e179]: 选择交易日
+          - generic [ref=e181]:
+            - generic [ref=e182]:
+              - generic [ref=e183]: 2026/05/07 📡 今日
+              - combobox "Selected 2026/05/07 📡 今日. 选择交易日" [ref=e185]
+            - img "open" [ref=e187]
+        - alert [ref=e193]:
+          - paragraph [ref=e198]: 市场情绪数据加载中...
+      - heading "② 选择分析股票" [level=3] [ref=e203]:
+        - text: ② 选择分析股票
+        - generic [ref=e204]:
+          - link "Link to heading":
+            - /url: "#2"
+            - img
+      - alert [ref=e207]:
+        - paragraph [ref=e212]: ⚠️ 20260507 暂无龙虎榜数据，请选择其他日期。

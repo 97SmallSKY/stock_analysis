@@ -27,33 +27,17 @@ sys.path.insert(0, str(_ROOT))
 os.chdir(_ROOT)
 
 from utils.storage import storage
-
-
-# ─── session_state 缓存工具（替代 @st.cache_data，避免 Python 3.13 semaphore 泄漏）──
-
-import time as _time
-
-
-def _ss_get(key: str, ttl: int):
-    """从 session_state 取缓存，过期返回 None"""
-    val = st.session_state.get(f"__cache_{key}")
-    ts  = st.session_state.get(f"__cache_ts_{key}", 0)
-    if val is not None and (_time.time() - ts) < ttl:
-        return val
-    return None
-
-
-def _ss_set(key: str, val):
-    """写入 session_state 缓存"""
-    st.session_state[f"__cache_{key}"] = val
-    st.session_state[f"__cache_ts_{key}"] = _time.time()
+from utils.cache import ss_get, ss_set
+from utils.formatters import fmt_pct
+from utils.chart_utils import plotly_dark
+from config.theme import Color
 
 
 # ─── 数据加载（提升到模块顶层，避免在 render() 内重复定义）────────────────────────
 
 def _get_capital_info() -> dict:
     """账户资金信息（session_state 缓存60s）"""
-    cached = _ss_get("sim_capital", 60)
+    cached = ss_get("sim_capital", 60)
     if cached is not None:
         return cached
     try:
@@ -61,13 +45,13 @@ def _get_capital_info() -> dict:
         result = get_available_capital()
     except Exception:
         result = {"total": 100000.0, "invested": 0.0, "available": 100000.0, "open_count": 0}
-    _ss_set("sim_capital", result)
+    ss_set("sim_capital", result)
     return result
 
 
 def _get_health_data() -> tuple:
     """账户健康 + 熔断数据（session_state 缓存120s）"""
-    cached = _ss_get("sim_health", 120)
+    cached = ss_get("sim_health", 120)
     if cached is not None:
         return cached
     try:
@@ -80,13 +64,13 @@ def _get_health_data() -> tuple:
         result = (stats, ahs, cb)
     except Exception:
         result = ({}, 60, {"allow_open": True, "level": "ok", "reason": "", "ahs": 60})
-    _ss_set("sim_health", result)
+    ss_set("sim_health", result)
     return result
 
 
 def _get_trade_events() -> "pd.DataFrame":
     """交易流水（session_state 缓存60s）"""
-    cached = _ss_get("sim_trade_events", 60)
+    cached = ss_get("sim_trade_events", 60)
     if cached is not None:
         return cached
     try:
@@ -94,13 +78,13 @@ def _get_trade_events() -> "pd.DataFrame":
         result = get_trade_events(limit=200)
     except Exception:
         result = pd.DataFrame()
-    _ss_set("sim_trade_events", result)
+    ss_set("sim_trade_events", result)
     return result
 
 
 def _get_selection_log_all() -> "pd.DataFrame":
     """选股理由日志（session_state 缓存300s）"""
-    cached = _ss_get("sim_selection_log", 300)
+    cached = ss_get("sim_selection_log", 300)
     if cached is not None:
         return cached
     try:
@@ -108,20 +92,20 @@ def _get_selection_log_all() -> "pd.DataFrame":
         result = get_selection_log()
     except Exception:
         result = pd.DataFrame()
-    _ss_set("sim_selection_log", result)
+    ss_set("sim_selection_log", result)
     return result
 
 
 def _get_lhb_top10_for_compare() -> "pd.DataFrame":
     """龙虎榜完整数据（用于同期对比，缓存300s）"""
-    cached = _ss_get("sim_lhb_top10", 300)
+    cached = ss_get("sim_lhb_top10", 300)
     if cached is not None:
         return cached
     try:
-        result = storage.read("lhb_top10")
+        result = storage.read_recent("lhb_top10", days=30)
     except Exception:
         result = pd.DataFrame()
-    _ss_set("sim_lhb_top10", result)
+    ss_set("sim_lhb_top10", result)
     return result
 
 
@@ -187,11 +171,6 @@ def _load_summary() -> pd.DataFrame:
     except Exception as e:
         return pd.DataFrame()
 
-
-def _fmt_pct(v) -> str:
-    if v is None or pd.isna(v):
-        return "—"
-    return f"{v:+.2f}%"
 
 
 def _fmt_price(v) -> str:
@@ -379,13 +358,13 @@ def render():
 
     # ── AHS 图标与颜色 ───────────────────────────────────────────────────
     if _ahs >= 70:
-        _ahs_icon, _ahs_color, _ahs_label = "🟢", "#33CC66", "强势期"
+        _ahs_icon, _ahs_color, _ahs_label = "🟢", Color.GREEN, "强势期"
     elif _ahs >= 50:
-        _ahs_icon, _ahs_color, _ahs_label = "🟡", "#FFCC00", "正常期"
+        _ahs_icon, _ahs_color, _ahs_label = "🟡", Color.YELLOW, "正常期"
     elif _ahs >= 30:
-        _ahs_icon, _ahs_color, _ahs_label = "🟠", "#FFA500", "修复期"
+        _ahs_icon, _ahs_color, _ahs_label = "🟠", Color.GOLD, "修复期"
     else:
-        _ahs_icon, _ahs_color, _ahs_label = "🔴", "#E84040", "危险期"
+        _ahs_icon, _ahs_color, _ahs_label = "🔴", Color.RED, "危险期"
 
     # ── 运行模式横幅（顶置，最显眼位置）─────────────────────────────
     # 判断是否已人工开启 SKIP_CIRCUIT_BREAKER
@@ -701,16 +680,6 @@ def render():
             except (TypeError, ValueError):
                 return "—" if (v is None or str(v).strip() in ("", "nan", "None")) else str(v)
 
-        def _fmt_pct_col(v, prefix="+"):
-            import math
-            try:
-                f = float(v)
-                if math.isnan(f):  # float('nan') 不抛异常，需显式检查
-                    return "—"
-                return f"{f:+.2f}%"
-            except (TypeError, ValueError):
-                return "—" if (v is None or str(v).strip() in ("", "nan", "None")) else str(v)
-
         def _fmt_money_col(v):
             import math
             try:
@@ -729,7 +698,7 @@ def render():
                 disp_show[_mc] = disp_show[_mc].apply(_fmt_money_col)
         for _rc in ["盈亏%"]:
             if _rc in disp_show.columns:
-                disp_show[_rc] = disp_show[_rc].apply(_fmt_pct_col)
+                disp_show[_rc] = disp_show[_rc].apply(fmt_pct)
         if "T+2胜率%" in disp_show.columns:
             disp_show["T+2胜率%"] = disp_show["T+2胜率%"].apply(
                 lambda v: f"{float(v):.1f}%" if str(v) not in ("", "nan", "None") else "—"
@@ -914,24 +883,23 @@ def render():
                 y=closed_sorted["nav"],
                 mode="lines+markers",
                 name="累计净值",
-                line=dict(color="#e8553e", width=2),
+                line=dict(color=Color.RED, width=2),
                 marker=dict(size=6),
                 hovertemplate="<b>%{x|%Y-%m-%d}</b><br>净值: %{y:.4f}<extra></extra>",
             ))
             fig_nav.add_hline(y=1.0, line_dash="dash", line_color="gray", annotation_text="初始净值=1.00")
-            fig_nav.update_layout(
+            fig_nav.update_layout(**plotly_dark(
                 title="模拟账户累计净值（初始 10 万元）",
                 xaxis_title="日期",
                 yaxis_title="净值",
                 height=360,
-                template="plotly_white",
                 hovermode="x unified",
-            )
+            ))
             st.plotly_chart(fig_nav, use_container_width=True)
 
             # ── 每笔盈亏柱状图 ───────────────────────────────────────
             st.subheader("📊 每笔交易盈亏（%）")
-            colors = ["#d73027" if v >= 0 else "#1a9641" for v in closed_sorted["profit_pct"].fillna(0)]
+            colors = [Color.RED if v >= 0 else Color.GREEN for v in closed_sorted["profit_pct"].fillna(0)]
             fig_bar = go.Figure()
             fig_bar.add_trace(go.Bar(
                 x=[f"{r['name']}({r['trade_date']})" for _, r in closed_sorted.iterrows()],
@@ -941,13 +909,12 @@ def render():
                 name="盈亏%",
             ))
             fig_bar.add_hline(y=0, line_dash="dash", line_color="gray")
-            fig_bar.update_layout(
+            fig_bar.update_layout(**plotly_dark(
                 title="每笔交易盈亏%（红=盈利，绿=亏损）",
                 xaxis_title="交易",
                 yaxis_title="盈亏%",
                 height=320,
-                template="plotly_white",
-            )
+            ))
             st.plotly_chart(fig_bar, use_container_width=True)
 
             # ── 盈亏分布直方图 ───────────────────────────────────────
@@ -955,12 +922,11 @@ def render():
             fig_hist = px.histogram(
                 closed_sorted, x="profit_pct", nbins=20,
                 title="盈亏% 频率分布",
-                color_discrete_sequence=["#e8553e"],
+                color_discrete_sequence=[Color.RED],
                 labels={"profit_pct": "盈亏%"},
-                template="plotly_white",
             )
             fig_hist.add_vline(x=0, line_dash="dash", line_color="gray")
-            fig_hist.update_layout(height=280)
+            fig_hist.update_layout(**plotly_dark(height=280))
             st.plotly_chart(fig_hist, use_container_width=True)
 
     # ═══════════════════════════════════════════════════════════════════
@@ -1625,7 +1591,7 @@ def render():
                 fig.add_trace(go.Scatter(
                     x=price_df["checked_at"], y=price_df["price"],
                     mode="lines+markers", name="实时价格",
-                    line=dict(color="#4488FF", width=2),
+                    line=dict(color=Color.BLUE, width=2),
                     marker=dict(size=4),
                     hovertemplate="价格: %{y:.3f}<extra></extra>",
                 ))
@@ -1643,7 +1609,7 @@ def render():
                 fig.add_trace(go.Scatter(
                     x=price_df["checked_at"], y=price_df["MA5"],
                     mode="lines", name="MA5",
-                    line=dict(color="#FFA500", width=1.5, dash="dot"),
+                    line=dict(color=Color.GOLD, width=1.5, dash="dot"),
                 ))
 
                 # MA10 均线
@@ -1657,7 +1623,7 @@ def render():
                 if sel_buy_price > 0:
                     fig.add_hline(
                         y=sel_buy_price, line_dash="dash",
-                        line_color="#888888", line_width=1.5,
+                        line_color=Color.GRAY, line_width=1.5,
                         annotation_text=f"买入价 {sel_buy_price}",
                         annotation_position="right",
                     )
@@ -1682,7 +1648,7 @@ def render():
                     if row0.get("stop_price") and row0["stop_price"] > 0:
                         fig.add_hline(
                             y=float(row0["stop_price"]), line_dash="dash",
-                            line_color="#E84040", line_width=1.5,
+                            line_color=Color.RED, line_width=1.5,
                             annotation_text=f"止损 {row0['stop_price']:.2f}",
                             annotation_position="right",
                         )
@@ -1694,7 +1660,7 @@ def render():
                         x=events_df["checked_at"], y=events_df["price"],
                         mode="markers+text",
                         name="触发事件",
-                        marker=dict(symbol="diamond", size=10, color="#E84040"),
+                        marker=dict(symbol="diamond", size=10, color=Color.RED),
                         text=events_df["event"],
                         textposition="top center",
                     ))

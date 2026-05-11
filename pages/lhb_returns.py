@@ -20,7 +20,6 @@
 注：st.cache_data 在 Python 3.13 下存在 semaphore 泄漏 bug，
     所有缓存均改用 st.session_state 手动管理。
 """
-import time
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -28,12 +27,16 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from utils.storage import storage
+from utils.cache import ss_get, ss_set
+from utils.formatters import fmt_pct
+from utils.helpers import fmt_date, fmt_date_slash
 from modules.data_fetcher import fetch_lhb_netbuy_by_date
+from config.theme import Color
+from config.constants import TTL
 
-# 颜色（中国惯例）
-_RED   = "#E84040"
-_GREEN = "#33CC66"
-_GRAY  = "#888888"
+_RED   = Color.RED
+_GREEN = Color.GREEN
+_GRAY  = Color.GRAY
 
 
 def _ret_color(val) -> str:
@@ -46,34 +49,6 @@ def _style_ret_series(s):
     return [_ret_color(v) for v in s]
 
 
-def _fmt_pct(v):
-    if pd.isna(v):
-        return "—"
-    return f"{v:+.2f}%"
-
-
-# ============================================================
-# Session State 缓存工具（替代 @st.cache_data，避免 Python 3.13 semaphore 泄漏）
-# ============================================================
-
-def _ss_get(key: str, max_age: int = 300):
-    """从 session_state 取缓存值，超时返回 None。max_age 单位：秒"""
-    import time as _t
-    cache = st.session_state.get("_cache", {})
-    entry = cache.get(key)
-    if entry is None:
-        return None
-    if _t.time() - entry["ts"] > max_age:
-        return None
-    return entry["val"]
-
-
-def _ss_set(key: str, val):
-    """写入 session_state 缓存"""
-    import time as _t
-    if "_cache" not in st.session_state:
-        st.session_state["_cache"] = {}
-    st.session_state["_cache"][key] = {"ts": _t.time(), "val": val}
 
 
 # ============================================================
@@ -86,18 +61,22 @@ def _fetch_stock_hist(code: str, trade_date: str, days: int = 15):
     优先用新浪接口，失败再用腾讯接口（东方财富日K接口有时被封）。
     """
     import akshare as ak
-    end_dt = (pd.to_datetime(trade_date) + timedelta(days=days + 15)).strftime("%Y%m%d")
+    # 统一日期为 YYYYMMDD 格式（兼容 2026-04-29 / 20260429 两种输入）
+    td = str(trade_date).replace("-", "").replace("/", "")[:8]
+    end_dt = (pd.to_datetime(td) + timedelta(days=days + 15)).strftime("%Y%m%d")
 
+    # 清理代码：去掉市场后缀，统一为6位数字
+    code_clean = str(code).replace(".SZ", "").replace(".SH", "").replace(".BJ", "").zfill(6)
     # 上交所用 sh 前缀，深交所/创业板/科创板用 sz
-    prefix = "sh" if code.startswith(("6", "9")) else "sz"
-    sina_code = f"{prefix}{code}"
+    prefix = "sh" if code_clean.startswith(("6", "9")) else "sz"
+    sina_code = f"{prefix}{code_clean}"
 
     hist = None
 
     # ── 1. 优先：新浪财经接口 ──────────────────────────────────
     try:
         raw = ak.stock_zh_a_daily(symbol=sina_code, adjust="qfq",
-                                   start_date=trade_date, end_date=end_dt)
+                                   start_date=td, end_date=end_dt)
         if raw is not None and len(raw) >= 2:
             col_map = {"date": "日期", "open": "开盘", "high": "最高",
                        "low": "最低", "close": "收盘"}
@@ -111,7 +90,7 @@ def _fetch_stock_hist(code: str, trade_date: str, days: int = 15):
     if hist is None:
         try:
             raw = ak.stock_zh_a_hist_tx(symbol=sina_code, adjust="qfq",
-                                         start_date=trade_date, end_date=end_dt)
+                                         start_date=td, end_date=end_dt)
             if raw is not None and len(raw) >= 2:
                 col_map = {"date": "日期", "open": "开盘", "high": "最高",
                            "low": "最低", "close": "收盘"}
@@ -124,8 +103,8 @@ def _fetch_stock_hist(code: str, trade_date: str, days: int = 15):
     # ── 3. 最后备选：东方财富接口 ──────────────────────────────
     if hist is None:
         try:
-            raw = ak.stock_zh_a_hist(symbol=code, period="daily",
-                                      start_date=trade_date, end_date=end_dt, adjust="qfq")
+            raw = ak.stock_zh_a_hist(symbol=code_clean, period="daily",
+                                      start_date=td, end_date=end_dt, adjust="qfq")
             if raw is not None and len(raw) >= 2:
                 col = {}
                 for c in raw.columns:
@@ -142,58 +121,124 @@ def _fetch_stock_hist(code: str, trade_date: str, days: int = 15):
         except Exception:
             pass
 
-    if hist is None or len(hist) < 2:
+    if hist is None:
+        return None
+    if len(hist) < 2:
+        # 只有上榜日当天数据，尚无 T+1（新股或最近上市）
         return None
     return hist
 
 
 def _calc_returns_from_hist(code: str, trade_date: str):
-    """计算某只股票的 T+1~T+10 收益率（session_state 缓存，ttl=600s）"""
+    """从数据库 kline_daily + lhb_tn_price 直接计算 T+1~T+10 收益率，无需 AKShare"""
     cache_key = f"calc_ret_{code}_{trade_date}"
-    cached = _ss_get(cache_key, max_age=600)
+    cached = ss_get(cache_key, max_age=TTL.LONG)
     if cached is not None:
         return cached
 
     try:
-        hist = _fetch_stock_hist(code, trade_date)
-        if hist is None:
-            return None
-        buy_price = float(hist.iloc[1]["开盘"])
-        if buy_price <= 0:
-            return None
-        rows = []
-        for d in range(1, 11):
-            if d >= len(hist):
-                break
-            row_h = hist.iloc[d]
-            sell_price = float(row_h["收盘"])
-            high_price = float(row_h["最高"]) if "最高" in hist.columns else None
-            low_price  = float(row_h["最低"]) if "最低" in hist.columns else None
-            sell_date  = str(row_h["日期"])[:10]
-            ret        = (sell_price / buy_price - 1) * 100
-            high_ret   = (high_price / buy_price - 1) * 100 if high_price and buy_price > 0 else None
-            rows.append({
-                "day":           d,
-                "label":         f"T+{d}",
-                "卖出日期":      sell_date,
-                "最高价":        round(high_price, 3) if high_price else None,
-                "最低价":        round(low_price, 3)  if low_price  else None,
-                "收盘价":        round(sell_price, 3),
-                "收盘收益率(%)": round(ret, 2),
-                "最高收益率(%)": round(high_ret, 2) if high_ret is not None else None,
-                "盈亏":          "盈" if ret > 0 else ("亏" if ret < 0 else "平"),
-            })
-        result = {"buy_price": round(buy_price, 3), "rows": rows}
-        _ss_set(cache_key, result)
-        return result
+        from sqlalchemy import text
+        engine = storage._get_engine()
+        td_date = str(trade_date)[:10].replace("-", "").replace("/", "")
+        td_date = f"{td_date[:4]}-{td_date[4:6]}-{td_date[6:]}"
+
+        # 清理代码格式（统一为 ts_code 格式，如 000001.SZ）
+        code_clean = str(code).replace(".SZ", "").replace(".SH", "").replace(".BJ", "").zfill(6)
+        # 推断后缀
+        if code_clean.startswith(("6", "9")):
+            ts_code = f"{code_clean}.SH"
+        elif code_clean.startswith(("0", "3")):
+            ts_code = f"{code_clean}.SZ"
+        else:
+            ts_code = f"{code_clean}.BJ"
+
+        with engine.connect() as conn:
+            # 1. T+1 买入价：上榜次日的开盘价
+            r = conn.execute(text("""
+                SELECT open FROM kline_daily
+                WHERE ts_code = :ts AND trade_date > :td
+                ORDER BY trade_date ASC LIMIT 1
+            """), {"ts": ts_code, "td": td_date}).fetchone()
+
+            if r is None or r[0] is None:
+                return None
+            buy_price = float(r[0])
+            if buy_price <= 0:
+                return None
+
+            # 2. T+1~T+10 价格（从 lhb_tn_price，已预计算）
+            tn_rows = conn.execute(text("""
+                SELECT n_day, target_date, close_price, high_price, low_price, pnl_pct
+                FROM lhb_tn_price
+                WHERE ts_code = :ts AND trade_date = :td AND n_day BETWEEN 1 AND 10
+                ORDER BY n_day
+            """), {"ts": ts_code, "td": td_date}).fetchall()
+
+            if not tn_rows:
+                # 降级：直接从 kline_daily 读取
+                k_rows = conn.execute(text("""
+                    SELECT trade_date, open, high, low, close
+                    FROM kline_daily
+                    WHERE ts_code = :ts AND trade_date > :td
+                    ORDER BY trade_date ASC
+                    LIMIT 10
+                """), {"ts": ts_code, "td": td_date}).fetchall()
+
+                rows = []
+                for i, kr in enumerate(k_rows):
+                    d = i + 1
+                    sell_price = float(kr[4])
+                    high_price = float(kr[2]) if kr[2] else None
+                    low_price = float(kr[3]) if kr[3] else None
+                    ret = (sell_price / buy_price - 1) * 100
+                    high_ret = (high_price / buy_price - 1) * 100 if high_price else None
+                    rows.append({
+                        "day": d, "label": f"T+{d}",
+                        "卖出日期": str(kr[0]),
+                        "最高价": round(high_price, 3) if high_price else None,
+                        "最低价": round(low_price, 3) if low_price else None,
+                        "收盘价": round(sell_price, 3),
+                        "收盘收益率(%)": round(ret, 2),
+                        "最高收益率(%)": round(high_ret, 2) if high_ret is not None else None,
+                        "盈亏": "盈" if ret > 0 else ("亏" if ret < 0 else "平"),
+                    })
+            else:
+                rows = []
+                for tn in tn_rows:
+                    d = tn[0]
+                    sell_price = float(tn[2]) if tn[2] else None
+                    high_price = float(tn[3]) if tn[3] else None
+                    low_price = float(tn[4]) if tn[4] else None
+                    if sell_price is None:
+                        continue
+                    ret = (sell_price / buy_price - 1) * 100
+                    high_ret = (high_price / buy_price - 1) * 100 if high_price else None
+                    rows.append({
+                        "day": d, "label": f"T+{d}",
+                        "卖出日期": str(tn[1]),
+                        "最高价": round(high_price, 3) if high_price else None,
+                        "最低价": round(low_price, 3) if low_price else None,
+                        "收盘价": round(sell_price, 3),
+                        "收盘收益率(%)": round(ret, 2),
+                        "最高收益率(%)": round(high_ret, 2) if high_ret is not None else None,
+                        "盈亏": "盈" if ret > 0 else ("亏" if ret < 0 else "平"),
+                    })
+
+            if not rows:
+                return None
+
+            result = {"buy_price": round(buy_price, 3), "rows": rows}
+            ss_set(cache_key, result)
+            return result
+
     except Exception:
         return None
 
 
 def _load_top10(trade_date: str) -> pd.DataFrame:
-    """获取当日 Top10（session_state 缓存，ttl=300s）"""
+    """获取当日 Top10（session_state 缓存，TTL.DEFAULT）"""
     cache_key = f"top10_{trade_date}"
-    cached = _ss_get(cache_key, max_age=300)
+    cached = ss_get(cache_key, max_age=TTL.DEFAULT)
     if cached is not None:
         return cached
 
@@ -202,25 +247,25 @@ def _load_top10(trade_date: str) -> pd.DataFrame:
     except Exception:
         df = pd.DataFrame()
 
-    _ss_set(cache_key, df)
+    ss_set(cache_key, df)
     return df
 
 
 def _load_all_prices() -> pd.DataFrame:
-    """读取全部价格缓存（session_state 缓存，ttl=120s）"""
+    """读取全部价格缓存（session_state 缓存，TTL.MEDIUM）"""
     cache_key = "all_prices"
-    cached = _ss_get(cache_key, max_age=120)
+    cached = ss_get(cache_key, max_age=TTL.MEDIUM)
     if cached is not None:
         return cached
 
     try:
-        df = storage.read("lhb_top10_prices")
+        df = storage.read_recent("lhb_top10_prices", days=90)
         if not df.empty:
             df = df[df["T+1买入价"].notna()].copy()
     except Exception:
         df = pd.DataFrame()
 
-    _ss_set(cache_key, df)
+    ss_set(cache_key, df)
     return df
 
 
@@ -237,12 +282,12 @@ def _read_prices_from_db(trade_date: str) -> pd.DataFrame:
 
 def _fetch_prices_via_api(codes_key: str, trade_date: str, codes: tuple) -> pd.DataFrame:
     """
-    通过 AKShare 拉取价格（session_state 缓存，ttl=300s）。
+    通过 AKShare 拉取价格（session_state 缓存，TTL.DEFAULT）。
     codes_key 是缓存键，codes 是实际股票代码列表。
     只拉取 codes 里的股票，调用方负责过滤掉 DB 已有的。
     """
     cache_key = f"prices_api_{codes_key}_{trade_date}"
-    cached = _ss_get(cache_key, max_age=300)
+    cached = ss_get(cache_key, max_age=TTL.DEFAULT)
     if cached is not None:
         return cached
 
@@ -281,7 +326,7 @@ def _fetch_prices_via_api(codes_key: str, trade_date: str, codes: tuple) -> pd.D
 
     if not new_rows:
         result = pd.DataFrame()
-        _ss_set(cache_key, result)
+        ss_set(cache_key, result)
         return result
 
     new_df = pd.DataFrame(new_rows)
@@ -292,7 +337,7 @@ def _fetch_prices_via_api(codes_key: str, trade_date: str, codes: tuple) -> pd.D
         import logging
         logging.warning(f"存价格缓存失败: {e}")
 
-    _ss_set(cache_key, new_df)
+    ss_set(cache_key, new_df)
     return new_df
 
 
@@ -302,8 +347,8 @@ def _render_quick_from_db(code: str, name: str, trade_date: str) -> bool:
         row_df = _read_prices_from_db(trade_date)
         if row_df is None or row_df.empty:
             return False
-        code_norm = str(code).lstrip("0")
-        sub = row_df[row_df["代码"].astype(str).str.lstrip("0") == code_norm]
+        code_norm = str(code).replace(".SZ", "").replace(".SH", "").replace(".BJ", "").lstrip("0")
+        sub = row_df[row_df["代码"].astype(str).str.replace(".SZ", "").str.replace(".SH", "").str.replace(".BJ", "").str.lstrip("0") == code_norm]
         if sub.empty or "T+1买入价" not in sub.columns:
             return False
         r = sub.iloc[0]
@@ -390,29 +435,75 @@ def render():
 
     # ① 选日期
     st.subheader("① 选择交易日")
-    # 从多张表取日期并集，确保即使某张表为空也能显示完整日期列表
+    # 直接 SQL 查询去重日期，并过滤交易日（跳过法定节假日）
     _date_set = set()
-    for _tbl in ["lhb_top10", "lhb_detail", "lhb_top10_prices"]:
-        try:
-            _df = storage.read(_tbl)
-            if not _df.empty and "trade_date" in _df.columns:
-                _date_set.update(_df["trade_date"].astype(str).unique())
-        except Exception:
-            pass
+    try:
+        from sqlalchemy import text
+        engine = storage._get_engine()
+        with engine.connect() as conn:
+            # 获取交易日历白名单
+            cal_dates = set()
+            try:
+                result = conn.execute(text(
+                    "SELECT cal_date::text FROM trade_calendar WHERE is_open = true AND cal_date >= '2024-01-01'"
+                ))
+                cal_dates = {r[0] for r in result.fetchall()}
+            except Exception:
+                pass
+            for tbl in ["lhb_top10", "lhb_top10_prices"]:
+                try:
+                    result = conn.execute(text(f'SELECT DISTINCT trade_date FROM "{tbl}" ORDER BY trade_date DESC'))
+                    for r in result.fetchall():
+                        d = str(r[0])[:10]
+                        if not cal_dates or d in cal_dates:  # 有交易日历时过滤，否则全放行
+                            _date_set.add(d)
+                except Exception:
+                    pass
+    except Exception:
+        pass
     local_dates = sorted(_date_set, reverse=True)
-    today_str = datetime.now().strftime("%Y%m%d")
-    # 默认优先选最近有历史数据的日期，今日追加到列表末尾（盘后才有数据）
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    # 默认选最近有数据的日期
     all_options = list(dict.fromkeys(local_dates + ([today_str] if today_str not in local_dates else [])))
     if not all_options:
         all_options = [today_str]
 
+    # 日期选择（简化 session_state 管理）
+    if "lhb_sel_date" not in st.session_state or st.session_state["lhb_sel_date"] not in all_options:
+        st.session_state["lhb_sel_date"] = local_dates[0] if local_dates else today_str
+
     col_l, col_r = st.columns([2, 3])
     with col_l:
+        sel_idx = all_options.index(st.session_state["lhb_sel_date"])
         sel_date = st.selectbox(
             "选择日期",
             options=all_options,
-            format_func=lambda d: f"{d[:4]}/{d[4:6]}/{d[6:]}  {'📡 今日' if d == today_str else ''}",
+            index=sel_idx,
+            format_func=lambda d: f"{fmt_date_slash(d)}  {'📡 今日' if d == today_str else ''}",
         )
+        # 同步选择到 session_state
+        if sel_date != st.session_state.get("lhb_sel_date"):
+            st.session_state["lhb_sel_date"] = sel_date
+
+        # 快捷日期按钮
+        c1, c2, c3 = st.columns(3)
+        cur_idx = all_options.index(sel_date)
+        with c1:
+            prev_idx = min(cur_idx + 1, len(all_options) - 1)
+            if st.button("⬅ 上一交易日", use_container_width=True, key="lhb_prev_date2",
+                         disabled=cur_idx >= len(all_options) - 1):
+                st.session_state["lhb_sel_date"] = all_options[prev_idx]
+                st.rerun()
+        with c2:
+            if st.button("📅 最近交易日", use_container_width=True, key="lhb_latest_date2"):
+                st.session_state["lhb_sel_date"] = local_dates[0] if local_dates else today_str
+                st.rerun()
+        with c3:
+            next_idx = max(cur_idx - 1, 0)
+            if st.button("下一交易日 ➡", use_container_width=True, key="lhb_next_date2",
+                         disabled=cur_idx <= 0):
+                st.session_state["lhb_sel_date"] = all_options[next_idx]
+                st.rerun()
     with col_r:
         if sel_date == today_str:
             hour_now = datetime.now().hour
@@ -425,13 +516,14 @@ def render():
 
     # ② Top10
     st.subheader("② 当日龙虎榜净买入 Top10")
-    with st.spinner(f"获取 {sel_date[:4]}/{sel_date[4:6]}/{sel_date[6:]} 数据..."):
+    sel_date_display = fmt_date(sel_date)
+    with st.spinner(f"获取 {sel_date_display} 数据..."):
         top10 = _load_top10(sel_date)
 
     if top10.empty:
         if sel_date == today_str and datetime.now().hour < 15:
             st.info(
-                f"📅 **{sel_date[:4]}/{sel_date[4:6]}/{sel_date[6:]}** 龙虎榜数据尚未发布。\n\n"
+                f"📅 **{sel_date_display}** 龙虎榜数据尚未发布。\n\n"
                 "龙虎榜数据在每日 **15:30 收盘后**由交易所公布，请盘后再查询。\n\n"
                 "👈 请从左侧下拉框选择**历史日期**查看。"
             )
@@ -473,9 +565,11 @@ def render():
     # 合并价格到 top10（按代码 merge，统一去掉前导零再匹配）
     if price_df is not None and not price_df.empty:
         top10_m   = top10.copy()
-        top10_m["_code_key"]  = top10_m["代码"].astype(str).str.lstrip("0")
+        def _code_key(c):
+            return str(c).replace(".SZ","").replace(".SH","").replace(".BJ","").lstrip("0")
+        top10_m["_code_key"]  = top10_m["代码"].astype(str).apply(_code_key)
         price_df2 = price_df.copy()
-        price_df2["_code_key"] = price_df2["代码"].astype(str).str.lstrip("0")
+        price_df2["_code_key"] = price_df2["代码"].astype(str).apply(_code_key)
         extra_cols = [c for c in price_df2.columns
                       if c not in top10_m.columns or c == "_code_key"]
         display_top10 = top10_m.merge(
@@ -515,7 +609,7 @@ def render():
     for c in money_cols:
         fmt[c] = lambda v: f"{v/1e8:+.2f}亿" if pd.notna(v) else "—"
     for c in after_cols:
-        fmt[c] = _fmt_pct
+        fmt[c] = fmt_pct
     if has_prices:
         price_num_cols = ["T+1买入价"] + [f"T+{d}{s}" for d in [1,2,5,10]
                                            for s in ["最高价","最低价","收盘价"]]
@@ -525,7 +619,7 @@ def render():
         pct_cols = [f"T+{d}{s}" for d in [1,2,5,10] for s in ["收盘收益%","最高收益%"]]
         for c in pct_cols:
             if c in disp_df.columns:
-                fmt[c] = _fmt_pct
+                fmt[c] = fmt_pct
 
     # ── 着色（收益率列）─────────────────────────────────────────
     color_cols = [c for c in after_cols + [f"T+{d}{s}" for d in [1,2,5,10]
@@ -580,6 +674,9 @@ def render():
     if load_key not in st.session_state:
         st.session_state[load_key] = False
 
+    ret_data = None
+    fetch_failed = False
+
     if not st.session_state[load_key]:
         col_b1, col_b2 = st.columns([3, 1])
         with col_b1:
@@ -588,18 +685,29 @@ def render():
             if st.button(f"📈 加载走势", key=f"btn_hist_{sel_code}"):
                 st.session_state[load_key] = True
                 st.rerun()
-        # 尝试从已缓存的价格表快速渲染（无需 API）
+        # 尝试从 DB 缓存快速展示（无需 AKShare API）
         _quick = _render_quick_from_db(sel_code, sel_name, sel_date)
         if not _quick:
-            st.info("📊 点击上方按钮加载个股详细走势图")
-        ret_data = None
+            st.info("📊 点击上方按钮加载个股详细走势图（从数据库直接读取，秒级响应）")
+        # 未点击按钮时不显示错误
     else:
         with st.spinner(f"加载 {sel_name} 走势（从行情接口拉取约需5秒）..."):
             ret_data = _calc_returns_from_hist(sel_code, sel_date)
+            if ret_data is None:
+                fetch_failed = True
+                st.session_state[load_key] = False  # 允许重试
 
-    if ret_data is None:
-        st.warning(f"⚠️ {sel_name}（{sel_code}）无法获取 K 线数据，可能是退市或接口暂无数据。")
-    else:
+    if fetch_failed:
+        td = str(sel_date).replace("-", "")
+        st.warning(
+            f"⚠️ **{sel_name}**（{sel_code}）无法获取 {sel_date} 之后的 K 线数据。\n\n"
+            f"**可能原因：**\n"
+            f"1. 该股 **{sel_date}** 刚上市，尚无 T+1 交易日数据（需等下一个交易日）\n"
+            f"2. AKShare 行情接口暂时不可用（可稍后重试）\n"
+            f"3. 股票已退市或代码变更\n\n"
+            f"💡 若为原因 1，可在下一个交易日后再查看。"
+        )
+    elif ret_data is not None:
         buy_price = ret_data["buy_price"]
         rows = ret_data["rows"]
 
