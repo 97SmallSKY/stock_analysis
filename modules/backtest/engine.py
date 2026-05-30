@@ -136,6 +136,9 @@ class BacktestEngine:
                 skip_stats["持仓重叠跳过"] = skip_stats.get("持仓重叠跳过", 0) + 1
                 continue
 
+            if exits is not None and hasattr(exits, 'reset'):
+                exits.reset(sig_code)
+
             ret = self.executor.execute_trade(
                 sig_code, sig_date, ctx, strategy=strategy, exits=exits,
             )

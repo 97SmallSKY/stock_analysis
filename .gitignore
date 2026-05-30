@@ -61,3 +61,4 @@ data/raw/
 .coverage
 htmlcov/
 .streamlit.pid
+.worktrees/

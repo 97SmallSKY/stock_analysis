@@ -19,3 +19,8 @@ class CompositeExit(BaseExit):
             if signal is not None:
                 return signal
         return None
+
+    def reset(self, code: str = None):
+        for exit_component in self.exits:
+            if hasattr(exit_component, 'reset'):
+                exit_component.reset(code)

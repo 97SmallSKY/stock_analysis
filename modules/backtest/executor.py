@@ -72,7 +72,7 @@ class Executor:
         # 加载 K 线从信号日到 signal_date + max_hold_days + 15
         from datetime import timedelta
         sd = pd.Timestamp(str(signal_date)[:8])
-        ed = sd + timedelta(days=max_hold_days + 15)
+        ed = sd + timedelta(days=max_hold_days + 30)  # 覆盖春节+国庆叠加最长假期
         df = self.data_feed.kline(code, sd.strftime("%Y%m%d"), ed.strftime("%Y%m%d"))
         if df.empty or len(df) < 2:
             return None
@@ -169,14 +169,24 @@ class Executor:
             if price_type == "open":
                 sell_price, gross_ret = bar.open, (bar.open - buy_price) / buy_price
             elif "止损" in exit_reason:
-                # 保守：取 stop 阈值价与 open 的更差一侧（更低）
                 stop_price = buy_price * (1 + stop_loss)
-                sell_price = max(bar.open, stop_price)  # 取更高的 => 亏损更大（保守）
+                # 验证当天 bar 是否真的触及止损价
+                if bar.low <= stop_price:
+                    # 当天触及：跳空低开用 open，否则用 stop_price
+                    sell_price = bar.open if bar.open < stop_price else stop_price
+                else:
+                    # 当天未触及（历史低点触发）：保守使用当天最低价
+                    sell_price = bar.low
                 gross_ret = (sell_price - buy_price) / buy_price
             elif "止盈" in exit_reason:
-                # 保守：取 stop 阈值价与 open 的更差一侧（更低）
                 stop_price = buy_price * (1 + stop_profit)
-                sell_price = min(bar.open, stop_price)  # 取更低的 => 收益更小（保守）
+                # 验证当天 bar 是否真的触及止盈价
+                if bar.high >= stop_price:
+                    # 当天触及：跳空高开用 open，否则用 stop_price
+                    sell_price = bar.open if bar.open > stop_price else stop_price
+                else:
+                    # 当天未触及（历史高点触发）：保守使用当天最高价
+                    sell_price = bar.high
                 gross_ret = (sell_price - buy_price) / buy_price
             else:
                 sell_price, gross_ret = bar.close, (bar.close - buy_price) / buy_price
