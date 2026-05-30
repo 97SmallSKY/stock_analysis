@@ -1,0 +1,82 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - generic [ref=e9]:
+      - list [ref=e10]:
+        - listitem [ref=e11]:
+          - link "总览 Dashboard" [ref=e13] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/
+            - generic [ref=e16]: 🏠
+            - paragraph [ref=e19]: 总览 Dashboard
+        - listitem [ref=e20]:
+          - link "主板精选策略" [ref=e22] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/mainboard
+            - generic [ref=e25]: 🏆
+            - paragraph [ref=e28]: 主板精选策略
+        - listitem [ref=e29]:
+          - link "实时监控" [ref=e31] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/realtime
+            - generic [ref=e34]: 📡
+            - paragraph [ref=e37]: 实时监控
+        - listitem [ref=e38]:
+          - link "决策辅助信号" [ref=e40] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/signal
+            - generic [ref=e43]: 🎯
+            - paragraph [ref=e46]: 决策辅助信号
+        - listitem [ref=e47]:
+          - link "龙虎榜盈亏分析" [ref=e49] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/returns
+            - generic [ref=e52]: 📈
+            - paragraph [ref=e55]: 龙虎榜盈亏分析
+        - listitem [ref=e56]:
+          - link "模拟炒股" [ref=e58] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/sim_trading
+            - generic [ref=e61]: 🤖
+            - paragraph [ref=e64]: 模拟炒股
+        - listitem [ref=e65]:
+          - link "每日选股" [ref=e67] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/daily_select
+            - generic [ref=e70]: 🔍
+            - paragraph [ref=e73]: 每日选股
+        - listitem [ref=e74]:
+          - link "市场情绪" [ref=e76] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/sentiment
+            - generic [ref=e79]: 📊
+            - paragraph [ref=e82]: 市场情绪
+        - listitem [ref=e83]:
+          - link "策略回测" [ref=e85] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/backtest
+            - generic [ref=e88]: 🔬
+            - paragraph [ref=e91]: 策略回测
+        - listitem [ref=e92]:
+          - link "回测分析" [ref=e94] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/backtest_analysis
+            - generic [ref=e97]: 📉
+            - paragraph [ref=e100]: 回测分析
+      - button "View 3 more" [ref=e101] [cursor=pointer]
+    - generic [ref=e105]:
+      - separator [ref=e110]
+      - paragraph [ref=e115]: v1.0.0
+      - paragraph [ref=e120]: "数据来源: AKShare / 东方财富"
+  - generic [ref=e3]:
+    - banner [ref=e123]:
+      - button "Main menu" [ref=e128] [cursor=pointer]:
+        - img [ref=e129]
+    - generic [ref=e132]:
+      - heading "📊 回测结果深度分析" [level=1] [ref=e137]:
+        - text: 📊 回测结果深度分析
+        - generic [ref=e138]:
+          - link "Link to heading":
+            - /url: "#9ba0b861"
+            - img
+      - paragraph [ref=e143]: 逐笔信号回测统计 | 不考虑资金占用和持仓重叠 | 不代表真实组合收益
+      - alert [ref=e146]:
+        - generic [ref=e149]:
+          - generic [ref=e150]: "KeyError: 'run_id'"
+          - generic [ref=e151]:
+            - generic [ref=e152]: "Traceback:"
+            - code [ref=e155]:
+              - generic [ref=e156]: File "/root/stock_analysis/app.py", line 153, in <module> _pg.run() ~~~~~~~^^
+              - generic [ref=e157]: File "/root/miniconda3/lib/python3.13/site-packages/streamlit/navigation/page.py", line 383, in run self._page() ~~~~~~~~~~^^
+              - generic [ref=e158]: "File \"/root/stock_analysis/pages/backtest_analysis.py\", line 42, in render for _, r in runs_df[runs_df[\"run_id\"].isin(run_ids)].iterrows(): ~~~~~~~^^^^^^^^^^"
+              - generic [ref=e159]: File "/root/miniconda3/lib/python3.13/site-packages/pandas/core/frame.py", line 4113, in __getitem__ indexer = self.columns.get_loc(key)
+              - generic [ref=e160]: File "/root/miniconda3/lib/python3.13/site-packages/pandas/core/indexes/base.py", line 3819, in get_loc raise KeyError(key) from err

@@ -1,0 +1,403 @@
+- generic:
+  - generic:
+    - generic [ref=e2]:
+      - generic [ref=e7]:
+        - generic [ref=e9]:
+          - list [ref=e10]:
+            - listitem [ref=e11]:
+              - link "总览 Dashboard" [ref=e13] [cursor=pointer]:
+                - /url: http://localhost:8051/
+                - generic [ref=e16]: 🏠
+                - paragraph [ref=e19]: 总览 Dashboard
+            - listitem [ref=e20]:
+              - link "主板精选策略" [ref=e22] [cursor=pointer]:
+                - /url: http://localhost:8051/mainboard
+                - generic [ref=e25]: 🏆
+                - paragraph [ref=e28]: 主板精选策略
+            - listitem [ref=e29]:
+              - link "实时监控" [ref=e31] [cursor=pointer]:
+                - /url: http://localhost:8051/realtime
+                - generic [ref=e34]: 📡
+                - paragraph [ref=e37]: 实时监控
+            - listitem [ref=e38]:
+              - link "决策辅助信号" [ref=e40] [cursor=pointer]:
+                - /url: http://localhost:8051/signal
+                - generic [ref=e43]: 🎯
+                - paragraph [ref=e46]: 决策辅助信号
+            - listitem [ref=e47]:
+              - link "龙虎榜盈亏分析" [ref=e49] [cursor=pointer]:
+                - /url: http://localhost:8051/returns
+                - generic [ref=e52]: 📈
+                - paragraph [ref=e55]: 龙虎榜盈亏分析
+            - listitem [ref=e56]:
+              - link "模拟炒股" [ref=e58] [cursor=pointer]:
+                - /url: http://localhost:8051/sim_trading
+                - generic [ref=e61]: 🤖
+                - paragraph [ref=e64]: 模拟炒股
+            - listitem [ref=e65]:
+              - link "每日选股" [ref=e67] [cursor=pointer]:
+                - /url: http://localhost:8051/daily_select
+                - generic [ref=e70]: 🔍
+                - paragraph [ref=e73]: 每日选股
+            - listitem [ref=e74]:
+              - link "市场情绪" [ref=e76] [cursor=pointer]:
+                - /url: http://localhost:8051/sentiment
+                - generic [ref=e79]: 📊
+                - paragraph [ref=e82]: 市场情绪
+            - listitem [ref=e83]:
+              - link "策略回测" [ref=e85] [cursor=pointer]:
+                - /url: http://localhost:8051/backtest
+                - generic [ref=e88]: 🔬
+                - paragraph [ref=e91]: 策略回测
+            - listitem [ref=e92]:
+              - link "回测分析" [ref=e94] [cursor=pointer]:
+                - /url: http://localhost:8051/backtest_analysis
+                - generic [ref=e97]: 📉
+                - paragraph [ref=e100]: 回测分析
+          - button "View 3 more" [ref=e101] [cursor=pointer]
+        - generic [ref=e105]:
+          - separator [ref=e110]
+          - paragraph [ref=e115]: v1.0.0
+          - paragraph [ref=e120]: "数据来源: AKShare / 东方财富"
+      - generic [ref=e3]:
+        - banner [ref=e123]:
+          - generic [ref=e126]:
+            - generic [ref=e128]:
+              - img "Running..." [ref=e129]:
+                - img [ref=e130]
+              - button "Stop" [ref=e134] [cursor=pointer]
+            - button "Deploy" [ref=e136] [cursor=pointer]:
+              - generic [ref=e138]: Deploy
+            - button "Main menu" [ref=e140] [cursor=pointer]:
+              - img [ref=e141]
+        - generic [ref=e144]:
+          - heading "🎯 龙虎榜决策辅助信号" [level=1] [ref=e149]:
+            - text: 🎯 龙虎榜决策辅助信号
+            - generic [ref=e150]:
+              - link "Link to heading":
+                - /url: "#c860c7ad"
+                - img
+          - paragraph [ref=e155]:
+            - strong [ref=e156]: 技术面(40) + 资金面(35) + 历史胜率(25)
+            - text: 三维评分 | 自动识别机构/知名游资席位 | 市场情绪联动仓位建议 | 评分仅供参考，不构成投资建议
+          - group [ref=e159]:
+            - generic "keyboard_arrow_right 📖 评分体系说明（点击展开）" [ref=e160] [cursor=pointer]:
+              - generic [ref=e161]:
+                - generic [ref=e163]: keyboard_arrow_right
+                - paragraph [ref=e166]: 📖 评分体系说明（点击展开）
+          - heading "① 选择交易日" [level=3] [ref=e171]:
+            - text: ① 选择交易日
+            - generic [ref=e172]:
+              - link "Link to heading":
+                - /url: "#1"
+                - img
+          - generic [ref=e174]:
+            - generic [ref=e176]:
+              - generic [ref=e178]:
+                - paragraph [ref=e182]: 选择交易日
+                - generic [ref=e184]:
+                  - generic [ref=e185]:
+                    - generic [ref=e186]: 2026-05-06
+                    - combobox "Selected 2026-05-06 . 选择交易日" [ref=e188]
+                  - img "open" [ref=e190]
+              - generic [ref=e193]:
+                - button "⬅ 上一交易日" [ref=e198] [cursor=pointer]:
+                  - paragraph [ref=e202]: ⬅ 上一交易日
+                - button "📅 最近交易日" [ref=e207] [cursor=pointer]:
+                  - paragraph [ref=e211]: 📅 最近交易日
+                - button "下一交易日 ➡" [disabled] [ref=e216]:
+                  - paragraph [ref=e220]: 下一交易日 ➡
+            - alert [ref=e225]:
+              - paragraph [ref=e230]: 市场情绪数据加载中...
+          - heading "② 选择分析股票" [level=3] [ref=e235]:
+            - text: ② 选择分析股票
+            - generic [ref=e236]:
+              - link "Link to heading":
+                - /url: "#2"
+                - img
+          - generic [ref=e243] [cursor=pointer]:
+            - checkbox "📊 批量评分所有 Top10（对比视图）"
+            - paragraph [ref=e248]: 📊 批量评分所有 Top10（对比视图）
+          - generic [ref=e252]:
+            - paragraph [ref=e256]: 选择股票
+            - generic [ref=e258]:
+              - generic [ref=e259]:
+                - generic [ref=e260]: 1. 江波龙（301308.SZ）
+                - combobox "Selected 1. 江波龙（301308.SZ）. 选择股票" [ref=e262]
+              - img "open" [ref=e264]
+          - separator [ref=e270]
+          - heading "③ 江波龙（301308.SZ）综合决策" [level=3] [ref=e275]:
+            - text: ③ 江波龙（301308.SZ）综合决策
+            - generic [ref=e276]:
+              - link "Link to heading":
+                - /url: "#3-301308-sz"
+                - img
+          - generic [ref=e281]: 💡 操作建议：🔴 建议回避，风险偏高 | 仓位：正常仓位
+          - generic [ref=e286]: ⚠️ 近20日已涨 +68.5%，高位追涨风险较大
+          - generic [ref=e291]: 📈 大盘 MA5 > MA20（多头趋势），顺势操作
+          - generic [ref=e293]:
+            - generic [ref=e295]:
+              - generic [ref=e298]:
+                - generic [ref=e299]:
+                  - paragraph [ref=e301]: 综合评分
+                  - button "Help for 综合评分" [ref=e305] [cursor=pointer]:
+                    - img [ref=e306]
+                - paragraph [ref=e311]: 45/100
+              - generic [ref=e313]: ❌ 回避
+            - generic [ref=e315]:
+              - generic [ref=e318]:
+                - generic [ref=e319]:
+                  - paragraph [ref=e321]: 📈 技术面
+                  - button "Help for 📈 技术面" [ref=e325] [cursor=pointer]:
+                    - img [ref=e326]
+                - paragraph [ref=e331]: 25/40
+                - generic [ref=e333]:
+                  - img [ref=e334]
+                  - paragraph [ref=e338]: RSI 75.5 | 20日+68.5%
+              - generic [ref=e340]: 多头延续
+              - paragraph [ref=e345]: ➖ 量比 1.27 平量
+            - generic [ref=e347]:
+              - generic [ref=e350]:
+                - generic [ref=e351]:
+                  - paragraph [ref=e353]: 💰 资金面
+                  - button "Help for 💰 资金面" [ref=e357] [cursor=pointer]:
+                    - img [ref=e358]
+                - paragraph [ref=e363]: 20/35
+                - generic [ref=e365]:
+                  - img [ref=e366]
+                  - paragraph [ref=e370]: +19.35亿
+              - generic [ref=e372]: 机构4席
+              - paragraph [ref=e377]:
+                - text: 🟢 净买入强度：
+                - strong [ref=e378]: 1.47%
+                - text: 流通市值
+            - generic [ref=e383]:
+              - generic [ref=e384]:
+                - paragraph [ref=e386]: 📋 历史胜率
+                - button "Help for 📋 历史胜率" [ref=e390] [cursor=pointer]:
+                  - img [ref=e391]
+              - paragraph [ref=e396]: 0/25
+              - generic [ref=e398]:
+                - img [ref=e399]
+                - paragraph [ref=e403]: 上榜1次，数据积累中
+          - alert [ref=e406]:
+            - paragraph [ref=e411]:
+              - strong [ref=e412]: 识别到的关键席位：
+              - text: 🏛️ 机构买方 4 席
+          - generic [ref=e414]:
+            - tablist [ref=e416]:
+              - tab "📈 技术走势图" [selected] [ref=e417] [cursor=pointer]:
+                - paragraph [ref=e419]: 📈 技术走势图
+              - tab "🕸️ 三维评分明细" [ref=e420] [cursor=pointer]:
+                - paragraph [ref=e422]: 🕸️ 三维评分明细
+              - tab "📋 历史上榜表现" [ref=e423] [cursor=pointer]:
+                - paragraph [ref=e425]: 📋 历史上榜表现
+              - tab "✅ 止盈止损与操作清单" [ref=e426] [cursor=pointer]:
+                - paragraph [ref=e428]: ✅ 止盈止损与操作清单
+            - tabpanel "📈 技术走势图" [ref=e431]:
+              - generic [ref=e432]:
+                - generic [ref=e438]:
+                  - img:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: 2025.12.30
+                          - generic:
+                            - generic: 2026.01.12
+                          - generic:
+                            - generic: 2026.01.21
+                          - generic:
+                            - generic: 2026.01.30
+                          - generic:
+                            - generic: 2026.02.10
+                          - generic:
+                            - generic: 2026.02.27
+                          - generic:
+                            - generic: 2026.03.10
+                          - generic:
+                            - generic: 2026.03.19
+                          - generic:
+                            - generic: 2026.03.30
+                          - generic:
+                            - generic: 2026.04.09
+                          - generic:
+                            - generic: 2026.04.20
+                          - generic:
+                            - generic: 2026.04.29
+                        - generic:
+                          - generic:
+                            - generic: "250"
+                          - generic:
+                            - generic: "300"
+                          - generic:
+                            - generic: "350"
+                          - generic:
+                            - generic: "400"
+                          - generic:
+                            - generic: "450"
+                  - img:
+                    - generic [ref=e455]:
+                      - generic [ref=e457]: K线
+                      - generic [ref=e465]: MA5
+                      - generic [ref=e468]: MA10
+                      - generic [ref=e471]: MA20
+                  - toolbar [ref=e473]:
+                    - button "Download plot as a PNG" [ref=e475] [cursor=pointer]:
+                      - img [ref=e476]
+                    - generic [ref=e478]:
+                      - button "Zoom" [ref=e479] [cursor=pointer]:
+                        - img [ref=e480]
+                      - button "Pan" [ref=e482] [cursor=pointer]:
+                        - img [ref=e483]
+                    - generic [ref=e485]:
+                      - button "Zoom in" [ref=e486] [cursor=pointer]:
+                        - img [ref=e487]
+                      - button "Zoom out" [ref=e489] [cursor=pointer]:
+                        - img [ref=e490]
+                      - button "Autoscale" [ref=e492] [cursor=pointer]:
+                        - img [ref=e493]
+                      - button "Reset axes" [ref=e495] [cursor=pointer]:
+                        - img [ref=e496]
+                    - button "Fullscreen" [ref=e499] [cursor=pointer]:
+                      - img [ref=e500]
+                  - img
+                - generic [ref=e507]:
+                  - img:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: 2025.12.30
+                          - generic:
+                            - generic: 2026.01.12
+                          - generic:
+                            - generic: 2026.01.21
+                          - generic:
+                            - generic: 2026.01.30
+                          - generic:
+                            - generic: 2026.02.10
+                          - generic:
+                            - generic: 2026.02.27
+                          - generic:
+                            - generic: 2026.03.10
+                          - generic:
+                            - generic: 2026.03.19
+                          - generic:
+                            - generic: 2026.03.30
+                          - generic:
+                            - generic: 2026.04.09
+                          - generic:
+                            - generic: 2026.04.20
+                          - generic:
+                            - generic: 2026.04.29
+                        - generic:
+                          - generic:
+                            - generic: −20
+                          - generic:
+                            - generic: "0"
+                          - generic:
+                            - generic: "20"
+                  - img:
+                    - generic:
+                      - generic [ref=e524]:
+                        - generic [ref=e526]: MACD柱
+                        - generic [ref=e533]: DIF
+                        - generic [ref=e536]: DEA
+                      - generic:
+                        - generic:
+                          - generic: MACD (12,26,9)
+                  - toolbar [ref=e538]:
+                    - button "Download plot as a PNG" [ref=e540] [cursor=pointer]:
+                      - img [ref=e541]
+                    - generic [ref=e543]:
+                      - button "Zoom" [ref=e544] [cursor=pointer]:
+                        - img [ref=e545]
+                      - button "Pan" [ref=e547] [cursor=pointer]:
+                        - img [ref=e548]
+                    - generic [ref=e550]:
+                      - button "Zoom in" [ref=e551] [cursor=pointer]:
+                        - img [ref=e552]
+                      - button "Zoom out" [ref=e554] [cursor=pointer]:
+                        - img [ref=e555]
+                      - button "Autoscale" [ref=e557] [cursor=pointer]:
+                        - img [ref=e558]
+                      - button "Reset axes" [ref=e560] [cursor=pointer]:
+                        - img [ref=e561]
+                    - button "Fullscreen" [ref=e564] [cursor=pointer]:
+                      - img [ref=e565]
+                  - img
+                - generic [ref=e572]:
+                  - img:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: 2026.01.21
+                          - generic:
+                            - generic: 2026.01.29
+                          - generic:
+                            - generic: 2026.02.06
+                          - generic:
+                            - generic: 2026.02.24
+                          - generic:
+                            - generic: 2026.03.04
+                          - generic:
+                            - generic: 2026.03.12
+                          - generic:
+                            - generic: 2026.03.20
+                          - generic:
+                            - generic: 2026.03.30
+                          - generic:
+                            - generic: 2026.04.08
+                          - generic:
+                            - generic: 2026.04.16
+                          - generic:
+                            - generic: 2026.04.24
+                        - generic:
+                          - generic:
+                            - generic: "0"
+                          - generic:
+                            - generic: "50"
+                          - generic:
+                            - generic: "100"
+                  - img:
+                    - generic:
+                      - generic [ref=e591]: RSI(14)
+                      - generic:
+                        - generic:
+                          - generic: RSI (14)
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: 超买(70)
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: 超卖(30)
+                  - toolbar [ref=e593]:
+                    - button "Download plot as a PNG" [ref=e595] [cursor=pointer]:
+                      - img [ref=e596]
+                    - generic [ref=e598]:
+                      - button "Zoom" [ref=e599] [cursor=pointer]:
+                        - img [ref=e600]
+                      - button "Pan" [ref=e602] [cursor=pointer]:
+                        - img [ref=e603]
+                    - generic [ref=e605]:
+                      - button "Zoom in" [ref=e606] [cursor=pointer]:
+                        - img [ref=e607]
+                      - button "Zoom out" [ref=e609] [cursor=pointer]:
+                        - img [ref=e610]
+                      - button "Autoscale" [ref=e612] [cursor=pointer]:
+                        - img [ref=e613]
+                      - button "Reset axes" [ref=e615] [cursor=pointer]:
+                        - img [ref=e616]
+                    - button "Fullscreen" [ref=e619] [cursor=pointer]:
+                      - img [ref=e620]
+                  - img
+    - dialog "dialog" [ref=e624]:
+      - generic [ref=e625]: Page not found
+      - generic [ref=e627]: The page that you have requested does not seem to exist. Running the app's main page.
+      - button "Close" [active] [ref=e628] [cursor=pointer]:
+        - img [ref=e629]
+  - img [ref=e631]

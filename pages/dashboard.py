@@ -8,34 +8,33 @@ import plotly.express as px
 from datetime import datetime, timedelta
 
 from utils.storage import storage
+from utils.cache import ss_get, ss_set
+from utils.chart_utils import plotly_dark
+from config.theme import Color
 from modules.data_fetcher import fetch_market_sentiment, load_market_sentiment_history
 
-import time as _time
 
-
-def _ss_get(key: str, ttl: int):
-    val = st.session_state.get(f"__cache_{key}")
-    ts  = st.session_state.get(f"__cache_ts_{key}", 0)
-    if val is not None and (_time.time() - ts) < ttl:
-        return val
-    return None
-
-
-def _ss_set(key: str, val):
-    st.session_state[f"__cache_{key}"] = val
-    st.session_state[f"__cache_ts_{key}"] = _time.time()
-
-
-def _nav_to(page_name: str):
-    """通过 session_state + query_params 实现页面跳转"""
-    st.session_state["_nav_page"] = page_name
-    st.query_params["page"] = {
-        "🤖 模拟炒股":       "sim_trading",
-        "🏆 主板精选策略":   "mainboard",
-        "🎯 决策辅助信号":   "signal",
-        "📈 龙虎榜盈亏分析": "returns",
-    }.get(page_name, "dashboard")
-    st.rerun()
+def _nav_to(page_key: str):
+    """使用 st.switch_page 实现页面跳转"""
+    page_map = {
+        "🤖 模拟炒股": "_sim_trading_page",
+        "🏆 主板精选策略": "_mainboard_page",
+        "🎯 决策辅助信号": "_signal_page",
+        "📈 龙虎榜盈亏分析": "_returns_page",
+    }
+    page_key_in_ss = page_map.get(page_key)
+    if page_key_in_ss and page_key_in_ss in st.session_state:
+        st.switch_page(st.session_state[page_key_in_ss])
+    else:
+        # fallback: 通过 URL path 跳转
+        path_map = {
+            "🤖 模拟炒股": "sim_trading",
+            "🏆 主板精选策略": "mainboard",
+            "🎯 决策辅助信号": "signal",
+            "📈 龙虎榜盈亏分析": "returns",
+        }
+        path = path_map.get(page_key, "dashboard")
+        st.switch_page(f"pages/{path}.py" if path != "dashboard" else "app.py")
 
 
 def render():
@@ -68,19 +67,19 @@ def render():
         signal = sentiment.get("trade_signal", "normal")
 
         signal_map = {
-            "full_position": ("✅ 满仓操作", "#E84040"),
-            "normal": ("✅ 正常操作", "#E84040"),
-            "half_position": ("⚠️ 半仓操作", "#FFA500"),
-            "no_trade": ("🚫 今日不操作", "#888888"),
+            "full_position": ("✅ 市场强势，可积极关注", Color.RED),
+            "normal": ("✅ 正常行情，控制仓位参与", Color.GREEN),
+            "half_position": ("⚠️ 市场偏弱，建议轻仓", Color.GOLD),
+            "no_trade": ("🚫 市场极弱，建议观望", Color.GRAY),
         }
-        sig_label, sig_color = signal_map.get(signal, ("❓ 未知", "#888888"))
+        sig_label, sig_color = signal_map.get(signal, ("❓ 未知", Color.GRAY))
 
         st.markdown(
             f"<div style='padding:20px;background:#1a1a2e;border-left:8px solid {sig_color};border-radius:8px;margin-bottom:20px;'>"
             f"<h2 style='margin-top:0;color:{sig_color};'>🎯 今日操作建议：{sig_label}</h2>"
             f"<div style='display:flex; justify-content:space-between; margin-bottom:10px; font-size:1.1em;'>"
-            f"<span>📈 涨停：<b style='color:#E84040'>{limit_up}</b> 家</span>"
-            f"<span>📉 跌停：<b style='color:#33CC66'>{limit_down}</b> 家</span>"
+            f"<span>📈 涨停：<b style='color:{Color.RED}'>{limit_up}</b> 家</span>"
+            f"<span>📉 跌停：<b style='color:{Color.GREEN}'>{limit_down}</b> 家</span>"
             f"<span>🔥 连板：<b>{cont_limit}</b> 家</span>"
             f"<span>📊 上证指数：<b>{index_close} ({index_change}%)</b></span>"
             f"</div>"
@@ -108,7 +107,7 @@ def render():
             _nav_to("📈 龙虎榜盈亏分析")
 
     # ── 模拟账户 AHS 健康仪表盘（首页简版）──────────────────────────────
-    _cached = _ss_get("dash_health", 180)
+    _cached = ss_get("dash_health", 180)
     if _cached is None:
         try:
             from skills.stock_sim_robot.sim_trade_db import (
@@ -120,7 +119,7 @@ def render():
             _cached = (_s, _ahs, _cb)
         except Exception:
             _cached = ({}, 60, {"allow_open": True, "level": "ok", "reason": "", "ahs": 60})
-        _ss_set("dash_health", _cached)
+        ss_set("dash_health", _cached)
     _ds, _dahs, _dcb = _cached
 
     # 只在有数据时才展示（不足3笔不渲染，避免干扰首页洁净感）
@@ -188,7 +187,7 @@ def render():
 
         with col_lhb:
             st.markdown("#### 📋 近期龙虎榜数据")
-            lhb_df = storage.read("lhb_detail")
+            lhb_df = storage.read_recent("lhb_detail", days=90)
             if lhb_df.empty:
                 st.warning("暂无龙虎榜数据，请前往「数据管理」拉取")
             else:
@@ -219,7 +218,7 @@ def render():
                     )
                     fig.update_traces(textposition="outside")
                     fig.update_xaxes(type="category")  # 避免日期轴被压缩为数字
-                    fig.update_layout(height=280, showlegend=False, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", margin=dict(t=30, b=0, l=0, r=0))
+                    fig.update_layout(**plotly_dark(height=280, showlegend=False, margin=dict(t=30, b=0, l=0, r=0)))
                     st.plotly_chart(fig, use_container_width=True)
 
         with col_trend:
@@ -238,29 +237,28 @@ def render():
                 if "limit_up" in sentiment_df.columns:
                     fig_sent.add_trace(go.Scatter(
                         x=sentiment_df["trade_date_str"], y=sentiment_df["limit_up"],
-                        name="涨停家数", line=dict(color="#E84040", width=2),
+                        name="涨停家数", line=dict(color=Color.RED, width=2),
                         fill="tozeroy", fillcolor="rgba(232,64,64,0.1)"
                     ))
                 if "limit_down" in sentiment_df.columns:
                     fig_sent.add_trace(go.Scatter(
                         x=sentiment_df["trade_date_str"], y=sentiment_df["limit_down"],
-                        name="跌停家数", line=dict(color="#33CC66", width=2),
+                        name="跌停家数", line=dict(color=Color.GREEN, width=2),
                         fill="tozeroy", fillcolor="rgba(51,204,102,0.1)"
                     ))
-                fig_sent.update_layout(
+                fig_sent.update_layout(**plotly_dark(
                     title="近60日涨跌停家数趋势",
                     height=350,
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                     hovermode="x unified",
                     margin=dict(t=30, b=0, l=0, r=0),
                     xaxis=dict(type="category", tickangle=-45),
-                )
+                ))
                 st.plotly_chart(fig_sent, use_container_width=True)
             else:
                 st.info("暂无市场情绪历史数据")
 
     with tab_returns:
-        ret_df = storage.read("lhb_returns")
+        ret_df = storage.read_recent("lhb_returns", days=90)
         if ret_df.empty:
             st.info("暂无盈亏数据，请前往「📈 龙虎榜盈亏分析」页面计算")
         else:
@@ -281,7 +279,7 @@ def render():
             if "ret_3d" in ok_df.columns:
                 s3 = ok_df["ret_3d"].dropna()
                 fig_mini = go.Figure()
-                fig_mini.add_trace(go.Histogram(x=s3, nbinsx=40, marker_color="#E84040", opacity=0.8, showlegend=False))
+                fig_mini.add_trace(go.Histogram(x=s3, nbinsx=40, marker_color=Color.RED, opacity=0.8, showlegend=False))
                 fig_mini.add_vline(x=0, line_dash="dash", line_color="white", opacity=0.4)
                 fig_mini.update_layout(title="T+3 收益率分布直方图", height=280, margin=dict(t=40, b=5, l=5, r=5), template="plotly_dark", xaxis_title="T+3 收益率 (%)", yaxis_title="次数")
                 st.plotly_chart(fig_mini, use_container_width=True)
@@ -315,16 +313,15 @@ def render():
                 fig_curve = go.Figure()
                 fig_curve.add_trace(go.Scatter(
                     x=x_dates, y=curve_df["cumulative_return"] * 100,
-                    name="累计收益率(%)", line=dict(color="#E84040", width=2),
+                    name="累计收益率(%)", line=dict(color=Color.RED, width=2),
                     fill="tozeroy", fillcolor="rgba(232,64,64,0.1)",
                 ))
                 fig_curve.add_hline(y=0, line_dash="dash", line_color="gray")
-                fig_curve.update_layout(
+                fig_curve.update_layout(**plotly_dark(
                     title="策略累计收益曲线",
                     yaxis_title="累计收益率 (%)",
                     height=320,
-                    plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
                     margin=dict(t=40, b=0, l=0, r=0),
                     xaxis=dict(type="category", tickangle=-45),
-                )
+                ))
                 st.plotly_chart(fig_curve, use_container_width=True)

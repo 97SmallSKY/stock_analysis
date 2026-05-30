@@ -1,0 +1,54 @@
+- generic [ref=e3]:
+  - generic [ref=e4]:
+    - generic [ref=e5]:
+      - img "stock" [ref=e6]:
+        - img [ref=e7]
+      - generic [ref=e9]:
+        - text: LHB
+        - emphasis [ref=e10]: 量化
+    - menu [ref=e11]:
+      - menuitem "dashboard Dashboard" [ref=e12] [cursor=pointer]:
+        - img "dashboard" [ref=e13]:
+          - img [ref=e14]
+        - generic [ref=e16]: Dashboard
+      - menuitem "table 龙虎榜" [ref=e17] [cursor=pointer]:
+        - img "table" [ref=e18]:
+          - img [ref=e19]
+        - generic [ref=e21]: 龙虎榜
+      - menuitem "bulb 决策信号" [ref=e22] [cursor=pointer]:
+        - img "bulb" [ref=e23]:
+          - img [ref=e24]
+        - generic [ref=e26]: 决策信号
+      - menuitem "pie-chart 盈亏分析" [ref=e27] [cursor=pointer]:
+        - img "pie-chart" [ref=e28]:
+          - img [ref=e29]
+        - generic [ref=e31]: 盈亏分析
+      - menuitem "line-chart 策略对比" [ref=e32] [cursor=pointer]:
+        - img "line-chart" [ref=e33]:
+          - img [ref=e34]
+        - generic [ref=e36]: 策略对比
+      - menuitem "line-chart 回测任务" [ref=e37] [cursor=pointer]:
+        - img "line-chart" [ref=e38]:
+          - img [ref=e39]
+        - generic [ref=e41]: 回测任务
+      - menuitem "history 回测历史" [ref=e42] [cursor=pointer]:
+        - img "history" [ref=e43]:
+          - img [ref=e44]
+        - generic [ref=e46]: 回测历史
+      - menuitem "robot 机器人" [ref=e47] [cursor=pointer]:
+        - img "robot" [ref=e48]:
+          - img [ref=e49]
+        - generic [ref=e51]: 机器人
+      - img:
+        - img
+      - generic: 周报
+      - img:
+        - img
+      - generic: 数据源
+      - img:
+        - img
+      - generic: 特性介绍
+      - img "ellipsis" [ref=e54] [cursor=pointer]:
+        - img [ref=e55]
+  - main [ref=e57]
+  - generic [ref=e58]: © LHB quant — 内部系统

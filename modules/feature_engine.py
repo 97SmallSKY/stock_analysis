@@ -35,28 +35,7 @@ from utils.retry import safe_akshare_call
 # 低级数学计算（纯 numpy，无外部依赖）
 # ============================================================
 
-def _sma(arr: np.ndarray, n: int) -> np.ndarray:
-    """简单移动平均（与 analyzer.py 对齐，结尾对齐）"""
-    result = np.full(len(arr), np.nan)
-    if len(arr) < n:
-        return result
-    for i in range(n - 1, len(arr)):
-        result[i] = arr[i - n + 1: i + 1].mean()
-    return result
-
-
-def _ema(arr: np.ndarray, n: int) -> np.ndarray:
-    """指数移动平均（Wilder 风格起始值）"""
-    result = np.full(len(arr), np.nan)
-    k = 2.0 / (n + 1)
-    for i in range(len(arr)):
-        if np.isnan(arr[i]):
-            continue
-        if i == 0 or np.isnan(result[i - 1]):
-            result[i] = arr[i]
-        else:
-            result[i] = arr[i] * k + result[i - 1] * (1 - k)
-    return result
+from modules.indicators import sma as _sma, ema as _ema, macd as _macd  # noqa: E402
 
 
 def _rsi_wilder(close: np.ndarray, period: int = 14) -> np.ndarray:
@@ -96,19 +75,6 @@ def _atr(high: np.ndarray, low: np.ndarray, close: np.ndarray, n: int = 14) -> n
     )
     atr_arr = _sma(tr, n)
     return atr_arr
-
-
-def _macd(close: np.ndarray, fast: int = 12, slow: int = 26, sig: int = 9):
-    """
-    MACD (DIF, DEA, HIST=Bar)
-    Returns: (dif, dea, hist) 均为 ndarray
-    """
-    ema_fast = _ema(close, fast)
-    ema_slow = _ema(close, slow)
-    dif = ema_fast - ema_slow
-    dea = _ema(dif, sig)
-    hist = (dif - dea) * 2
-    return dif, dea, hist
 
 
 # ============================================================

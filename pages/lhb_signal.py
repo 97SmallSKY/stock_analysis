@@ -11,7 +11,6 @@
 
 注：所有缓存使用 session_state（避免 Python 3.13 semaphore 泄漏）。
 """
-import time
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -19,52 +18,20 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 
 from utils.storage import storage
+from utils.cache import ss_get, ss_set
 from utils.retry import safe_akshare_call
 from modules.data_fetcher import fetch_lhb_netbuy_by_date
+from modules.indicators import sma as _sma, ema as _ema
 from config.settings import FAMOUS_TRADERS, STRATEGY_CONFIG
-from modules.scorer import score_tech as _score_tech_shared, score_fund as _score_fund_shared, score_history as _score_history_shared, _ema
+from config.theme import Color
+from utils.helpers import fmt_date, fmt_date_slash, fmt_date_dot
+from modules.scorer import score_tech as _score_tech_shared, score_fund as _score_fund_shared, score_history as _score_history_shared
 
-_RED   = "#E84040"
-_GREEN = "#33CC66"
-_GOLD  = "#FFA500"
-_GRAY  = "#888888"
-_BLUE  = "#4488FF"
-
-
-# ============================================================
-# 辅助计算函数
-# ============================================================
-
-def _sma(arr, n: int):
-    """简单移动平均（SMA），返回与 arr 等长的 numpy array，前 n-1 个位置为 NaN。"""
-    import numpy as np
-    arr = np.asarray(arr, dtype=float)
-    result = np.full(len(arr), np.nan)
-    for i in range(n - 1, len(arr)):
-        result[i] = arr[i - n + 1 : i + 1].mean()
-    return result
-
-
-# ============================================================
-# Session State 缓存
-# ============================================================
-
-def _ss_get(key: str, max_age: int = 300):
-    import time as _t
-    cache = st.session_state.get("_sig_cache", {})
-    entry = cache.get(key)
-    if entry is None:
-        return None
-    if _t.time() - entry["ts"] > max_age:
-        return None
-    return entry["val"]
-
-
-def _ss_set(key: str, val):
-    import time as _t
-    if "_sig_cache" not in st.session_state:
-        st.session_state["_sig_cache"] = {}
-    st.session_state["_sig_cache"][key] = {"ts": _t.time(), "val": val}
+_RED   = Color.RED
+_GREEN = Color.GREEN
+_GOLD  = Color.GOLD
+_GRAY  = Color.GRAY
+_BLUE  = Color.BLUE
 
 
 # ============================================================
@@ -73,100 +40,109 @@ def _ss_set(key: str, val):
 
 def _get_top10(trade_date: str) -> pd.DataFrame:
     key = f"sig_top10_{trade_date}"
-    cached = _ss_get(key, 300)
+    cached = ss_get(key, 300)
     if cached is not None:
         return cached
     try:
         df = fetch_lhb_netbuy_by_date(trade_date, top_n=10)
     except Exception:
         df = pd.DataFrame()
-    _ss_set(key, df)
+    ss_set(key, df)
     return df
 
 
 def _get_kline(code: str, trade_date: str, days: int = 80) -> pd.DataFrame:
-    """拉取 trade_date 前后 days 个交易日的日K（前复权），新浪接口优先"""
+    """从数据库 kline_daily 读取 trade_date 之前 days 个交易日的日K，无需 AKShare"""
     key = f"sig_kline_{code}_{trade_date}_{days}"
-    cached = _ss_get(key, 600)
+    cached = ss_get(key, 600)
     if cached is not None:
         return cached
 
-    import akshare as ak
-    end_dt   = (pd.Timestamp(trade_date) + pd.Timedelta(days=10)).strftime("%Y%m%d")
-    start_dt = (pd.Timestamp(trade_date) - pd.Timedelta(days=int(days * 2.2))).strftime("%Y%m%d")
-    prefix   = "sh" if code.startswith(("6", "9")) else "sz"
-    df = None
-
     try:
-        raw = safe_akshare_call(
-            ak.stock_zh_a_daily,
-            symbol=f"{prefix}{code}", adjust="qfq",
-            start_date=start_dt, end_date=end_dt,
-            max_retries=2, base_delay=1.5, fallback=None,
-        )
-        if raw is not None and len(raw) >= 10:
-            raw = raw.rename(columns={"date": "日期", "open": "开盘",
-                                      "high": "最高", "low": "最低",
-                                      "close": "收盘", "volume": "成交量"})
-            df = raw.sort_values("日期").tail(days).reset_index(drop=True)
-    except Exception:
-        pass
+        from sqlalchemy import text
+        engine = storage._get_engine()
+        # 清理代码格式
+        code_clean = str(code).replace(".SZ", "").replace(".SH", "").replace(".BJ", "").zfill(6)
+        if code_clean.startswith(("6", "9")):
+            ts_code = f"{code_clean}.SH"
+        elif code_clean.startswith(("0", "3")):
+            ts_code = f"{code_clean}.SZ"
+        else:
+            ts_code = f"{code_clean}.BJ"
+        td = str(trade_date)[:10]
 
-    if df is None:
+        with engine.connect() as conn:
+            df = pd.read_sql_query(
+                text("""
+                    SELECT trade_date AS "日期", open AS "开盘", high AS "最高",
+                           low AS "最低", close AS "收盘", vol AS "成交量"
+                    FROM kline_daily
+                    WHERE ts_code = :ts AND trade_date <= :td
+                    ORDER BY trade_date DESC
+                    LIMIT :limit
+                """),
+                conn, params={"ts": ts_code, "td": td, "limit": days}
+            )
+        df = df.sort_values("日期").reset_index(drop=True)
+        ss_set(key, df)
+        return df
+    except Exception:
         df = pd.DataFrame()
-    _ss_set(key, df)
-    return df
+        ss_set(key, df)
+        return df
 
 
 def _get_lhb_seat_detail(code: str, trade_date: str) -> pd.DataFrame:
-    """拉取某只股票龙虎榜席位详情（东方财富 stock_lhb_stock_statistic_em）"""
+    """从数据库 lhb_seats 读取龙虎榜席位详情，无需 AKShare"""
     key = f"sig_seat_{code}_{trade_date}"
-    cached = _ss_get(key, 600)
+    cached = ss_get(key, 600)
     if cached is not None:
         return cached
 
-    import akshare as ak
-    df = safe_akshare_call(
-        ak.stock_lhb_stock_statistic_em,
-        symbol=code,
-        max_retries=2, base_delay=1.5, fallback=pd.DataFrame(),
-    )
-    if df is None:
+    try:
+        from sqlalchemy import text
+        engine = storage._get_engine()
+        code_clean = str(code).replace(".SZ", "").replace(".SH", "").replace(".BJ", "").zfill(6)
+        if code_clean.startswith(("6", "9")):
+            ts_code = f"{code_clean}.SH"
+        elif code_clean.startswith(("0", "3")):
+            ts_code = f"{code_clean}.SZ"
+        else:
+            ts_code = f"{code_clean}.BJ"
+        td = str(trade_date)[:10]
+
+        with engine.connect() as conn:
+            df = pd.read_sql_query(
+                text("""
+                    SELECT broker_name AS "营业部名称",
+                           direction AS "方向",
+                           buy_amount AS "买入金额",
+                           sell_amount AS "卖出金额",
+                           net_amount AS "净买入",
+                           CASE WHEN is_institution THEN '机构专用' ELSE broker_type END AS "席位类型"
+                    FROM lhb_seats
+                    WHERE ts_code = :ts AND trade_date = :td
+                    ORDER BY net_amount DESC
+                """),
+                conn, params={"ts": ts_code, "td": td}
+            )
+        ss_set(key, df)
+        return df
+    except Exception:
         df = pd.DataFrame()
-    _ss_set(key, df)
-    return df
+        ss_set(key, df)
+        return df
 
 
 def _get_lhb_detail_seat(code: str, trade_date: str) -> pd.DataFrame:
-    """拉取当日该股龙虎榜买卖席位（东方财富 stock_lhb_detail_em 直接过滤）"""
-    key = f"sig_seat2_{code}_{trade_date}"
-    cached = _ss_get(key, 600)
-    if cached is not None:
-        return cached
-
-    import akshare as ak
-    df = pd.DataFrame()
-    try:
-        raw = safe_akshare_call(
-            ak.stock_lhb_detail_em,
-            start_date=trade_date, end_date=trade_date,
-            max_retries=2, base_delay=2.0, fallback=None,
-        )
-        if raw is not None and not raw.empty:
-            code_col = next((c for c in raw.columns if "代码" in c), None)
-            if code_col:
-                df = raw[raw[code_col].astype(str).str.zfill(6) == code].copy()
-    except Exception:
-        pass
-
-    _ss_set(key, df)
-    return df
+    """从数据库 lhb_seats 直接读取当日买卖席位"""
+    return _get_lhb_seat_detail(code, trade_date)
 
 
 def _get_fund_flow(code: str) -> dict:
     """主力资金流向（近5日合计），失败时静默返回空"""
     key = f"sig_fund_{code}"
-    cached = _ss_get(key, 300)
+    cached = ss_get(key, 300)
     if cached is not None:
         return cached
 
@@ -187,24 +163,23 @@ def _get_fund_flow(code: str) -> dict:
     except Exception as e:
         result["note"] = str(e)[:60]
 
-    _ss_set(key, result)
+    ss_set(key, result)
     return result
 
 
 def _get_history_winrate(code: str) -> dict:
     """从 lhb_top10_prices 计算该股历史上榜后胜率"""
     key = f"sig_hist_{code}"
-    cached = _ss_get(key, 120)
+    cached = ss_get(key, 120)
     if cached is not None:
         return cached
 
     result = {"count": 0, "t2_win": None, "t5_win": None, "t2_avg": None, "t5_avg": None}
     try:
-        df = storage.read("lhb_top10_prices")
-        if not df.empty:
-            code_norm = str(code).lstrip("0")
-            sub = df[df["代码"].astype(str).str.lstrip("0") == code_norm]
-            sub = sub[sub["T+1买入价"].notna()]
+        # 历史胜率需要全量数据，但只查单只股票（query_by_code 精确匹配，数据量小）
+        df = storage.query_by_code("lhb_top10_prices", code)
+        if not df.empty and "T+1买入价" in df.columns:
+            sub = df[df["T+1买入价"].notna()]
             result["count"] = len(sub)
             for n, k in [(2, "t2"), (5, "t5")]:
                 col = f"T+{n}收盘收益%"
@@ -216,14 +191,14 @@ def _get_history_winrate(code: str) -> dict:
     except Exception:
         pass
 
-    _ss_set(key, result)
+    ss_set(key, result)
     return result
 
 
 def _get_market_sentiment(trade_date: str) -> dict:
     """读取当日市场情绪（涨停数/跌停数/大盘趋势）"""
     key = f"sig_mkt_{trade_date}"
-    cached = _ss_get(key, 300)
+    cached = ss_get(key, 300)
     if cached is not None:
         return cached
 
@@ -255,7 +230,7 @@ def _get_market_sentiment(trade_date: str) -> dict:
     except Exception:
         pass
 
-    _ss_set(key, result)
+    ss_set(key, result)
     return result
 
 
@@ -267,7 +242,7 @@ def _get_lianban_map(trade_date: str) -> dict[str, int]:
     用途：在 score_tech() 中传入 lianban_count，确保页面与机器人评分一致
     """
     key = f"sig_lianban_{trade_date}"
-    cached = _ss_get(key, 600)
+    cached = ss_get(key, 600)
     if cached is not None:
         return cached
 
@@ -291,7 +266,7 @@ def _get_lianban_map(trade_date: str) -> dict[str, int]:
     except Exception:
         pass  # 获取失败时静默降级，不影响其他评分
 
-    _ss_set(key, result)
+    ss_set(key, result)
     return result
 
 
@@ -348,16 +323,16 @@ def _apply_market_filter(advice: dict, mkt: dict) -> dict:
 def _gen_advice(total: int, tech: dict, fund: dict, hist: dict) -> dict:
     """根据综合评分生成基础操作建议"""
     if total >= 80:
-        action = "🟢 重点关注，可考虑买入"
+        action = "🟢 重点关注，结合市场情绪和风控"
         color  = _RED
     elif total >= 65:
-        action = "🟡 关注，谨慎参与"
+        action = "🟡 谨慎参与，控制仓位"
         color  = _GOLD
     elif total >= 50:
-        action = "🟠 观望，等待更好信号"
+        action = "🟠 观望为主，等待更好信号"
         color  = _GOLD
     else:
-        action = "🔴 回避，风险偏高"
+        action = "🔴 建议回避，风险偏高"
         color  = _GREEN
 
     notes = []
@@ -429,7 +404,7 @@ def render():
 
 | 分数段 | 建议 | 说明 |
 |--------|------|------|
-| **≥ 80 分** ⭐⭐⭐ | **重点关注** | 三维均强，可考虑全仓参与（结合市场情绪） |
+| **≥ 80 分** ⭐⭐⭐ | **重点关注** | 三维均强，可结合市场情绪重点关注，控制仓位 |
 | **65 ~ 79 分** ⭐⭐ | **谨慎参与** | 多数维度良好，建议半仓或等待回踩确认 |
 | **50 ~ 64 分** ⭐ | **观望为主** | 存在明显短板，风险收益比偏低 |
 | **< 50 分** ❌ | **建议回避** | 多维度信号偏弱，不建议参与 |
@@ -454,28 +429,73 @@ def render():
     # ── ① 选择日期 ─────────────────────────────────────────────
     st.subheader("① 选择交易日")
     _date_set = set()
-    for _tbl in ["lhb_top10", "lhb_detail", "lhb_top10_prices"]:
-        try:
-            _df = storage.read(_tbl)
-            if not _df.empty and "trade_date" in _df.columns:
-                _date_set.update(_df["trade_date"].astype(str).unique())
-        except Exception:
-            pass
+    try:
+        from sqlalchemy import text
+        engine = storage._get_engine()
+        with engine.connect() as conn:
+            # 获取交易日历白名单
+            cal_dates = set()
+            try:
+                result = conn.execute(text(
+                    "SELECT cal_date::text FROM trade_calendar WHERE is_open = true AND cal_date >= '2024-01-01'"
+                ))
+                cal_dates = {r[0] for r in result.fetchall()}
+            except Exception:
+                pass
+            for tbl in ["lhb_top10", "lhb_top10_prices"]:
+                try:
+                    result = conn.execute(text(f'SELECT DISTINCT trade_date FROM "{tbl}" ORDER BY trade_date DESC'))
+                    for r in result.fetchall():
+                        d = str(r[0])[:10]
+                        if not cal_dates or d in cal_dates:
+                            _date_set.add(d)
+                except Exception:
+                    pass
+    except Exception:
+        pass
     local_dates = sorted(_date_set, reverse=True)
-    today_str   = datetime.now().strftime("%Y%m%d")
+    today_str   = datetime.now().strftime("%Y-%m-%d")
     all_options = list(dict.fromkeys(
         local_dates + ([today_str] if today_str not in local_dates else [])
     ))
     if not all_options:
         all_options = [today_str]
 
+    # 日期选择（简化 session_state）
+    if "sig_sel_date" not in st.session_state or st.session_state["sig_sel_date"] not in all_options:
+        st.session_state["sig_sel_date"] = local_dates[0] if local_dates else today_str
+
     col_d, col_m = st.columns([2, 3])
     with col_d:
+        sel_idx = all_options.index(st.session_state["sig_sel_date"])
         sel_date = st.selectbox(
             "选择交易日",
             options=all_options,
-            format_func=lambda d: f"{d[:4]}/{d[4:6]}/{d[6:]}  {'📡 今日' if d == today_str else ''}",
+            index=sel_idx,
+            format_func=lambda d: f"{fmt_date_slash(d)}  {'📡 今日' if d == today_str else ''}",
         )
+        if sel_date != st.session_state.get("sig_sel_date"):
+            st.session_state["sig_sel_date"] = sel_date
+
+        # 快捷日期按钮
+        c1, c2, c3 = st.columns(3)
+        cur_idx = all_options.index(sel_date)
+        with c1:
+            prev_idx = min(cur_idx + 1, len(all_options) - 1)
+            if st.button("⬅ 上一交易日", use_container_width=True, key="sig_prev_date2",
+                         disabled=cur_idx >= len(all_options) - 1):
+                st.session_state["sig_sel_date"] = all_options[prev_idx]
+                st.rerun()
+        with c2:
+            if st.button("📅 最近交易日", use_container_width=True, key="sig_latest_date2"):
+                st.session_state["sig_sel_date"] = local_dates[0] if local_dates else today_str
+                st.rerun()
+        with c3:
+            next_idx = max(cur_idx - 1, 0)
+            if st.button("下一交易日 ➡", use_container_width=True, key="sig_next_date2",
+                         disabled=cur_idx <= 0):
+                st.session_state["sig_sel_date"] = all_options[next_idx]
+                st.rerun()
 
     # 市场情绪（后台静默拉取，不影响主流程）
     with col_m:
@@ -541,12 +561,23 @@ def _render_single(code: str, name: str, trade_date: str, lhb_row: pd.Series, mk
         hist     = _get_history_winrate(code)
 
         lianban_count = (lianban_map or {}).get(code, 0)
-        t_res = _score_tech(kline, trade_date, lianban_count=lianban_count)
+        kline_ok = kline is not None and len(kline) >= 20
+        t_res = _score_tech(kline, trade_date, lianban_count=lianban_count) if kline_ok else {"score": 0}
         f_res = _score_fund(lhb_row, fund_flow, seat_df)
         h_res = _score_history(hist)
-        total = t_res["score"] + f_res["score"] + h_res["score"]
+
+        if kline_ok:
+            total = t_res["score"] + f_res["score"] + h_res["score"]
+        else:
+            # K线缺失：仅用资金面+历史胜率，归一化到100分
+            raw = f_res["score"] + h_res["score"]
+            total = round(raw * 100 / 60) if raw > 0 else 0  # 归一化: max 60 → 100
+            t_res = {"score": 0, "note": "K线数据获取失败，技术面未参与评分"}
+
         advice = _gen_advice(total, t_res, f_res, hist)
         advice = _apply_market_filter(advice, mkt)
+        if not kline_ok:
+            advice["notes"].insert(0, "⚠️ K线数据获取失败，技术面评分暂不计入，综合评分按资金面+历史胜率归一化")
 
     # ── 置顶：操作建议横幅 ─────────────────────────────────
     pos_label = f"  |  仓位：{advice['position']}" if advice.get("position") else ""
@@ -931,7 +962,7 @@ def _render_history(code: str, name: str, hist: dict):
     hc4.metric("T+5 平均收益", f"{hist.get('t5_avg', '—')}%" if hist.get("t5_avg") else "—")
 
     try:
-        df_all = storage.read("lhb_top10_prices")
+        df_all = storage.read_recent("lhb_top10_prices", days=90)
         if not df_all.empty:
             code_norm = str(code).lstrip("0")
             sub = df_all[df_all["代码"].astype(str).str.lstrip("0") == code_norm]
@@ -945,7 +976,7 @@ def _render_history(code: str, name: str, hist: dict):
                         if len(vals) > 0:
                             # 把 "20251021" → "2025.10.21"，避免 Plotly 显示英文月份
                             x_td = sub.loc[sub[col_n].notna(), "trade_date"].astype(str)
-                            x_td = x_td.apply(lambda d: f"{d[:4]}.{d[4:6]}.{d[6:]}" if len(d)==8 else d)
+                            x_td = x_td.apply(lambda d: fmt_date_dot(d))
                             fig.add_trace(go.Scatter(
                                 x=x_td,
                                 y=vals, name=f"T+{n}",
@@ -954,7 +985,7 @@ def _render_history(code: str, name: str, hist: dict):
                             ))
                 # 零线：用 Scatter 模拟
                 x_vals_raw = sub["trade_date"].astype(str).tolist()
-                x_vals = [f"{d[:4]}.{d[4:6]}.{d[6:]}" if len(d)==8 else d for d in x_vals_raw]
+                x_vals = [fmt_date_dot(d) for d in x_vals_raw]
                 if x_vals:
                     fig.add_trace(go.Scatter(
                         x=[x_vals[0], x_vals[-1]], y=[0, 0], mode="lines",
@@ -977,13 +1008,13 @@ def _render_stoploss(code: str, trade_date: str):
     """止盈止损参考位"""
     st.markdown("**📌 止盈止损参考**")
     try:
-        df_all = storage.read("lhb_top10_prices")
+        df_all = storage.read_recent("lhb_top10_prices", days=90)
         if df_all.empty:
             st.info("历史数据不足。")
             return
 
-        code_norm = str(code).lstrip("0")
-        sub = df_all[df_all["代码"].astype(str).str.lstrip("0") == code_norm]
+        code_norm = str(code).replace(".SZ", "").replace(".SH", "").replace(".BJ", "").lstrip("0")
+        sub = df_all[df_all["代码"].astype(str).str.replace(".SZ", "").str.replace(".SH", "").str.replace(".BJ", "").str.lstrip("0") == code_norm]
         sub = sub[sub["T+1买入价"].notna()]
 
         price_row = storage.query_by_date("lhb_top10_prices", trade_date)

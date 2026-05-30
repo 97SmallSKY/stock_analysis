@@ -1,0 +1,263 @@
+- generic [active]:
+  - generic [ref=e2]:
+    - generic [ref=e7]:
+      - generic [ref=e9]:
+        - list [ref=e10]:
+          - listitem [ref=e11]:
+            - link "总览 Dashboard" [ref=e13] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/
+              - generic [ref=e16]: 🏠
+              - paragraph [ref=e19]: 总览 Dashboard
+          - listitem [ref=e20]:
+            - link "主板精选策略" [ref=e22] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/mainboard
+              - generic [ref=e25]: 🏆
+              - paragraph [ref=e28]: 主板精选策略
+          - listitem [ref=e29]:
+            - link "实时监控" [ref=e31] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/realtime
+              - generic [ref=e34]: 📡
+              - paragraph [ref=e37]: 实时监控
+          - listitem [ref=e38]:
+            - link "决策辅助信号" [ref=e40] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/signal
+              - generic [ref=e43]: 🎯
+              - paragraph [ref=e46]: 决策辅助信号
+          - listitem [ref=e47]:
+            - link "龙虎榜盈亏分析" [ref=e49] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/returns
+              - generic [ref=e52]: 📈
+              - paragraph [ref=e55]: 龙虎榜盈亏分析
+          - listitem [ref=e56]:
+            - link "模拟炒股" [ref=e58] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/sim_trading
+              - generic [ref=e61]: 🤖
+              - paragraph [ref=e64]: 模拟炒股
+          - listitem [ref=e65]:
+            - link "每日选股" [ref=e67] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/daily_select
+              - generic [ref=e70]: 🔍
+              - paragraph [ref=e73]: 每日选股
+          - listitem [ref=e74]:
+            - link "市场情绪" [ref=e76] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/sentiment
+              - generic [ref=e79]: 📊
+              - paragraph [ref=e82]: 市场情绪
+          - listitem [ref=e83]:
+            - link "策略回测" [ref=e85] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/backtest
+              - generic [ref=e88]: 🔬
+              - paragraph [ref=e91]: 策略回测
+          - listitem [ref=e92]:
+            - link "回测分析" [ref=e94] [cursor=pointer]:
+              - /url: http://117.72.184.8:8051/backtest_analysis
+              - generic [ref=e97]: 📉
+              - paragraph [ref=e100]: 回测分析
+        - button "View 3 more" [ref=e101] [cursor=pointer]
+      - generic [ref=e105]:
+        - separator [ref=e110]
+        - paragraph [ref=e115]: v1.0.0
+        - paragraph [ref=e120]: "数据来源: AKShare / 东方财富"
+    - generic [ref=e3]:
+      - banner [ref=e123]:
+        - button "Main menu" [ref=e128] [cursor=pointer]:
+          - img [ref=e129]
+      - generic [ref=e132]:
+        - heading "🏠 龙虎榜策略 - 总览 Dashboard" [level=1] [ref=e137]:
+          - text: 🏠 龙虎榜策略 - 总览 Dashboard
+          - generic [ref=e138]:
+            - link "Link to heading":
+              - /url: "#dashboard"
+              - img
+        - paragraph [ref=e143]: "最后更新: 2026-05-08 14:53"
+        - generic [ref=e148]:
+          - heading "🎯 今日操作建议：✅ 市场强势，可积极关注" [level=2] [ref=e150]:
+            - text: 🎯 今日操作建议：✅ 市场强势，可积极关注
+            - generic [ref=e151]:
+              - link "Link to heading":
+                - /url: "#447eaee0"
+                - img
+          - generic [ref=e152]:
+            - generic [ref=e153]: 📈 涨停：94 家
+            - generic [ref=e154]: 📉 跌停：2 家
+            - generic [ref=e155]: 🔥 连板：531 家
+            - generic [ref=e156]: 📊 上证指数：4180.09 (0.48%)
+          - generic [ref=e157]: 💡 情绪解读：市场温度较高(90)，可积极关注，控制仓位
+        - heading "🚀 快速跳转" [level=4] [ref=e163]:
+          - text: 🚀 快速跳转
+          - generic [ref=e164]:
+            - link "Link to heading":
+              - /url: "#a513aaf6"
+              - img
+        - generic [ref=e166]:
+          - button "🤖 模拟炒股" [ref=e171] [cursor=pointer]:
+            - paragraph [ref=e175]: 🤖 模拟炒股
+          - button "🏆 主板精选策略" [ref=e180] [cursor=pointer]:
+            - paragraph [ref=e184]: 🏆 主板精选策略
+          - button "🎯 决策辅助信号" [ref=e189] [cursor=pointer]:
+            - paragraph [ref=e193]: 🎯 决策辅助信号
+          - button "📈 龙虎榜盈亏分析" [ref=e198] [cursor=pointer]:
+            - paragraph [ref=e202]: 📈 龙虎榜盈亏分析
+        - separator [ref=e207]
+        - generic [ref=e209]:
+          - tablist [ref=e211]:
+            - tab "📊 市场与龙虎榜概览" [selected] [ref=e212] [cursor=pointer]:
+              - paragraph [ref=e214]: 📊 市场与龙虎榜概览
+            - tab "💰 龙虎榜盈亏统计" [ref=e215] [cursor=pointer]:
+              - paragraph [ref=e217]: 💰 龙虎榜盈亏统计
+            - tab "🔬 策略回测表现" [ref=e218] [cursor=pointer]:
+              - paragraph [ref=e220]: 🔬 策略回测表现
+          - tabpanel "📊 市场与龙虎榜概览" [ref=e223]:
+            - generic [ref=e226]:
+              - generic [ref=e228]:
+                - heading "📋 近期龙虎榜数据" [level=4] [ref=e234]:
+                  - text: 📋 近期龙虎榜数据
+                  - generic [ref=e235]:
+                    - link "Link to heading":
+                      - /url: "#2738af27"
+                      - img
+                - generic [ref=e237]:
+                  - generic [ref=e242]:
+                    - paragraph [ref=e245]: 📅 起始
+                    - paragraph [ref=e248]: 2026-02-06
+                  - generic [ref=e253]:
+                    - paragraph [ref=e256]: 📆 覆盖
+                    - paragraph [ref=e259]: 58 天
+                  - generic [ref=e264]:
+                    - paragraph [ref=e267]: 📌 涉及
+                    - paragraph [ref=e270]: 1377 只
+                - generic [ref=e276]:
+                  - img:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic:
+                              - generic:
+                                - generic:
+                                  - generic:
+                                    - generic: "1"
+                                  - generic:
+                                    - generic: "1"
+                                  - generic:
+                                    - generic: "1"
+                                  - generic:
+                                    - generic: "100"
+                                  - generic:
+                                    - generic: "90"
+                        - generic:
+                          - generic:
+                            - generic: 2026-05-01
+                          - generic:
+                            - generic: 2026-05-04
+                          - generic:
+                            - generic: 2026-05-05
+                          - generic:
+                            - generic: 2026-05-06
+                          - generic:
+                            - generic: 2026-05-07
+                        - generic:
+                          - generic:
+                            - generic: "0"
+                          - generic:
+                            - generic: "50"
+                          - generic:
+                            - generic: "100"
+                  - img:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: "20"
+                          - generic:
+                            - generic: "40"
+                          - generic:
+                            - generic: "60"
+                          - generic:
+                            - generic: "80"
+                          - generic:
+                            - generic: "100"
+                        - generic:
+                          - generic:
+                            - generic: 上榜股票数
+                      - generic:
+                        - generic:
+                          - generic: 最近5个交易日上榜数量
+                      - generic:
+                        - generic: trade_date
+                      - generic:
+                        - generic: 上榜股票数
+                  - toolbar [ref=e290]:
+                    - button "Download plot as a PNG" [ref=e292] [cursor=pointer]:
+                      - img [ref=e293]
+                    - generic [ref=e295]:
+                      - button "Zoom" [ref=e296] [cursor=pointer]:
+                        - img [ref=e297]
+                      - button "Pan" [ref=e299] [cursor=pointer]:
+                        - img [ref=e300]
+                    - generic [ref=e302]:
+                      - button "Zoom in" [ref=e303] [cursor=pointer]:
+                        - img [ref=e304]
+                      - button "Zoom out" [ref=e306] [cursor=pointer]:
+                        - img [ref=e307]
+                      - button "Autoscale" [ref=e309] [cursor=pointer]:
+                        - img [ref=e310]
+                      - button "Reset axes" [ref=e312] [cursor=pointer]:
+                        - img [ref=e313]
+                    - button "Fullscreen" [ref=e316] [cursor=pointer]:
+                      - img [ref=e317]
+                  - img
+              - generic [ref=e320]:
+                - heading "📈 历史市场情绪趋势" [level=4] [ref=e326]:
+                  - text: 📈 历史市场情绪趋势
+                  - generic [ref=e327]:
+                    - link "Link to heading":
+                      - /url: "#974dc010"
+                      - img
+                - generic [ref=e333]:
+                  - img:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic:
+                            - generic: "0"
+                          - generic:
+                            - generic: "1"
+                          - generic:
+                            - generic: "2"
+                          - generic:
+                            - generic: "3"
+                          - generic:
+                            - generic: "4"
+                  - img:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - generic: 近60日涨跌停家数趋势
+                  - toolbar [ref=e347]:
+                    - button "Download plot as a PNG" [ref=e349] [cursor=pointer]:
+                      - img [ref=e350]
+                    - generic [ref=e352]:
+                      - button "Zoom" [ref=e353] [cursor=pointer]:
+                        - img [ref=e354]
+                      - button "Pan" [ref=e356] [cursor=pointer]:
+                        - img [ref=e357]
+                    - generic [ref=e359]:
+                      - button "Zoom in" [ref=e360] [cursor=pointer]:
+                        - img [ref=e361]
+                      - button "Zoom out" [ref=e363] [cursor=pointer]:
+                        - img [ref=e364]
+                      - button "Autoscale" [ref=e366] [cursor=pointer]:
+                        - img [ref=e367]
+                      - button "Reset axes" [ref=e369] [cursor=pointer]:
+                        - img [ref=e370]
+                    - button "Fullscreen" [ref=e373] [cursor=pointer]:
+                      - img [ref=e374]
+                  - img
+        - separator [ref=e380]
+        - alert [ref=e383]:
+          - paragraph [ref=e388]:
+            - text: ⚠️
+            - strong [ref=e389]: 风险提示
+            - text: ：本系统仅供研究学习，不构成投资建议。股市有风险，投资需谨慎。历史数据回测不代表未来表现。
+  - img [ref=e390]

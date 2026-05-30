@@ -1,10 +1,30 @@
 """
 工具函数
 """
+import re
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from loguru import logger
+
+
+def fmt_date(d: str, sep: str = "-") -> str:
+    """统一日期格式化：兼容 20260429 / 2026-04-29 / 2026/04/29 → 2026-04-29"""
+    s = str(d).strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}{sep}{s[4:6]}{sep}{s[6:]}"
+    s = re.sub(r"[-/.]", "-", s)
+    return s
+
+
+def fmt_date_slash(d: str) -> str:
+    """格式化为 2026/04/29"""
+    return fmt_date(d, "/")
+
+
+def fmt_date_dot(d: str) -> str:
+    """格式化为 2026.04.29"""
+    return fmt_date(d, ".")
 
 
 def format_number(value: float, unit: str = "元") -> str:

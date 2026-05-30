@@ -25,28 +25,15 @@ from plotly.subplots import make_subplots
 from datetime import datetime, date, timedelta
 
 from utils.storage import storage
-
-import time as _time
+from utils.cache import ss_get, ss_set
+from utils.helpers import fmt_date, fmt_date_dot
+from utils.chart_utils import plotly_dark
 
 try:
     from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode, JsCode
     _HAS_AGGRID = True
 except ImportError:
     _HAS_AGGRID = False
-
-
-# ── session_state 缓存工具（替代 @st.cache_data，避免 Python 3.13 semaphore 泄漏）────
-def _ss_get(key: str, ttl: int):
-    val = st.session_state.get(f"__cache_{key}")
-    ts  = st.session_state.get(f"__cache_ts_{key}", 0)
-    if val is not None and (_time.time() - ts) < ttl:
-        return val
-    return None
-
-
-def _ss_set(key: str, val):
-    st.session_state[f"__cache_{key}"] = val
-    st.session_state[f"__cache_ts_{key}"] = _time.time()
 
 
 # ── 主板判断 ──────────────────────────────────────────────────────────
@@ -95,15 +82,15 @@ def _turnover_label(turnover_pct: float) -> str:
 
 
 # ── 数据加载（核心，带 session_state 缓存）─────────────────────────────────
-def _load_raw_data() -> tuple:
-    """原始数据加载（缓存5分钟）"""
-    cached = _ss_get("mainboard_raw", 300)
+def _load_raw_data(days: int = 90) -> tuple:
+    """原始数据加载（缓存5分钟，默认只取最近90个自然日）"""
+    cached = ss_get("mainboard_raw", 300)
     if cached is not None:
         return cached
-    top10  = storage.read("lhb_top10")
-    prices = storage.read("lhb_top10_prices")
+    top10  = storage.read_recent("lhb_top10", days)
+    prices = storage.read_recent("lhb_top10_prices", days)
     result = (top10, prices)
-    _ss_set("mainboard_raw", result)
+    ss_set("mainboard_raw", result)
     return result
 
 
@@ -269,10 +256,12 @@ def _build_result(daily_top1: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFram
         if col in merged.columns:
             merged[col] = pd.to_numeric(merged[col], errors="coerce")
 
-    bp = merged["T+1买入价"]
-    merged["买入价"]    = bp
-    merged["冲高收益%"] = ((merged["T+2最高价"] / bp) - 1) * 100
-    merged["收盘收益%"] = ((merged["T+2收盘价"] / bp) - 1) * 100
+    bp = merged["T+1买入价"] if "T+1买入价" in merged.columns else None
+    merged["买入价"] = bp
+    has_high = "T+2最高价" in merged.columns
+    has_close = "T+2收盘价" in merged.columns
+    merged["冲高收益%"] = ((merged["T+2最高价"] / bp) - 1) * 100 if has_high and bp is not None else None
+    merged["收盘收益%"] = ((merged["T+2收盘价"] / bp) - 1) * 100 if has_close and bp is not None else None
 
     # 透传综合评分字段
     for col in ["综合评分", "净买额占比%"]:
@@ -287,12 +276,16 @@ def _build_result(daily_top1: pd.DataFrame, prices: pd.DataFrame) -> pd.DataFram
 
     # T+2 最高价 vs 买入价的分档 flag（用于概率统计）
     for thresh in [2, 3, 4, 5]:
-        merged[f"达{thresh}%"] = merged["冲高收益%"] >= thresh
+        if "冲高收益%" in merged.columns:
+            merged[f"达{thresh}%"] = merged["冲高收益%"] >= thresh
 
     merged["月份"] = merged["trade_date"].astype(str).str[:4] + "-" + merged["trade_date"].astype(str).str[4:6]
-    valid = merged.dropna(subset=["买入价", "T+2最高价"]).copy()
-    valid["冲高收益%"] = valid["冲高收益%"].round(2)
-    valid["收盘收益%"] = valid["收盘收益%"].round(2)
+    drop_cols = ["买入价"] + (["T+2最高价"] if has_high else [])
+    valid = merged.dropna(subset=[c for c in drop_cols if c in merged.columns]).copy()
+    if "冲高收益%" in valid.columns:
+        valid["冲高收益%"] = valid["冲高收益%"].round(2)
+    if "收盘收益%" in valid.columns:
+        valid["收盘收益%"] = valid["收盘收益%"].round(2)
     return valid
 
 
@@ -415,15 +408,14 @@ def _plot_threshold_bar(valid: pd.DataFrame, key: str = "threshold_bar"):
         fig.add_hline(y=ref_y, line_dash="dot", line_color=ref_color,
                       annotation_text=ref_label, annotation_position="right")
 
-    fig.update_layout(
+    fig.update_layout(**plotly_dark(
         title="T+2 冲高收益分档概率（T+1开盘买入，T+2日内最高收益达标率）",
         xaxis_title="目标收益阈值",
         yaxis_title="达标概率 %",
         yaxis=dict(range=[0, 110]),
         height=400,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#e0e0e0"), showlegend=False,
-    )
+        showlegend=False,
+    ))
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 
@@ -461,13 +453,11 @@ def _plot_prob_by_mcap(valid: pd.DataFrame, key: str = "prob_mcap"):
         text=[f"{p}%" for p in probs5],
         textposition="outside",
     ))
-    fig.update_layout(
+    fig.update_layout(**plotly_dark(
         title="不同市值档位的冲高达标率（筛选条件下）",
         barmode="group", height=380,
         yaxis=dict(range=[0, 110]),
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#e0e0e0"),
-    )
+    ))
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 
@@ -502,13 +492,11 @@ def _plot_prob_by_turnover(valid: pd.DataFrame, key: str = "prob_turnover"):
         name="≥5% 概率", x=labels, y=probs5, marker_color="#ffa726",
         text=[f"{p}%" for p in probs5], textposition="outside",
     ))
-    fig.update_layout(
+    fig.update_layout(**plotly_dark(
         title="不同换手率档位的冲高达标率",
         barmode="group", height=380,
         yaxis=dict(range=[0, 110]),
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#e0e0e0"),
-    )
+    ))
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 
@@ -518,7 +506,7 @@ def _plot_cumulative(valid: pd.DataFrame, key: str = "cumulative"):
     df["收盘净值"] = (1 + df["收盘收益%"] / 100).cumprod()
     
     x_dates = df["trade_date"].astype(str).apply(
-        lambda d: f"{d[:4]}.{d[4:6]}.{d[6:]}" if len(d)==8 else d
+        lambda d: fmt_date_dot(d)
     )
     
     fig = go.Figure()
@@ -533,13 +521,12 @@ def _plot_cumulative(valid: pd.DataFrame, key: str = "cumulative"):
         line=dict(color="#26a69a", width=2, dash="dot"), marker=dict(size=4),
     ))
     fig.add_hline(y=1.0, line_color="gray", line_width=1, line_dash="dash")
-    fig.update_layout(
+    fig.update_layout(**plotly_dark(
         title="策略累计净值（满仓复利）",
         xaxis_title="上榜日", yaxis_title="净值",
-        height=360, plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#e0e0e0"), legend=dict(x=0.01, y=0.99),
+        height=360, legend=dict(x=0.01, y=0.99),
         xaxis=dict(type="category", tickangle=-45, nticks=15),
-    )
+    ))
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 
@@ -561,13 +548,12 @@ def _plot_bar_returns(valid: pd.DataFrame, key: str = "bar_returns"):
         textposition="outside",
     ))
     fig.add_hline(y=0, line_color="gray", line_width=1)
-    fig.update_layout(
+    fig.update_layout(**plotly_dark(
         title="逐笔冲高收益",
         xaxis_title="上榜日 / 股票", yaxis_title="冲高收益%",
         height=400, showlegend=False,
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#e0e0e0"), xaxis=dict(tickfont=dict(size=9), type="category"),
-    )
+        xaxis=dict(tickfont=dict(size=9), type="category"),
+    ))
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 
@@ -601,13 +587,12 @@ def _plot_monthly(valid: pd.DataFrame, key: str = "monthly"):
         name="均收益%", mode="lines+markers",
         line=dict(color="#ef5350", width=2), marker=dict(size=8),
     ), secondary_y=True)
-    fig.update_layout(
+    fig.update_layout(**plotly_dark(
         title="月度统计：冲高胜率 / ≥3%达标率 / 均收益",
         height=380, barmode="group",
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#e0e0e0"), legend=dict(x=0.01, y=0.99),
+        legend=dict(x=0.01, y=0.99),
         xaxis=dict(type="category"),
-    )
+    ))
     fig.update_yaxes(title_text="概率%", secondary_y=False, range=[0, 120])
     fig.update_yaxes(title_text="均收益%", secondary_y=True)
     st.plotly_chart(fig, use_container_width=True, key=key)

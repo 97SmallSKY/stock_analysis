@@ -3,6 +3,7 @@
 
 三个 Tab：
   Tab1: 同天候选对比  — 龙虎榜股票涨跌幅趋势叠加图 + T+5 横向对比柱状图
+from utils.helpers import fmt_date
   Tab2: 单次交易深度复盘 — 蜡烛图 + 买入/卖出/最高点标注
   Tab3: 错失机会统计  — 龙虎榜全局分析，每天最优解 vs 实际买入对比
 """
@@ -14,19 +15,14 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import streamlit as st
 
-_RED   = "#E84040"
-_GREEN = "#33CC66"
-_GOLD  = "#FFA500"
-_BLUE  = "#4488FF"
-_GRAY  = "#888888"
+from config.theme import Color
+from utils.formatters import fmt_pct
 
-
-# ── 辅助函数 ──────────────────────────────────────────────────────────────────
-
-def _fmt_pct(v) -> str:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return "—"
-    return f"{v:+.2f}%"
+_RED   = Color.RED
+_GREEN = Color.GREEN
+_GOLD  = Color.GOLD
+_BLUE  = Color.BLUE
+_GRAY  = Color.GRAY
 
 
 def _pct_color(v) -> str:
@@ -287,11 +283,11 @@ def render_tab1():
         if has_eff_t5:
             st.metric(
                 "有效T+5 均值",
-                _fmt_pct(df["有效T+5%"].mean()),
+                fmt_pct(df["有效T+5%"].mean()),
                 help="有效收益 = (T+5收盘 − T+1开盘) / T+1开盘，排除了T→T+1不可操作涨幅",
             )
         elif has_t5:
-            st.metric("T+5 平均涨幅", _fmt_pct(df["上榜后5日"].mean()))
+            st.metric("T+5 平均涨幅", fmt_pct(df["上榜后5日"].mean()))
         else:
             st.metric("T+5 平均涨幅", "待结算")
     with c3:
@@ -299,7 +295,7 @@ def render_tab1():
             best_eff_row = df.loc[df["有效T+5%"].idxmax()]
             st.metric(
                 "最优股有效T+5",
-                _fmt_pct(best_eff_row["有效T+5%"]),
+                fmt_pct(best_eff_row["有效T+5%"]),
                 delta=f"{best_eff_row['名称']}({best_eff_row['代码']})",
                 help="T+1开盘买入后最大可操作涨幅",
             )
@@ -307,7 +303,7 @@ def render_tab1():
             best_row = df.loc[df["上榜后5日"].idxmax()]
             st.metric(
                 "最优股 T+5",
-                _fmt_pct(best_row["上榜后5日"]),
+                fmt_pct(best_row["上榜后5日"]),
                 delta=f"{best_row['名称']}({best_row['代码']})",
             )
         else:
@@ -323,8 +319,8 @@ def render_tab1():
                     diff   = (best_e - b_eff) if pd.notna(b_eff) else None
                     st.metric(
                         "买入 vs 最优（有效）",
-                        _fmt_pct(diff),
-                        delta=f"买入有效T+5:{_fmt_pct(b_eff)}",
+                        fmt_pct(diff),
+                        delta=f"买入有效T+5:{fmt_pct(b_eff)}",
                         delta_color="inverse" if (diff or 0) > 0 else "normal",
                         help="有效收益差距（T+1开盘买入基准）",
                     )
@@ -334,8 +330,8 @@ def render_tab1():
                     diff    = (best_t5 - b_t5) if pd.notna(b_t5) else None
                     st.metric(
                         "买入 vs 最优差距",
-                        _fmt_pct(diff),
-                        delta=f"买入:{_fmt_pct(b_t5)}",
+                        fmt_pct(diff),
+                        delta=f"买入:{fmt_pct(b_t5)}",
                         delta_color="inverse" if (diff or 0) > 0 else "normal",
                     )
                 else:
@@ -350,13 +346,13 @@ def render_tab1():
         bought_rows = df[df["是否买入"]]
         if not bought_rows.empty:
             br = bought_rows.iloc[0]
-            eff_t5_str = _fmt_pct(br.get("有效T+5%")) if pd.notna(br.get("有效T+5%")) else "—"
+            eff_t5_str = fmt_pct(br.get("有效T+5%")) if pd.notna(br.get("有效T+5%")) else "—"
             st.info(
                 f"**本日买入股：{br['名称']}（{br['代码']}）** | "
                 f"上榜收盘：¥{br['收盘价']:.2f} | "
-                f"当日涨跌：{_fmt_pct(br.get('涨跌幅'))} | "
+                f"当日涨跌：{fmt_pct(br.get('涨跌幅'))} | "
                 f"有效T+5（T+1开盘基准）：{eff_t5_str} | "
-                f"原始T+5（T+0基准）：{_fmt_pct(br.get('上榜后5日'))} | "
+                f"原始T+5（T+0基准）：{fmt_pct(br.get('上榜后5日'))} | "
                 f"上榜原因：{str(br.get('上榜原因') or '—')[:40]}"
             )
     else:
@@ -486,7 +482,7 @@ def render_tab1():
                 colors.append(_GREEN)
             else:
                 colors.append(_RED)
-            lbl = _fmt_pct(row[bar_col])
+            lbl = fmt_pct(row[bar_col])
             if idx == best_idx:
                 lbl = "★ " + lbl
             if row["是否买入"]:
@@ -640,7 +636,7 @@ def render_tab2():
     # 构建选项标签
     def _trade_label(row) -> str:
         status = "📂 持仓中" if row.get("status") == "open" else ""
-        pct_str = _fmt_pct(row.get("profit_pct"))
+        pct_str = fmt_pct(row.get("profit_pct"))
         sell_t  = str(row.get("sell_type") or "")
         date_str = str(row.get("trade_date") or "")
         return f"{date_str} | {row.get('name','')}({row.get('code','')}) | {pct_str} {sell_t} {status}".strip()
@@ -696,7 +692,7 @@ def render_tab2():
         color = "normal"
         if profit_pct is not None:
             color = "off" if profit_pct < 0 else "normal"
-        st.metric("盈亏", _fmt_pct(profit_pct), delta_color=color)
+        st.metric("盈亏", fmt_pct(profit_pct), delta_color=color)
     with c4:
         st.metric("卖出类型", sell_type or "持仓中")
 
@@ -750,7 +746,7 @@ def render_tab2():
             lhb_sorted = lhb_df.sort_values("上榜后5日", ascending=False)
             bar_colors = [_BLUE if r["is_me"] else (_GREEN if (r["上榜后5日"] or 0) > 0 else _RED)
                           for _, r in lhb_sorted.iterrows()]
-            bar_labels = [("▶ " if r["is_me"] else "") + _fmt_pct(r["上榜后5日"])
+            bar_labels = [("▶ " if r["is_me"] else "") + fmt_pct(r["上榜后5日"])
                           for _, r in lhb_sorted.iterrows()]
             fig_comp = go.Figure(go.Bar(
                 x=lhb_sorted["名称"] + "<br>" + lhb_sorted["代码"],
@@ -810,7 +806,7 @@ def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, se
     df = kline_df.copy()
 
     # 统一日期格式（x 轴用 YYYY-MM-DD 格式更好看）
-    df["date_fmt"] = df["日期"].apply(lambda d: f"{d[:4]}-{d[4:6]}-{d[6:]}" if len(str(d)) == 8 else str(d))
+    df["date_fmt"] = df["日期"].apply(lambda d: fmt_date(d))
 
     # 持仓期间最高收盘价
     if buy_date and sell_date:
@@ -922,7 +918,7 @@ def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, se
             mode="lines", line=dict(color=_RED, width=2, dash="dash"),
             name="卖出日", showlegend=False, hoverinfo="skip",
         ), row=1, col=1)
-        pct_str = _fmt_pct(profit_pct)
+        pct_str = fmt_pct(profit_pct)
         annotations.append(dict(
             x=sell_date_fmt,
             y=sell_price,
@@ -945,7 +941,7 @@ def _render_kline_chart(kline_df, name, code, buy_date, sell_date, buy_price, se
             y=[max_close],
             mode="markers+text",
             marker={"symbol": "triangle-up", "size": 14, "color": _GOLD},
-            text=[f"最高 ¥{max_close:.2f}" + (f"<br>{_fmt_pct(max_pct)}" if max_pct else "")],
+            text=[f"最高 ¥{max_close:.2f}" + (f"<br>{fmt_pct(max_pct)}" if max_pct else "")],
             textposition="top center",
             textfont={"color": _GOLD, "size": 10},
             name="持仓最高点",
@@ -1015,7 +1011,7 @@ def render_tab3():
     with c3:
         st.metric("买中最优股次数", f"{summary['optimal_hits']} / {summary['traded_days']}")
     with c4:
-        st.metric("平均错失差距", _fmt_pct(summary["avg_missed"]))
+        st.metric("平均错失差距", fmt_pct(summary["avg_missed"]))
 
     # ── 每日最优 vs 买入对比柱状图 ─────────────────────────────────────────────
     st.subheader("每日：最优股 vs 买入股 T+5 收益")
@@ -1030,7 +1026,7 @@ def render_tab3():
             y=traded_days["best_t5"],
             marker_color=_GOLD,
             text=traded_days.apply(
-                lambda r: f"{r['best_name']}({r['best_code']})<br>{_fmt_pct(r['best_t5'])}", axis=1
+                lambda r: f"{r['best_name']}({r['best_code']})<br>{fmt_pct(r['best_t5'])}", axis=1
             ),
             textposition="outside",
             opacity=0.85,
@@ -1042,7 +1038,7 @@ def render_tab3():
             y=traded_days["bought_t5"],
             marker_color=_BLUE,
             text=traded_days.apply(
-                lambda r: f"{r['bought_name']}({r['bought_code']})<br>{_fmt_pct(r['bought_t5'])}", axis=1
+                lambda r: f"{r['bought_name']}({r['bought_code']})<br>{fmt_pct(r['bought_t5'])}", axis=1
             ),
             textposition="inside",
             opacity=0.9,

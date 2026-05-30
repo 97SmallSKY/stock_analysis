@@ -104,7 +104,7 @@ def render():
     # ============================================================
     if run_btn:
         with st.spinner("正在加载龙虎榜数据..."):
-            lhb_df = storage.read("lhb_detail")
+            lhb_df = storage.read_recent("lhb_detail", days=90)
             
             date_col = "trade_date" if "trade_date" in (lhb_df.columns if not lhb_df.empty else []) else "上榜日期"
             
@@ -177,7 +177,7 @@ def render():
     st.divider()
     st.subheader("📋 历史选股记录")
     
-    hist_df = storage.read("selected_stocks")
+    hist_df = storage.read_recent("selected_stocks", days=90)
     if not hist_df.empty:
         if "select_date" in hist_df.columns:
             hist_df = hist_df.sort_values("select_date", ascending=False)

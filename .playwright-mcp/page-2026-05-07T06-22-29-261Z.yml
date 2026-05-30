@@ -1,0 +1,297 @@
+- generic:
+  - generic:
+    - generic [ref=e2]:
+      - generic [ref=e7]:
+        - generic [ref=e9]:
+          - list [ref=e10]:
+            - listitem [ref=e11]:
+              - link "总览 Dashboard" [ref=e13] [cursor=pointer]:
+                - /url: http://localhost:8051/
+                - generic [ref=e16]: 🏠
+                - paragraph [ref=e19]: 总览 Dashboard
+            - listitem [ref=e20]:
+              - link "主板精选策略" [ref=e22] [cursor=pointer]:
+                - /url: http://localhost:8051/mainboard
+                - generic [ref=e25]: 🏆
+                - paragraph [ref=e28]: 主板精选策略
+            - listitem [ref=e29]:
+              - link "实时监控" [ref=e31] [cursor=pointer]:
+                - /url: http://localhost:8051/realtime
+                - generic [ref=e34]: 📡
+                - paragraph [ref=e37]: 实时监控
+            - listitem [ref=e38]:
+              - link "决策辅助信号" [ref=e40] [cursor=pointer]:
+                - /url: http://localhost:8051/signal
+                - generic [ref=e43]: 🎯
+                - paragraph [ref=e46]: 决策辅助信号
+            - listitem [ref=e47]:
+              - link "龙虎榜盈亏分析" [ref=e49] [cursor=pointer]:
+                - /url: http://localhost:8051/returns
+                - generic [ref=e52]: 📈
+                - paragraph [ref=e55]: 龙虎榜盈亏分析
+            - listitem [ref=e56]:
+              - link "模拟炒股" [ref=e58] [cursor=pointer]:
+                - /url: http://localhost:8051/sim_trading
+                - generic [ref=e61]: 🤖
+                - paragraph [ref=e64]: 模拟炒股
+            - listitem [ref=e65]:
+              - link "每日选股" [ref=e67] [cursor=pointer]:
+                - /url: http://localhost:8051/daily_select
+                - generic [ref=e70]: 🔍
+                - paragraph [ref=e73]: 每日选股
+            - listitem [ref=e74]:
+              - link "市场情绪" [ref=e76] [cursor=pointer]:
+                - /url: http://localhost:8051/sentiment
+                - generic [ref=e79]: 📊
+                - paragraph [ref=e82]: 市场情绪
+            - listitem [ref=e83]:
+              - link "策略回测" [ref=e85] [cursor=pointer]:
+                - /url: http://localhost:8051/backtest
+                - generic [ref=e88]: 🔬
+                - paragraph [ref=e91]: 策略回测
+            - listitem [ref=e92]:
+              - link "回测分析" [ref=e94] [cursor=pointer]:
+                - /url: http://localhost:8051/backtest_analysis
+                - generic [ref=e97]: 📉
+                - paragraph [ref=e100]: 回测分析
+          - button "View 3 more" [ref=e101] [cursor=pointer]
+        - generic [ref=e105]:
+          - separator [ref=e110]
+          - paragraph [ref=e115]: v1.0.0
+          - paragraph [ref=e120]: "数据来源: AKShare / 东方财富"
+      - generic [ref=e3]:
+        - banner [ref=e123]:
+          - generic [ref=e126]:
+            - button "Deploy" [ref=e128] [cursor=pointer]:
+              - generic [ref=e130]: Deploy
+            - button "Main menu" [ref=e132] [cursor=pointer]:
+              - img [ref=e133]
+        - generic [ref=e136]:
+          - heading "📈 龙虎榜净买入 Top10 持仓模拟" [level=1] [ref=e141]:
+            - text: 📈 龙虎榜净买入 Top10 持仓模拟
+            - generic [ref=e142]:
+              - link "Link to heading":
+                - /url: "#top10"
+                - img
+          - paragraph [ref=e147]:
+            - text: 按龙虎榜
+            - strong [ref=e148]: 净买入额
+            - text: 排名 Top10 |
+            - strong [ref=e149]: T 日
+            - text: =上榜当日 ·
+            - strong [ref=e150]: T+1
+            - text: =次日集合竞价买入 ·
+            - strong [ref=e151]: T+2
+            - text: =上榜后第2交易日 | 🔴 红=涨(盈利) 🟢 绿=跌(亏损)
+          - heading "① 选择交易日" [level=3] [ref=e156]:
+            - text: ① 选择交易日
+            - generic [ref=e157]:
+              - link "Link to heading":
+                - /url: "#1"
+                - img
+          - generic [ref=e159]:
+            - generic [ref=e161]:
+              - generic [ref=e163]:
+                - paragraph [ref=e167]: 选择日期
+                - generic [ref=e169]:
+                  - generic [ref=e170]:
+                    - generic [ref=e171]: 2026-05-06
+                    - combobox "Selected 2026-05-06 . 选择日期" [ref=e173]
+                  - img "open" [ref=e175]
+              - generic [ref=e178]:
+                - button "⬅ 上一交易日" [ref=e183] [cursor=pointer]:
+                  - paragraph [ref=e187]: ⬅ 上一交易日
+                - button "📅 最近交易日" [ref=e192] [cursor=pointer]:
+                  - paragraph [ref=e196]: 📅 最近交易日
+                - button "下一交易日 ➡" [ref=e201] [cursor=pointer]:
+                  - paragraph [ref=e205]: 下一交易日 ➡
+            - alert [ref=e210]:
+              - paragraph [ref=e215]: 📦 历史数据（含接口自带上榜后涨跌幅）
+          - heading "② 当日龙虎榜净买入 Top10" [level=3] [ref=e220]:
+            - text: ② 当日龙虎榜净买入 Top10
+            - generic [ref=e221]:
+              - link "Link to heading":
+                - /url: "#2-top10"
+                - img
+          - generic [ref=e226]:
+            - button "Show/hide columns" [ref=e230] [cursor=pointer]:
+              - img [ref=e231]
+            - button "Download as CSV" [ref=e236] [cursor=pointer]:
+              - img [ref=e237]
+            - button "Search" [ref=e242] [cursor=pointer]:
+              - img [ref=e243]
+            - button "Fullscreen" [ref=e248] [cursor=pointer]:
+              - img [ref=e249]
+          - paragraph [ref=e264]:
+            - text: 📌
+            - strong [ref=e265]: T+1买入价
+            - text: = 上榜次日开盘价 |
+            - strong [ref=e266]: T+N最高/收盘价
+            - text: = 上榜后第N个交易日最高/收盘价 |
+            - strong [ref=e267]: 收益%
+            - text: = (卖出价 / T+1买入价 - 1) × 100
+          - separator [ref=e272]
+          - heading "③ 个股详细走势" [level=3] [ref=e277]:
+            - text: ③ 个股详细走势
+            - generic [ref=e278]:
+              - link "Link to heading":
+                - /url: "#3"
+                - img
+          - generic [ref=e280]:
+            - paragraph [ref=e284]: 选择股票查看详细走势
+            - generic [ref=e286]:
+              - generic [ref=e287]:
+                - generic [ref=e288]: 1. 江波龙（301308.SZ）
+                - combobox "Selected 1. 江波龙（301308.SZ）. 选择股票查看详细走势" [ref=e290]
+              - img "open" [ref=e292]
+          - generic [ref=e295]:
+            - paragraph [ref=e302]:
+              - text: 点击右侧按钮加载
+              - strong [ref=e303]: 江波龙
+              - text: 的 T+1~T+10 走势数据
+            - button "📈 加载走势" [ref=e308] [cursor=pointer]:
+              - paragraph [ref=e312]: 📈 加载走势
+          - generic [ref=e315]:
+            - generic [ref=e316]:
+              - paragraph [ref=e318]: T+1 开盘买入价（江波龙）
+              - button "Help for T+1 开盘买入价（江波龙）" [ref=e322] [cursor=pointer]:
+                - img [ref=e323]
+            - paragraph [ref=e328]: ¥481.340
+          - alert [ref=e331]:
+            - paragraph [ref=e336]: 📊 点击上方按钮加载个股详细走势图
+          - alert [ref=e339]:
+            - paragraph [ref=e344]: ⚠️ 江波龙（301308.SZ）无法获取 K 线数据，可能是退市或接口暂无数据。
+          - separator [ref=e349]
+          - heading "④ 历史汇总结论（所有已积累日期）" [level=3] [ref=e354]:
+            - text: ④ 历史汇总结论（所有已积累日期）
+            - generic [ref=e355]:
+              - link "Link to heading":
+                - /url: "#4"
+                - img
+          - paragraph [ref=e360]:
+            - text: 统计口径：
+            - strong [ref=e361]: T+1 开盘买入
+            - text: ，分别以最高价/收盘价卖出的胜率与平均收益率 | 样本越多结论越可靠，建议积累 ≥ 20 个交易日
+          - paragraph [ref=e366]:
+            - text: 📅 已覆盖
+            - strong [ref=e367]: "55"
+            - text: 个交易日 | 共
+            - strong [ref=e368]: "3591"
+            - text: 条股票记录 | 日期范围：2026-02-05 ~ 2026-05-06
+          - generic [ref=e370]:
+            - generic [ref=e377]:
+              - text: T+1
+              - text: +0.00%
+              - text: 收盘胜率 46.7% | n=3116
+            - generic [ref=e384]:
+              - text: T+2
+              - text: "-0.00%"
+              - text: 收盘胜率 44.1% | n=2974
+            - generic [ref=e391]:
+              - text: T+5
+              - text: "-0.02%"
+              - text: 收盘胜率 39.4% | n=2710
+            - generic [ref=e398]:
+              - text: T+10
+              - text: "-0.04%"
+              - text: 收盘胜率 33.7% | n=2244
+          - generic [ref=e403]:
+            - button "Show/hide columns" [ref=e407] [cursor=pointer]:
+              - img [ref=e408]
+            - button "Download as CSV" [ref=e413] [cursor=pointer]:
+              - img [ref=e414]
+            - button "Search" [ref=e419] [cursor=pointer]:
+              - img [ref=e420]
+            - button "Fullscreen" [ref=e425] [cursor=pointer]:
+              - img [ref=e426]
+          - heading "收益率分布" [level=3] [ref=e441]:
+            - text: 收益率分布
+            - generic [ref=e442]:
+              - link "Link to heading":
+                - /url: "#a978dfcc"
+                - img
+          - generic [ref=e444]:
+            - paragraph [ref=e448]: 选择持仓天数
+            - radiogroup "选择持仓天数" [ref=e449] [cursor=pointer]:
+              - generic [ref=e450]:
+                - radio "T+1" [checked]
+                - paragraph [ref=e455]: T+1
+              - generic [ref=e456]:
+                - radio "T+2"
+                - paragraph [ref=e461]: T+2
+              - generic [ref=e462]:
+                - radio "T+5"
+                - paragraph [ref=e467]: T+5
+              - generic [ref=e468]:
+                - radio "T+10"
+                - paragraph [ref=e473]: T+10
+          - generic [ref=e479]:
+            - img:
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic: −0.6
+                    - generic:
+                      - generic: −0.4
+                    - generic:
+                      - generic: −0.2
+                    - generic:
+                      - generic: "0"
+                    - generic:
+                      - generic: "0.2"
+                  - generic:
+                    - generic:
+                      - generic: "0"
+                    - generic:
+                      - generic: "200"
+                    - generic:
+                      - generic: "400"
+                    - generic:
+                      - generic: "600"
+                    - generic:
+                      - generic: "800"
+                    - generic:
+                      - generic: "1000"
+            - img:
+              - generic:
+                - generic [ref=e498]: 收盘卖出
+                - generic:
+                  - generic:
+                    - generic: T+1 收益率分布（n=3116）
+                - generic:
+                  - generic: 收益率 (%)
+                - generic:
+                  - generic: 频次
+            - toolbar [ref=e504]:
+              - button "Download plot as a PNG" [ref=e506] [cursor=pointer]:
+                - img [ref=e507]
+              - generic [ref=e509]:
+                - button "Zoom" [ref=e510] [cursor=pointer]:
+                  - img [ref=e511]
+                - button "Pan" [ref=e513] [cursor=pointer]:
+                  - img [ref=e514]
+              - generic [ref=e516]:
+                - button "Zoom in" [ref=e517] [cursor=pointer]:
+                  - img [ref=e518]
+                - button "Zoom out" [ref=e520] [cursor=pointer]:
+                  - img [ref=e521]
+                - button "Autoscale" [ref=e523] [cursor=pointer]:
+                  - img [ref=e524]
+                - button "Reset axes" [ref=e526] [cursor=pointer]:
+                  - img [ref=e527]
+              - button "Fullscreen" [ref=e530] [cursor=pointer]:
+                - img [ref=e531]
+            - img
+          - separator [ref=e537]
+          - alert [ref=e540]:
+            - paragraph [ref=e545]:
+              - text: ⚠️
+              - strong [ref=e546]: 风险提示
+              - text: ：本系统仅供研究学习，不构成投资建议。股市有风险，投资需谨慎。历史数据回测不代表未来表现。
+    - dialog "dialog" [ref=e549]:
+      - generic [ref=e550]: Page not found
+      - generic [ref=e552]: The page that you have requested does not seem to exist. Running the app's main page.
+      - button "Close" [active] [ref=e553] [cursor=pointer]:
+        - img [ref=e554]
+  - img [ref=e556]

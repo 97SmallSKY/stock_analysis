@@ -49,7 +49,16 @@ data/raw/
 .ipynb_checkpoints/
 *.ipynb
 
+# Claude / CodeFlicker worktrees
+.claude/worktrees/
+.codeflicker/discuss/
+
+# Streamlit
+.streamlit.pid
+
 # 测试
 .pytest_cache/
 .coverage
 htmlcov/
+.streamlit.pid
+.worktrees/

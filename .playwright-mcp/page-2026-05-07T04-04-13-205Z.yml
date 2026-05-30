@@ -1,0 +1,85 @@
+- generic [ref=e2]:
+  - generic [ref=e7]:
+    - generic [ref=e9]:
+      - list [ref=e10]:
+        - listitem [ref=e11]:
+          - link "app" [ref=e13] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/
+            - paragraph [ref=e16]: app
+        - listitem [ref=e17]:
+          - link "backtest" [ref=e19] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/backtest
+            - paragraph [ref=e22]: backtest
+        - listitem [ref=e23]:
+          - link "backtest analysis" [ref=e25] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/backtest_analysis
+            - paragraph [ref=e28]: backtest analysis
+        - listitem [ref=e29]:
+          - link "daily select" [ref=e31] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/daily_select
+            - paragraph [ref=e34]: daily select
+        - listitem [ref=e35]:
+          - link "dashboard" [ref=e37] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/dashboard
+            - paragraph [ref=e40]: dashboard
+        - listitem [ref=e41]:
+          - link "data manager" [ref=e43] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/data_manager
+            - paragraph [ref=e46]: data manager
+        - listitem [ref=e47]:
+          - link "lhb returns" [ref=e49] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/lhb_returns
+            - paragraph [ref=e52]: lhb returns
+        - listitem [ref=e53]:
+          - link "lhb signal" [ref=e55] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/lhb_signal
+            - paragraph [ref=e58]: lhb signal
+        - listitem [ref=e59]:
+          - link "mainboard strategy" [ref=e61] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/mainboard_strategy
+            - paragraph [ref=e64]: mainboard strategy
+        - listitem [ref=e65]:
+          - link "market sentiment" [ref=e67] [cursor=pointer]:
+            - /url: http://117.72.184.8:8051/market_sentiment
+            - paragraph [ref=e70]: market sentiment
+      - button "View 4 more" [ref=e71] [cursor=pointer]
+    - heading "📊 选择对比策略" [level=2] [ref=e79]
+  - generic [ref=e3]:
+    - banner [ref=e82]:
+      - button "Main menu" [ref=e87] [cursor=pointer]:
+        - img [ref=e88]
+    - generic [ref=e91]:
+      - heading "🏆 策略对比看板" [level=1] [ref=e96]:
+        - text: 🏆 策略对比看板
+        - generic [ref=e97]:
+          - link "Link to heading":
+            - /url: "#65127c41"
+            - img
+      - alert [ref=e100]:
+        - generic [ref=e103]:
+          - generic [ref=e104]: "sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at \"117.72.184.8\", port 5432 failed: fe_sendauth: no password supplied (Background on this error at: https://sqlalche.me/e/20/e3q8)"
+          - generic [ref=e105]:
+            - generic [ref=e106]: "Traceback:"
+            - code [ref=e109]:
+              - generic [ref=e110]: File "/root/stock_analysis/pages/strategy_comparison.py", line 169, in <module> render() ~~~~~~^^
+              - generic [ref=e111]: File "/root/stock_analysis/pages/strategy_comparison.py", line 38, in render engine = storage._get_engine()
+              - generic [ref=e112]: "File \"/root/stock_analysis/utils/storage.py\", line 166, in _get_engine with self._engine.connect() as conn: ~~~~~~~~~~~~~~~~~~~~^^"
+              - generic [ref=e113]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/engine/base.py", line 3293, in connect return self._connection_cls(self) ~~~~~~~~~~~~~~~~~~~~^^^^^^
+              - generic [ref=e114]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/engine/base.py", line 145, in __init__ Connection._handle_dbapi_exception_noconnection( ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^ err, dialect, engine ^^^^^^^^^^^^^^^^^^^^ ) ^
+              - generic [ref=e115]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/engine/base.py", line 2448, in _handle_dbapi_exception_noconnection raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+              - generic [ref=e116]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/engine/base.py", line 143, in __init__ self._dbapi_connection = engine.raw_connection() ~~~~~~~~~~~~~~~~~~~~~^^
+              - generic [ref=e117]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/engine/base.py", line 3317, in raw_connection return self.pool.connect() ~~~~~~~~~~~~~~~~~^^
+              - generic [ref=e118]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/base.py", line 448, in connect return _ConnectionFairy._checkout(self) ~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+              - generic [ref=e119]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/base.py", line 1272, in _checkout fairy = _ConnectionRecord.checkout(pool)
+              - generic [ref=e120]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/base.py", line 712, in checkout rec = pool._do_get()
+              - generic [ref=e121]: "File \"/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/impl.py\", line 177, in _do_get with util.safe_reraise(): ~~~~~~~~~~~~~~~~~^^"
+              - generic [ref=e122]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/util/langhelpers.py", line 121, in __exit__ raise exc_value.with_traceback(exc_tb)
+              - generic [ref=e123]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/impl.py", line 175, in _do_get return self._create_connection() ~~~~~~~~~~~~~~~~~~~~~~~^^
+              - generic [ref=e124]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/base.py", line 389, in _create_connection return _ConnectionRecord(self)
+              - generic [ref=e125]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/base.py", line 674, in __init__ self.__connect() ~~~~~~~~~~~~~~^^
+              - generic [ref=e126]: "File \"/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/base.py\", line 900, in __connect with util.safe_reraise(): ~~~~~~~~~~~~~~~~~^^"
+              - generic [ref=e127]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/util/langhelpers.py", line 121, in __exit__ raise exc_value.with_traceback(exc_tb)
+              - generic [ref=e128]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/pool/base.py", line 896, in __connect self.dbapi_connection = connection = pool._invoke_creator(self) ~~~~~~~~~~~~~~~~~~~~^^^^^^
+              - generic [ref=e129]: File "/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/engine/create.py", line 667, in connect return dialect.connect(*cargs_tup, **cparams) ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+              - generic [ref=e130]: "File \"/root/miniconda3/lib/python3.13/site-packages/sqlalchemy/engine/default.py\", line 630, in connect return self.loaded_dbapi.connect(*cargs, **cparams) # type: ignore[no-any-return] # NOQA: E501 ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^"
+              - generic [ref=e131]: File "/root/miniconda3/lib/python3.13/site-packages/psycopg2/__init__.py", line 122, in connect conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
